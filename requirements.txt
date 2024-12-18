@@ -1,0 +1,13 @@
+# Enclave Messenger Requirements
+cryptography>=41.0.0
+flask>=2.3.0
+flask-socketio>=5.3.0
+python-socketio>=5.8.0
+argparse
+sqlite3  # Built-in with Python
+tkinter  # Built-in with Python (may need separate install on Linux)
+
+# Optional dependencies for enhanced features
+qrcode>=7.4.0
+pillow>=10.0.0
+requests>=2.31.0
