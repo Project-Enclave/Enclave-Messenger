@@ -1,4 +1,5 @@
 # 🔒 Enclave Messenger
+#NOTE: THIS IS STILL IN EARLY DEVELOPMENT AND PLANNING 
 
 **Secure • Private • Encrypted**
 
