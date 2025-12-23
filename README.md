@@ -1,4 +1,5 @@
 # 🔒 Enclave Messenger
+
 NOTE: PROJECT ENCLAVE AND ALL RELATED PROJECTS ARE STILL IN EARLY DEVELOPMENT AND PLANNING 
 
 **Secure • Private • Encrypted**
