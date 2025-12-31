@@ -5,12 +5,6 @@ NOTE: PROJECT ENCLAVE AND ALL RELATED PROJECTS ARE STILL IN EARLY DEVELOPMENT AN
 
 **Secure • Private • Encrypted**
 
-## GitAds Sponsored
-
-[![Sponsored by GitAds](https://gitads.dev/v1/ad-serve?source=project-enclave/enclave-messenger@github)](https://gitads.dev/v1/ad-track?source=project-enclave/enclave-messenger@github)
-
-
-
 A modern, secure messaging application with end-to-end encryption, designed for privacy-conscious users who need reliable communication over various networks.
 
 ## ✨ Features
@@ -22,6 +16,10 @@ A modern, secure messaging application with end-to-end encryption, designed for 
 - 📱 **Multi-Platform**: GUI, CLI, and Web interfaces
 - 🛡️ **No Central Server**: Peer-to-peer architecture
 - 🔍 **Open Source**: Transparent and auditable code
+
+## GitAds Sponsored
+
+[![Sponsored by GitAds](https://gitads.dev/v1/ad-serve?source=project-enclave/enclave-messenger@github)](https://gitads.dev/v1/ad-track?source=project-enclave/enclave-messenger@github)
 
 ## 🚀 Quick Start
 
