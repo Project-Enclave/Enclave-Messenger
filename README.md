@@ -191,6 +191,7 @@ This project is licensed under the GPL-3.0 License - see the LICENSE file for de
 - [ ] Pear-to-pear interconnected network for messages, images, calls, websites, etc☆
 - [ ] Make a 'core' file (cli version with just message, key exchange, etc. No easter eggs, bloat, etc)
 - [ ] Add support for microcontroller like arduino uno to act as relays or addon to let mobile/desktop connect to the network ro both.
+- [ ] For sms, use silence and for Bluetooth use bitchat
 
 ### Current Status
 - [x] Core encryption implementation
