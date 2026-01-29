@@ -210,3 +210,6 @@ This project is licensed under the GPL-3.0 License - see the LICENSE file for de
 ---
 
 🔒 **Your Messages. Your Privacy. Your Enclave.**
+**Or**
+**Redefining messaging and privacy**
+* Enclave Messenger comes under Project Enclave. This is the main and only application of Project Enclave as of 29 January 2026. We do have plans for the future.
