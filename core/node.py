@@ -238,7 +238,7 @@ class EnclaveNode:
             print(f"[node] unknown contact {recipient_id[:24]}.")
             return False
 
-        payload  = session.send_message(text, sender_id=self.identity.user_id)
+        payload   = session.send_message(text, sender_id=self.identity.user_id)
         inbox_key = f"inbox_{recipient_id}_{os.urandom(4).hex()}"
         await self.dht.store_value(inbox_key, {
             "type":      "message",
@@ -270,29 +270,40 @@ class EnclaveNode:
         if self.on_message:
             self.on_message(msg)
         return msg
-    
-    async def send_message_sms(self, recipient_id: str, text: str, phone: str) -> bool:
-    """
-    encrypt a message and deliver it via SMS gateway.
-    used as fallback when DHT/internet is unavailable.
-    the SMS body is a JSON-encoded encrypted payload — not plaintext.
-    """
-    session = self._sessions.get(recipient_id)
-    if not session:
-        print(f"[node] no session with {recipient_id[:24]} — handshake needed.")
-        return False
 
-    payload = session.send_message(text, sender_id=self.identity.user_id)
-    encoded = json.dumps({
-        "type":      "enclave",
-        "sender_id": self.identity.user_id,
-        "payload":   payload,
-    })
-    ok = await self.dht.sms.send(phone, encoded)
-    if ok:
-        self._save_sessions()
-        print(f"[node] SMS sent to {phone}")
-    return ok
+    async def send_message_sms(self, recipient_id: str, text: str, phone: str) -> bool:
+        """
+        encrypt a message and deliver it via SMS gateway.
+        used as fallback when DHT/internet is unavailable.
+        the SMS body is a JSON-encoded encrypted payload — not plaintext.
+        """
+        session = self._sessions.get(recipient_id)
+        if not session:
+            print(f"[node] no session with {recipient_id[:24]} — handshake needed.")
+            return False
+
+        payload = session.send_message(text, sender_id=self.identity.user_id)
+        encoded = json.dumps({
+            "type":      "enclave",
+            "sender_id": self.identity.user_id,
+            "payload":   payload,
+        })
+        ok = await self.dht.sms.send(phone, encoded)
+        if ok:
+            self._save_sessions()
+            print(f"[node] SMS sent to {phone}")
+        return ok
+
+    async def receive_message_sms(self, raw_sms: str) -> Optional[Message]:
+        """parse and decrypt an incoming enclave SMS."""
+        try:
+            data = json.loads(raw_sms)
+            if data.get("type") != "enclave":
+                return None
+            return await self.receive_message(data["sender_id"], data)
+        except Exception as e:
+            print(f"[node] SMS parse error: {e}")
+            return None
 
     def conversation(self, user_id: str, limit: int = 100) -> list[dict]:
         """get stored message history with a contact"""
@@ -388,8 +399,6 @@ class EnclaveNode:
         )
 
     def _load_contacts(self):
-        # contact public info is cached locally but full bundles
-        # (including prekeys) are re-fetched from DHT when needed
         pass
 
     # ── background ────────────────────────────────────────────
@@ -439,7 +448,6 @@ def _restore_device(raw: dict, identity: PersonIdentity) -> DeviceBundle:
             bytes.fromhex(raw["signed_prekey_priv"])
         )
     else:
-        # old identity file without saved prekey priv — regenerate
         device._signed_prekey    = X25519PrivateKey.generate()
         device.signed_prekey_pub = device._signed_prekey.public_key().public_bytes(
             Encoding.Raw, PublicFormat.Raw
