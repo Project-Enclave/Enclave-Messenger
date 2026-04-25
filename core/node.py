@@ -270,6 +270,29 @@ class EnclaveNode:
         if self.on_message:
             self.on_message(msg)
         return msg
+    
+    async def send_message_sms(self, recipient_id: str, text: str, phone: str) -> bool:
+    """
+    encrypt a message and deliver it via SMS gateway.
+    used as fallback when DHT/internet is unavailable.
+    the SMS body is a JSON-encoded encrypted payload — not plaintext.
+    """
+    session = self._sessions.get(recipient_id)
+    if not session:
+        print(f"[node] no session with {recipient_id[:24]} — handshake needed.")
+        return False
+
+    payload = session.send_message(text, sender_id=self.identity.user_id)
+    encoded = json.dumps({
+        "type":      "enclave",
+        "sender_id": self.identity.user_id,
+        "payload":   payload,
+    })
+    ok = await self.dht.sms.send(phone, encoded)
+    if ok:
+        self._save_sessions()
+        print(f"[node] SMS sent to {phone}")
+    return ok
 
     def conversation(self, user_id: str, limit: int = 100) -> list[dict]:
         """get stored message history with a contact"""
