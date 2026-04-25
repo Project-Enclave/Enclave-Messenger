@@ -1,215 +1,114 @@
+# enclave messenger
 
-# 🔒 Enclave Messenger
+a p2p messenger that works even when the **internet** doesn't and fallbacks to _whatever_ you happen to have.
 
-NOTE: PROJECT ENCLAVE AND ALL RELATED PROJECTS ARE STILL IN EARLY DEVELOPMENT AND PLANNING 
+***
 
-**Secure • Private • Encrypted**
+## what is this
 
-A modern, secure messaging application with end-to-end encryption, designed for privacy-conscious users who need reliable communication over various networks.
+enclave messenger is the first piece of [project enclave](https://github.com/Project-Enclave) — a hobby project i started because i live in Manipur, India, and internet shutdowns here are real. when they happen, everything stops. whatsapp, upi, telegram — all of it goes down because they all depend on central servers that suddenly can't be reached.
 
-## ✨ Features
+that's a stupid design. so i'm trying to build something different.
 
-- 🔐 **Advanced Encryption**: Hybrid encryption (RSA-2048 + AES-GCM) with forward secrecy
-- 🌐 **Network Flexibility**: Works on LAN, WAN, MAN, and offline networks
-- 💾 **Persistent Storage**: Local SQLite database for message history
-- 🎭 **Easter Eggs**: Hidden features and interactive commands
-- 📱 **Multi-Platform**: GUI, CLI, and Web interfaces
-- 🛡️ **No Central Server**: Peer-to-peer architecture
-- 🔍 **Open Source**: Transparent and auditable code
+the goal is a messenger that doesn't die when a single server goes offline. it finds peers directly — over the internet, over local network, over bluetooth, over lora radio if it has to. whatever works.
 
-## GitAds Sponsored
+***
 
-[![Sponsored by GitAds](https://gitads.dev/v1/ad-serve?source=project-enclave/enclave-messenger@github)](https://gitads.dev/v1/ad-track?source=project-enclave/enclave-messenger@github)
+## how it works (roughly)
 
-## 🚀 Quick Start
+```
+transport layer
+  ├── internet      → raw DHT (kademlia-based, no central tracker)
+  ├── local network → nmap-style peer discovery
+  ├── bluetooth     → arduino / esp32
+  └── lora          → arduino / esp32 (long range, low bandwidth)
 
-### 1. Installation
+identity layer
+  ├── ed25519 keypair  → who you are (signing)
+  └── x25519 prekeys  → how sessions start (key exchange)
+
+crypto layer
+  ├── custom cipher   → pre-encryption layer
+  └── noise protocol + double ratchet → e2e encryption per conversation
+
+ui
+  ├── flutter → desktop + android (first targets)
+  └── python bridge → web ui later
+```
+
+no accounts. no servers. your identity is a keypair that lives on your device. your user id is derived from your public key. nobody can take it from you.
+
+***
+
+## current status
+
+> this is early. like, really early.
+
+- [x] identity system (keypairs, device bundles, contact trust)
+- [ ] DHT node (peer discovery over internet)
+- [ ] LAN discovery
+- [ ] message format + delivery
+- [ ] double ratchet sessions
+- [ ] flutter ui
+- [ ] bluetooth transport
+- [ ] lora transport
+- [ ] plugin system
+
+a functional version exists and has been tested with a small number of people. this branch (`Start-from-Scratch`) is a full rewrite with a cleaner architecture.
+
+***
+
+## running it
+
+> nothing to run yet. check back later.
+
+when there is something:
 
 ```bash
-# Clone or download the project files
-# Run the setup script
-python setup.py
+git clone https://github.com/Project-Enclave/Enclave-Messenger
+cd Enclave-Messenger
+pip install -r requirements.txt
+python main.py
 ```
 
-### 2. Start Messaging
+***
 
-**GUI Mode (Recommended):**
-```bash
-python enclave_messenger_gui.py
-```
+## why from scratch
 
-**CLI Mode:**
-```bash
-# Server mode
-python enclave_messenger_cli.py alice
+the previous version did not work **at all** but the code was a _mess_. i learned a lot building it and now i want to do it properly — clean layers, modular design, plugin support from the start instead of bolted on later.
 
-# Client mode  
-python enclave_messenger_cli.py bob --host 192.168.1.100
-```
+***
 
-**Web Mode:**
-```bash
-python enclave_messenger_web.py
-# Open http://localhost:5000
-```
+## tech stack
 
-## 🔧 Usage Guide
+| layer | tech |
+|---|---|
+| backend / core | python |
+| cli | python |
+| desktop + mobile gui | dart / flutter |
+| web ui | html + css + js (via python bridge) |
+| embedded (bt/lora) | c++ (arduino / esp32) |
 
-### GUI Application
+***
 
-1. **Launch**: Run `enclave_messenger_gui.py`
-2. **Setup**: Enter username and choose server/client mode
-3. **Connect**: Server mode listens for connections, client mode connects to server
-4. **Exchange Keys**: Use "🔑 Exchange Keys" to establish secure communication
-5. **Chat**: Send encrypted messages with confidence!
+## contributing
 
-### CLI Application
+it's a solo project right now. if you know me and want to help, just message me directly. random prs probably won't get reviewed quickly, sorry.
 
-```bash
-# Start as server
-python enclave_messenger_cli.py alice
+***
 
-# Connect as client
-python enclave_messenger_cli.py bob --host 192.168.1.100 --port 12345
+## acknowledgements
 
-# Commands
-/help              # Show help
-/contacts          # List contacts  
-/msg alice Hello   # Send encrypted message
-/key-exchange      # Exchange public keys
-/history alice     # View conversation
-/stats             # Show statistics
-```
+- classmates at jj school montessori and army public school khadakwasla
+- github — for the student pack and not judging my commit times
+- saksham — for support, testing, debugging, and a **lot** more
 
-### Easter Eggs & Commands
+***
 
-Try these fun commands in any interface:
-- `/joke` - Random programming jokes
-- `/ascii` - ASCII art
-- `/boom` - Emoji explosion  
-- `/matrix` - Enter the Matrix
-- `/konami` - Konami code sequence (GUI only)
+## license
 
-## 🔐 Security Features
+[gnu gpl v3](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
-### Encryption Stack
-- **Asymmetric**: RSA-2048 for key exchange
-- **Symmetric**: AES-256-GCM for message encryption  
-- **Forward Secrecy**: New session keys for each message
-- **Integrity**: AEAD encryption with authentication
+***
 
-### Privacy Protection
-- **No Metadata Leakage**: Minimal data exposure
-- **Local Storage**: All data stored locally
-- **No Central Server**: Direct peer-to-peer communication
-- **Open Source**: Full transparency and auditability
-
-## 📋 Requirements
-
-- Python 3.8+
-- Required packages (installed automatically):
-  - cryptography
-  - tkinter (for GUI)
-  - flask & flask-socketio (for web)
-  - sqlite3 (built-in)
-
-## 🌐 Network Configuration
-
-### Firewall Settings
-Make sure to allow the application through your firewall:
-- **Default Port**: 12345 (configurable)
-- **Protocol**: TCP
-- **Direction**: Inbound (for server mode)
-
-### Network Types
-- **LAN**: Direct connection within local network
-- **WAN**: Connection over internet (port forwarding may be required)
-- **VPN**: Works seamlessly over VPN connections
-- **Offline**: Can work in air-gapped environments
-
-## 🛠️ Development
-
-### Project Structure
-```
-enclave-messenger/
-├── secure_messenger.py      # Core encryption module
-├── enclave_messenger_gui.py  # GUI application
-├── enclave_messenger_cli.py  # CLI application  
-├── enclave_messenger_web.py  # Web application
-├── setup.py                 # Setup script
-├── requirements.txt         # Dependencies
-└── enclave_data/           # Local data directory
-    ├── username_keys.json  # User keys
-    └── enclave.db         # Message database
-```
-
-### Security Implementation
-- **Key Generation**: Cryptographically secure random key generation
-- **Key Storage**: Local encrypted key storage
-- **Message Encryption**: Each message uses unique session key
-- **Database**: SQLite with encrypted message storage
-- **Network**: Secure socket communication
-
-## 🤝 Contributing
-
-We welcome contributions! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the GPL-3.0 License - see the LICENSE file for details.
-
-## 🆘 Support
-
-- **Documentation**: Check the built-in `/help` command
-- **Issues**: Report bugs and request features on GitHub
-- **Community**: Join our discussions for help and updates
-
-## 🎯 Roadmap
-
-### Planned Features
-- [ ] SMS integration
-- [ ] Android/iOS mobile apps
-- [ ] Plugin architecture
-- [ ] Multi-language support
-- [ ] File transfer capability
-- [ ] Video/voice calling
-- [ ] Blockchain integration
-- [ ] IPFS storage option
-- [ ] Use UX4G or Material UI for site and apps
-- [ ] Improve GUI application
-- [ ] Improve CLI application  
-- [ ] Improve web application
-- [ ] Maybe add TUI?
-- [ ] Add status like WhatsApp (Instagram stories) and Discord (like those "Whats on your mind?")
-- [ ] Non-test user onbording
-- [ ] I know this is stupid and silly, but make my own internet? You may ask "Why". I ask you "Why not?"
-- [ ] Pear-to-pear interconnected network for messages, images, calls, websites, etc☆
-- [ ] Make a 'core' file (cli version with just message, key exchange, etc. No easter eggs, bloat, etc)
-- [ ] Add support for microcontroller like arduino uno to act as relays or addon to let mobile/desktop connect to the network ro both.
-- [ ] For sms, use silence and for Bluetooth use bitchat
-
-### Current Status
-- [x] Core encryption implementation
-- [x] GUI application (namesake)
-- [x] CLI application (namesake)
-- [x] Web application (namesake)
-- [x] Cross-platform support
-- [x] Easter eggs and features♡
-
-## 👨‍💻 Made By
-
-**Chinglen2080**(Dev) from Pune, Maharashtra and **ProPoswal**(UI/UX) from Haryana.
-
-*Made in **India** with ❤️ for secure communication*
-
----
-
-🔒 **Your Messages. Your Privacy. Your Enclave.**
-**Or**
-**Redefining messaging and privacy**
-* Enclave Messenger comes under Project Enclave. This is the main and only application of Project Enclave as of 29 January 2026. We do have plans for the future.
+*part of [project enclave](https://github.com/Project-Enclave) · distributed by intent*

@@ -1,1 +1,0 @@
-this folder is used for images, icons, commands, updates, etc
