@@ -1,602 +1,687 @@
 """
 web.py — Enclave Messenger Flask web entrypoint.
-Run with: python web.py
-Serves: http://localhost:5000
+Run with: python web.py  →  http://localhost:5000
 """
 
 import traceback
 from flask import Flask, request, jsonify, render_template_string
 from core.crypto.crypto_manager import CryptoManager
 from core.identity.key_manager import IdentityManager
-from core.storage import ConfigStore
-from core.plugins import SMSGateway
+from core.storage import ConfigStore, ChatStore
 
 app = Flask(__name__)
 identity = IdentityManager()
-config = ConfigStore()
+config   = ConfigStore()
+chats    = ChatStore()
 
 
-def error(msg, code=500, exc=None):
-    payload = {"error": msg}
+def err(msg, code=500, exc=None):
+    p = {"error": msg}
     if exc:
-        payload["detail"] = traceback.format_exc()
-    return jsonify(payload), code
+        p["detail"] = traceback.format_exc()
+    return jsonify(p), code
 
 
-CHAT_HTML = """
+# ── HTML ──────────────────────────────────────────────────────────────────────
+
+CHAT_HTML = r"""
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Enclave Messenger</title>
+  <link rel="preconnect" href="https://api.fontshare.com"/>
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=zodiak@400,700&display=swap" rel="stylesheet"/>
   <style>
+    /* ── tokens (from Enclave-Site) ── */
     :root {
-      --bg: #b9b1ef;
-      --shell: #16181f;
-      --panel: #f6f7fb;
-      --panel-2: #eef0f7;
-      --text: #16181f;
-      --muted: #7a7f92;
-      --line: #dfe3ef;
-      --accent: #7b72f6;
-      --accent-2: #5a54d6;
-      --dark: #20222b;
-      --white: #ffffff;
-      --danger: #ff7b7b;
-      --success: #48d597;
+      --bg:      #fdf5f0;
+      --surface: #fef8f4;
+      --border:  #f0cfc4;
+      --text:    #2a1f2e;
+      --muted:   #6b4f5e;
+      --faint:   #c4a5b0;
+      --primary: #c16c86;
+      --coral:   #f27280;
+      --warm:    #f9b294;
+      --purple:  #6d5c7d;
+      --blue:    #335d7e;
+      --font:    'Satoshi', sans-serif;
+      --display: 'Zodiak', serif;
+    }
+    [data-theme="dark"] {
+      --bg:      #1a1218;
+      --surface: #221620;
+      --border:  #4a3348;
+      --text:    #f5dde5;
+      --muted:   #d4a8ba;
+      --faint:   #8a6678;
+      --primary: #f27280;
+      --coral:   #f9b294;
+      --warm:    #f9b294;
+      --purple:  #c16c86;
     }
 
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background: radial-gradient(circle at top left, rgba(255,255,255,.25), transparent 30%), var(--bg);
-      color: var(--text);
-      display: grid;
-      place-items: center;
-      padding: 18px;
+    *{box-sizing:border-box;margin:0;padding:0;}
+    html,body{height:100%;}
+    body{
+      font-family:var(--font);
+      background:var(--bg);
+      color:var(--text);
+      display:flex;
+      height:100vh;
+      overflow:hidden;
     }
 
-    .app {
-      width: min(1500px, 100%);
-      height: min(880px, calc(100vh - 36px));
-      display: grid;
-      grid-template-columns: 86px 320px 1fr 320px;
-      gap: 0;
-      border: 4px solid #161616;
-      border-radius: 30px;
-      overflow: hidden;
-      background: var(--panel);
-      box-shadow: 0 22px 70px rgba(30, 30, 60, .28);
+    /* ── left panel ── */
+    .sidebar{
+      width:300px;
+      min-width:260px;
+      display:flex;
+      flex-direction:column;
+      background:var(--surface);
+      border-right:2px solid var(--border);
+      height:100%;
+    }
+    .brand{
+      padding:1.1rem 1.2rem .9rem;
+      border-bottom:1px solid var(--border);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+    }
+    .logo{
+      font-family:var(--display);
+      font-size:1.25rem;
+      font-weight:700;
+      color:var(--primary);
+      letter-spacing:-.01em;
+    }
+    .logo span{color:var(--coral);}
+    .theme-btn{
+      background:none;
+      border:1px solid var(--border);
+      border-radius:6px;
+      padding:.3rem .55rem;
+      cursor:pointer;
+      color:var(--muted);
+      font-size:.85rem;
     }
 
-    .nav {
-      background: linear-gradient(180deg, #1e2028, #12141a);
-      color: rgba(255,255,255,.72);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 18px 12px;
-      gap: 18px;
+    .search-wrap{padding:.75rem 1rem;}
+    .search-wrap input{
+      width:100%;
+      background:var(--bg);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:.5rem .85rem;
+      font-size:.875rem;
+      color:var(--text);
+      font-family:var(--font);
+      outline:none;
+    }
+    .search-wrap input::placeholder{color:var(--faint);}
+
+    .chat-list{
+      flex:1;
+      overflow-y:auto;
+      padding:.25rem .5rem;
+    }
+    .chat-item{
+      display:flex;
+      align-items:center;
+      gap:.75rem;
+      padding:.7rem .8rem;
+      border-radius:10px;
+      cursor:pointer;
+      transition:background .12s;
+    }
+    .chat-item:hover{background:var(--border);}
+    .chat-item.active{background:rgba(242,114,128,.13);border-left:3px solid var(--coral);}
+    .avatar{
+      width:42px;
+      height:42px;
+      border-radius:10px;
+      background:linear-gradient(135deg,var(--primary),var(--purple));
+      color:white;
+      display:grid;
+      place-items:center;
+      font-weight:700;
+      font-size:.95rem;
+      flex-shrink:0;
+    }
+    .chat-meta{min-width:0;flex:1;}
+    .chat-name{font-weight:600;font-size:.9rem;truncate}
+    .chat-preview{
+      color:var(--faint);
+      font-size:.78rem;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      margin-top:2px;
+    }
+    .new-chat-btn{
+      margin:.75rem;
+      padding:.6rem;
+      border:1px dashed var(--border);
+      border-radius:10px;
+      background:none;
+      cursor:pointer;
+      color:var(--muted);
+      font-family:var(--font);
+      font-size:.85rem;
+      transition:background .12s;
+    }
+    .new-chat-btn:hover{background:var(--border);}
+
+    /* ── bottom of sidebar: profile + settings ── */
+    .sidebar-footer{
+      border-top:2px solid var(--border);
+      padding:.85rem 1rem;
+    }
+    .profile-row{
+      display:flex;
+      align-items:center;
+      gap:.75rem;
+      cursor:pointer;
+      margin-bottom:.65rem;
+    }
+    .profile-row .avatar{width:36px;height:36px;font-size:.8rem;}
+    .profile-info .name{font-weight:600;font-size:.88rem;}
+    .profile-info .uid{font-size:.72rem;color:var(--faint);word-break:break-all;}
+
+    details.settings-panel{margin-top:0;}
+    details summary{
+      cursor:pointer;
+      color:var(--muted);
+      font-size:.82rem;
+      list-style:none;
+      display:flex;
+      align-items:center;
+      gap:.4rem;
+      padding:.35rem 0;
+    }
+    details summary::-webkit-details-marker{display:none;}
+    .settings-body{padding:.6rem 0 0;display:flex;flex-direction:column;gap:.5rem;}
+    .settings-body label{font-size:.75rem;color:var(--faint);margin-bottom:-2px;}
+    .settings-body input{
+      background:var(--bg);
+      border:1px solid var(--border);
+      border-radius:7px;
+      padding:.4rem .7rem;
+      font-size:.82rem;
+      color:var(--text);
+      font-family:var(--font);
+      outline:none;
+      width:100%;
+    }
+    .settings-body input[type=password]{letter-spacing:.1em;}
+    .btn{
+      padding:.45rem .9rem;
+      border-radius:7px;
+      font-size:.82rem;
+      font-weight:600;
+      cursor:pointer;
+      font-family:var(--font);
+      border:none;
+    }
+    .btn-primary{background:var(--primary);color:#fff9f7;}
+    .btn-primary:hover{background:var(--coral);}
+    .btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);}
+    .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;}
+
+    /* ── right panel: chat ── */
+    .chat-panel{
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      height:100%;
+      min-width:0;
+    }
+    .chat-topbar{
+      display:flex;
+      align-items:center;
+      gap:.85rem;
+      padding:.9rem 1.4rem;
+      border-bottom:2px solid var(--border);
+      background:var(--surface);
+    }
+    .chat-topbar .avatar{width:36px;height:36px;font-size:.8rem;}
+    .topbar-info .title{font-weight:700;font-size:1rem;}
+    .topbar-info .sub{font-size:.75rem;color:var(--faint);}
+    .topbar-actions{margin-left:auto;display:flex;gap:.5rem;}
+    .topbar-actions button{
+      background:none;
+      border:1px solid var(--border);
+      border-radius:7px;
+      padding:.35rem .65rem;
+      cursor:pointer;
+      color:var(--muted);
+      font-size:.82rem;
     }
 
-    .logo {
-      width: 44px;
-      height: 44px;
-      border-radius: 14px;
-      display: grid;
-      place-items: center;
-      color: white;
-      font-weight: 800;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.04);
-      margin-bottom: 6px;
+    .messages-area{
+      flex:1;
+      overflow-y:auto;
+      padding:1.2rem 1.4rem;
+      display:flex;
+      flex-direction:column;
+      gap:.85rem;
+    }
+    .msg-row{display:flex;gap:.75rem;max-width:72%;align-items:flex-end;}
+    .msg-row.me{margin-left:auto;flex-direction:row-reverse;}
+    .bubble{
+      padding:.7rem 1rem;
+      border-radius:16px 16px 16px 5px;
+      background:var(--surface);
+      border:1px solid var(--border);
+      font-size:.9rem;
+      line-height:1.45;
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
+    .msg-row.me .bubble{
+      background:linear-gradient(135deg,var(--primary),var(--coral));
+      color:white;
+      border:none;
+      border-radius:16px 16px 5px 16px;
+    }
+    .bubble-author{font-size:.72rem;font-weight:700;margin-bottom:.3rem;opacity:.7;}
+    .bubble-time{font-size:.68rem;color:var(--faint);margin-top:.3rem;text-align:right;}
+    .msg-row.me .bubble-time{color:rgba(255,255,255,.65);}
+    .encrypted-badge{
+      font-size:.65rem;
+      background:rgba(242,114,128,.15);
+      color:var(--coral);
+      border-radius:4px;
+      padding:1px 5px;
+      margin-left:5px;
+      vertical-align:middle;
     }
 
-    .nav-btn {
-      width: 52px;
-      height: 52px;
-      border-radius: 16px;
-      border: 0;
-      background: transparent;
-      color: inherit;
-      display: grid;
-      place-items: center;
-      cursor: pointer;
-      font-size: 12px;
-      position: relative;
+    .empty-state{
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:.6rem;
+      color:var(--faint);
+      font-size:.9rem;
     }
+    .empty-state .big{font-family:var(--display);font-size:1.8rem;color:var(--border);}
 
-    .nav-btn.active, .nav-btn:hover { background: rgba(255,255,255,.10); color: white; }
-    .nav-sep { flex: 1; }
+    .composer-area{
+      display:flex;
+      align-items:center;
+      gap:.65rem;
+      padding:.85rem 1.2rem;
+      border-top:2px solid var(--border);
+      background:var(--surface);
+    }
+    .composer-area input{
+      flex:1;
+      background:var(--bg);
+      border:1px solid var(--border);
+      border-radius:10px;
+      padding:.6rem 1rem;
+      font-size:.9rem;
+      color:var(--text);
+      font-family:var(--font);
+      outline:none;
+    }
+    .composer-area input::placeholder{color:var(--faint);}
+    .send-btn{
+      padding:.6rem 1.2rem;
+      background:var(--primary);
+      color:white;
+      border:none;
+      border-radius:10px;
+      cursor:pointer;
+      font-family:var(--font);
+      font-weight:600;
+      font-size:.88rem;
+    }
+    .send-btn:hover{background:var(--coral);}
 
-    .badge {
-      position: absolute;
-      top: 6px;
-      right: 6px;
-      min-width: 18px;
-      height: 18px;
-      padding: 0 5px;
-      border-radius: 999px;
-      background: #ff805f;
-      color: white;
-      font-size: 10px;
-      display: grid;
-      place-items: center;
-      font-weight: 700;
+    .no-chat{
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:.75rem;
+      color:var(--muted);
     }
+    .no-chat .big{font-family:var(--display);font-size:2.2rem;color:var(--border);}
 
-    .sidebar, .info {
-      background: var(--panel);
-      padding: 18px;
-      border-right: 1px solid var(--line);
-      overflow: auto;
-    }
-
-    .info {
-      background: #f8f8fd;
-      border-left: 1px solid var(--line);
-      border-right: none;
-    }
-
-    .search {
-      width: 100%;
-      border: 0;
-      border-radius: 16px;
-      padding: 14px 16px;
-      background: #e9e8fb;
-      outline: none;
-      color: #444;
-      margin-bottom: 14px;
-    }
-
-    .chat-list { display: flex; flex-direction: column; gap: 8px; }
-    .chat-item {
-      display: grid;
-      grid-template-columns: 52px 1fr auto;
-      gap: 12px;
-      padding: 12px;
-      border-radius: 18px;
-      cursor: pointer;
-      align-items: center;
-    }
-    .chat-item.active, .chat-item:hover { background: #efeff9; }
-    .avatar {
-      width: 52px;
-      height: 52px;
-      border-radius: 16px;
-      background: linear-gradient(135deg, #1c1f27, #464c62);
-      color: white;
-      display: grid;
-      place-items: center;
-      font-weight: 700;
-      overflow: hidden;
-      font-size: 18px;
-    }
-    .chat-meta { min-width: 0; }
-    .chat-name { font-weight: 700; font-size: 15px; }
-    .chat-preview {
-      color: var(--muted);
-      font-size: 13px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      margin-top: 4px;
-    }
-    .chat-time { color: var(--muted); font-size: 12px; }
-
-    .main {
-      background: #f7f8fc;
-      display: grid;
-      grid-template-rows: 84px 1fr 82px;
-      overflow: hidden;
-    }
-
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 18px 24px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(255,255,255,.65);
-      backdrop-filter: blur(8px);
-    }
-    .topbar h1 {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.1;
-    }
-    .sub {
-      margin-top: 4px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .top-actions { display: flex; gap: 10px; }
-    .icon-btn {
-      width: 40px;
-      height: 40px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: white;
-      cursor: pointer;
-      font-size: 16px;
-    }
-
-    .messages {
-      padding: 24px;
-      overflow: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      background:
-        radial-gradient(circle at 20% 10%, rgba(123,114,246,.08), transparent 18%),
-        radial-gradient(circle at 90% 90%, rgba(123,114,246,.06), transparent 20%),
-        #f7f8fc;
-    }
-
-    .msg-row { display: flex; gap: 12px; align-items: flex-end; max-width: 82%; }
-    .msg-row.me { margin-left: auto; flex-direction: row-reverse; }
-    .msg-bubble {
-      padding: 14px 16px;
-      background: #ececf6;
-      border-radius: 18px 18px 18px 6px;
-      box-shadow: 0 8px 20px rgba(0,0,0,.04);
-    }
-    .msg-row.me .msg-bubble {
-      background: linear-gradient(135deg, var(--accent), #958dfa);
-      color: white;
-      border-radius: 18px 18px 6px 18px;
-    }
-    .msg-author { font-size: 12px; font-weight: 700; margin-bottom: 5px; opacity: .82; }
-    .msg-text { font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
-    .msg-time { font-size: 11px; color: var(--muted); margin-top: 6px; }
-    .msg-row.me .msg-time { color: rgba(255,255,255,.78); }
-
-    .composer {
-      display: grid;
-      grid-template-columns: 44px 1fr 44px 44px;
-      gap: 10px;
-      padding: 16px 18px;
-      border-top: 1px solid var(--line);
-      background: white;
-    }
-    .composer input {
-      width: 100%;
-      border: 0;
-      background: #f1f2f8;
-      border-radius: 16px;
-      padding: 0 16px;
-      outline: none;
-      font-size: 14px;
-    }
-    .composer button {
-      border: 0;
-      border-radius: 14px;
-      background: #f1f2f8;
-      cursor: pointer;
-      font-size: 18px;
-    }
-    .composer .send {
-      background: var(--accent);
-      color: white;
-    }
-
-    .card {
-      background: white;
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      padding: 18px;
-      margin-bottom: 16px;
-    }
-    .card h3 {
-      margin: 0 0 12px 0;
-      font-size: 18px;
-    }
-    .mini-list { display: flex; flex-direction: column; gap: 12px; }
-    .mini-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 10px 0;
-      border-bottom: 1px solid #f0f1f7;
-      font-size: 14px;
-    }
-    .mini-row:last-child { border-bottom: none; }
-    .tiny { color: var(--muted); font-size: 13px; }
-
-    .stack { display: flex; flex-direction: column; gap: 12px; }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      background: #f1f2f9;
-      font-size: 13px;
-      color: #4a4f63;
-      margin-right: 8px;
-      margin-bottom: 8px;
-    }
-
-    .hidden { display: none; }
-    .status { font-size: 12px; color: var(--muted); margin-top: 8px; }
-
-    @media (max-width: 1280px) {
-      .app { grid-template-columns: 86px 280px 1fr; }
-      .info { display: none; }
-    }
-    @media (max-width: 980px) {
-      .app { grid-template-columns: 78px 1fr; }
-      .sidebar { display: none; }
-    }
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
   </style>
 </head>
 <body>
-  <div class="app">
-    <aside class="nav">
-      <div class="logo">△</div>
-      <button class="nav-btn active">💬<span class="badge">4</span></button>
-      <button class="nav-btn">👥</button>
-      <button class="nav-btn">📰</button>
-      <button class="nav-btn">🗄️</button>
-      <div class="nav-sep"></div>
-      <button class="nav-btn">👤</button>
-      <button class="nav-btn">⚙️</button>
-      <button class="nav-btn">↩</button>
-    </aside>
 
-    <aside class="sidebar">
-      <input class="search" placeholder="Search" />
-      <div class="chat-list">
-        <div class="chat-item active">
-          <div class="avatar">EM</div>
-          <div class="chat-meta">
-            <div class="chat-name">Enclave chat</div>
-            <div class="chat-preview">Secure design system and encrypted SMS routing</div>
-          </div>
-          <div class="chat-time">now</div>
-        </div>
-        <div class="chat-item"><div class="avatar">AL</div><div class="chat-meta"><div class="chat-name">Alex Hunt</div><div class="chat-preview">Hey guys! Important news</div></div><div class="chat-time">9m</div></div>
-        <div class="chat-item"><div class="avatar">JL</div><div class="chat-meta"><div class="chat-name">Jasmin Lowery</div><div class="chat-preview">Let's discuss it on the call</div></div><div class="chat-time">20m</div></div>
-        <div class="chat-item"><div class="avatar">JC</div><div class="chat-meta"><div class="chat-name">Jayden Church</div><div class="chat-preview">I prepared some variants</div></div><div class="chat-time">1h</div></div>
-        <div class="chat-item"><div class="avatar">OS</div><div class="chat-meta"><div class="chat-name">Osman Campos</div><div class="chat-preview">We are ready to go</div></div><div class="chat-time">2h</div></div>
-      </div>
-    </aside>
-
-    <main class="main">
-      <header class="topbar">
-        <div>
-          <h1>Design chat</h1>
-          <div class="sub">23 members, secure channel online</div>
-        </div>
-        <div class="top-actions">
-          <button class="icon-btn" title="Search">⌕</button>
-          <button class="icon-btn" title="Call">📞</button>
-          <button class="icon-btn" title="More">⋮</button>
-        </div>
-      </header>
-
-      <section class="messages" id="messages">
-        <div class="msg-row">
-          <div class="avatar" style="width:40px;height:40px;border-radius:12px;">JL</div>
-          <div class="msg-bubble">
-            <div class="msg-author">Jasmin Lowery</div>
-            <div class="msg-text">I added new flows to our design system. Now you can use them for your projects.</div>
-            <div class="msg-time">09:20</div>
-          </div>
-        </div>
-
-        <div class="msg-row">
-          <div class="avatar" style="width:40px;height:40px;border-radius:12px;">AH</div>
-          <div class="msg-bubble">
-            <div class="msg-author">Alex Hunt</div>
-            <div class="msg-text">Hey guys! Important news!</div>
-            <div class="msg-time">09:24</div>
-          </div>
-        </div>
-
-        <div class="msg-row me">
-          <div class="avatar" style="width:40px;height:40px;border-radius:12px;">ME</div>
-          <div class="msg-bubble">
-            <div class="msg-author">You</div>
-            <div class="msg-text">This Enclave layout now matches the three-panel style. Next step is wiring real chat history and message sync.</div>
-            <div class="msg-time">09:27</div>
-          </div>
-        </div>
-
-        <div class="msg-row">
-          <div class="avatar" style="width:40px;height:40px;border-radius:12px;">SYS</div>
-          <div class="msg-bubble">
-            <div class="msg-author">Local API</div>
-            <div class="msg-text">Use the composer below to encrypt a local message. SMS sending is still available from the right panel tools.</div>
-            <div class="msg-time">now</div>
-          </div>
-        </div>
-      </section>
-
-      <footer class="composer">
-        <button title="Attach">＋</button>
-        <input id="composer-text" placeholder="Write a secure message" />
-        <button title="Mic">🎙</button>
-        <button class="send" onclick="sendEncrypted()" title="Send">➤</button>
-      </footer>
-    </main>
-
-    <aside class="info">
-      <div class="card">
-        <h3>Group info</h3>
-        <div class="mini-list">
-          <div class="mini-row"><span>Files</span><strong>265</strong></div>
-          <div class="mini-row"><span>Videos</span><strong>13</strong></div>
-          <div class="mini-row"><span>Shared links</span><strong>45</strong></div>
-          <div class="mini-row"><span>Voice messages</span><strong>2,589</strong></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Quick tools</h3>
-        <div class="stack">
-          <label class="tiny">Passphrase</label>
-          <input id="enc-pass" type="password" placeholder="passphrase" />
-          <label class="tiny">Chat ID</label>
-          <input id="enc-chatid" value="design-chat" />
-          <label class="tiny">Prekey (optional)</label>
-          <input id="enc-prekey" placeholder="optional prekey" />
-          <button onclick="checkIdentity()">Check identity</button>
-          <button onclick="saveSmsCfg()">Save SMS config</button>
-          <button onclick="sendSMS()">Send SMS</button>
-          <div class="status" id="tool-status">Ready.</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>SMS gateway</h3>
-        <label class="tiny">Username</label>
-        <input id="sms-cfg-user" placeholder="gateway username" />
-        <label class="tiny">Password</label>
-        <input id="sms-cfg-pass" type="password" placeholder="gateway password" />
-        <label class="tiny">Device host / IP</label>
-        <input id="sms-cfg-host" placeholder="192.168.1.100 or cloud" />
-        <label class="tiny">Phone</label>
-        <input id="sms-to" placeholder="+911234567890" />
-      </div>
-
-      <div class="card">
-        <h3>Members</h3>
-        <div class="mini-list">
-          <div class="mini-row"><span>Tanisha Combs</span><span class="tiny">admin</span></div>
-          <div class="mini-row"><span>Alex Hunt</span><span class="tiny">member</span></div>
-          <div class="mini-row"><span>Jasmin Lowery</span><span class="tiny">member</span></div>
-          <div class="mini-row"><span>Max Padilla</span><span class="tiny">member</span></div>
-          <div class="mini-row"><span>You</span><span class="tiny">local</span></div>
-        </div>
-      </div>
-    </aside>
+<!-- ── sidebar ── -->
+<aside class="sidebar">
+  <div class="brand">
+    <div class="logo">project <span>enclave</span></div>
+    <button class="theme-btn" onclick="toggleTheme()">◐</button>
   </div>
 
-  <script>
-    function setStatus(text) {
-      document.getElementById('tool-status').textContent = text;
-    }
+  <div class="search-wrap">
+    <input id="search" placeholder="Search chats…" oninput="filterChats(this.value)"/>
+  </div>
 
-    async function api(url, body) {
-      const opts = body
-        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-        : {};
-      const r = await fetch(url, opts);
-      return await r.json();
-    }
+  <div class="chat-list" id="chat-list">
+    <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">Loading chats…</div>
+  </div>
 
-    function addMessage(text, mine=true, author='You') {
-      const root = document.getElementById('messages');
-      const row = document.createElement('div');
-      row.className = 'msg-row' + (mine ? ' me' : '');
-      const now = new Date();
-      const hh = String(now.getHours()).padStart(2,'0');
-      const mm = String(now.getMinutes()).padStart(2,'0');
-      row.innerHTML = `
-        <div class="avatar" style="width:40px;height:40px;border-radius:12px;">${author.slice(0,2).toUpperCase()}</div>
-        <div class="msg-bubble">
-          <div class="msg-author">${author}</div>
-          <div class="msg-text"></div>
-          <div class="msg-time">${hh}:${mm}</div>
-        </div>`;
-      row.querySelector('.msg-text').textContent = text;
-      root.appendChild(row);
-      root.scrollTop = root.scrollHeight;
-    }
+  <button class="new-chat-btn" onclick="newChat()">＋ new chat</button>
 
-    async function checkIdentity() {
-      const d = await api('/api/identity/status');
-      setStatus('Identity: ' + JSON.stringify(d));
-    }
+  <div class="sidebar-footer">
+    <div class="profile-row" id="profile-row">
+      <div class="avatar" id="me-avatar">?</div>
+      <div class="profile-info">
+        <div class="name" id="me-name">—</div>
+        <div class="uid" id="me-uid">no identity loaded</div>
+      </div>
+    </div>
 
-    async function saveSmsCfg() {
-      const d = await api('/api/sms/config', {
-        username: document.getElementById('sms-cfg-user').value,
-        password: document.getElementById('sms-cfg-pass').value,
-        host: document.getElementById('sms-cfg-host').value || null,
-      });
-      setStatus('SMS config: ' + JSON.stringify(d));
-    }
+    <details class="settings-panel">
+      <summary>⚙ settings &amp; config</summary>
+      <div class="settings-body">
+        <label>passphrase</label>
+        <input id="cfg-pass" type="password" placeholder="session passphrase"/>
 
-    async function sendSMS() {
-      const text = document.getElementById('composer-text').value.trim() || 'Hello from Enclave';
-      const d = await api('/api/sms/send', {
-        to: document.getElementById('sms-to').value,
-        message: text,
-      });
-      setStatus('SMS: ' + JSON.stringify(d));
-    }
+        <label>sms gateway username</label>
+        <input id="cfg-sms-user" placeholder="username"/>
+        <label>sms gateway password</label>
+        <input id="cfg-sms-pass" type="password" placeholder="password"/>
+        <label>device host (ip:port or "cloud")</label>
+        <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
 
-    async function sendEncrypted() {
-      const text = document.getElementById('composer-text').value.trim();
-      if (!text) return;
-      addMessage(text, true, 'You');
-      document.getElementById('composer-text').value = '';
+        <button class="btn btn-primary" onclick="saveConfig()">save config</button>
+        <button class="btn btn-ghost" onclick="loadIdentity()">load identity</button>
+        <div class="status-line" id="cfg-status">—</div>
+      </div>
+    </details>
+  </div>
+</aside>
 
+<!-- ── chat panel ── -->
+<section class="chat-panel" id="chat-panel">
+  <div class="no-chat" id="no-chat">
+    <div class="big">🔐</div>
+    <div>select a chat or create a new one</div>
+    <div style="font-size:.78rem;color:var(--faint);">messages are end-to-end encrypted</div>
+  </div>
+
+  <div id="active-chat" style="display:none;flex-direction:column;height:100%;">
+    <div class="chat-topbar">
+      <div class="avatar" id="chat-avatar">?</div>
+      <div class="topbar-info">
+        <div class="title" id="chat-title">—</div>
+        <div class="sub" id="chat-sub">—</div>
+      </div>
+      <div class="topbar-actions">
+        <button onclick="refreshMessages()">↻</button>
+        <button onclick="closeChat()">✕</button>
+      </div>
+    </div>
+
+    <div class="messages-area" id="messages-area"></div>
+
+    <div class="composer-area">
+      <input id="composer" placeholder="write a secure message…" onkeydown="if(event.key==='Enter')sendMessage()"/>
+      <button class="send-btn" onclick="sendMessage()">send →</button>
+    </div>
+  </div>
+</section>
+
+<script>
+// ── state ──
+let currentChatId = null;
+let allChats = [];
+const passphrase = () => document.getElementById('cfg-pass').value;
+
+// ── api ──
+async function api(url, body) {
+  const opts = body
+    ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }
+    : {};
+  const r = await fetch(url, opts);
+  return r.json();
+}
+
+// ── theme ──
+function toggleTheme() {
+  const html = document.documentElement;
+  html.setAttribute('data-theme', html.getAttribute('data-theme')==='dark' ? 'light' : 'dark');
+}
+
+// ── identity ──
+async function loadIdentity() {
+  const d = await api('/api/identity/status');
+  if (d.has_identity) {
+    const uid = d.user_id || 'loaded';
+    document.getElementById('me-uid').textContent = uid;
+    document.getElementById('me-name').textContent = d.username || 'you';
+    document.getElementById('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
+    document.getElementById('cfg-status').textContent = '✓ identity loaded';
+  } else {
+    document.getElementById('cfg-status').textContent = '⚠ no identity — run setup.py first';
+  }
+}
+
+// ── config ──
+async function saveConfig() {
+  const u = document.getElementById('cfg-sms-user').value;
+  const p = document.getElementById('cfg-sms-pass').value;
+  const h = document.getElementById('cfg-sms-host').value;
+  if (u && p) {
+    const d = await api('/api/sms/config', { username:u, password:p, host:h||null });
+    document.getElementById('cfg-status').textContent = 'SMS config: ' + JSON.stringify(d);
+  } else {
+    document.getElementById('cfg-status').textContent = '⚠ enter sms username + password';
+  }
+}
+
+// ── chat list ──
+async function loadChats() {
+  const d = await api('/api/chats');
+  allChats = d.chats || [];
+  renderChatList(allChats);
+}
+
+function renderChatList(list) {
+  const el = document.getElementById('chat-list');
+  if (!list.length) {
+    el.innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">no chats yet — create one below</div>';
+    return;
+  }
+  el.innerHTML = list.map(c => `
+    <div class="chat-item ${c.id===currentChatId?'active':''}" onclick="openChat('${c.id}')">
+      <div class="avatar">${c.id.slice(0,2).toUpperCase()}</div>
+      <div class="chat-meta">
+        <div class="chat-name">${c.id}</div>
+        <div class="chat-preview">${c.count} message${c.count!==1?'s':''}</div>
+      </div>
+    </div>`).join('');
+}
+
+function filterChats(q) {
+  renderChatList(allChats.filter(c => c.id.toLowerCase().includes(q.toLowerCase())));
+}
+
+// ── open chat ──
+async function openChat(chatId) {
+  currentChatId = chatId;
+  document.getElementById('no-chat').style.display = 'none';
+  const ac = document.getElementById('active-chat');
+  ac.style.display = 'flex';
+
+  document.getElementById('chat-avatar').textContent = chatId.slice(0,2).toUpperCase();
+  document.getElementById('chat-title').textContent = chatId;
+  document.getElementById('chat-sub').textContent = 'encrypted channel';
+
+  renderChatList(allChats);
+  await refreshMessages();
+}
+
+function closeChat() {
+  currentChatId = null;
+  document.getElementById('active-chat').style.display = 'none';
+  document.getElementById('no-chat').style.display = 'flex';
+  renderChatList(allChats);
+}
+
+// ── messages ──
+async function refreshMessages() {
+  if (!currentChatId) return;
+  const d = await api('/api/chats/' + encodeURIComponent(currentChatId));
+  const area = document.getElementById('messages-area');
+  const pass = passphrase();
+  const msgs = d.messages || [];
+
+  if (!msgs.length) {
+    area.innerHTML = '<div class="empty-state"><div class="big">🔒</div><div>no messages yet</div></div>';
+    return;
+  }
+
+  const rows = await Promise.all(msgs.map(async (token, i) => {
+    let text = token;
+    let encrypted = true;
+    if (pass) {
       try {
-        const d = await api('/api/crypto/encrypt', {
-          passphrase: document.getElementById('enc-pass').value,
-          plaintext: text,
-          chat_id: document.getElementById('enc-chatid').value || 'design-chat',
-          created_at: new Date().toISOString(),
-          prekey: document.getElementById('enc-prekey').value,
-        });
-        if (d.token) {
-          setStatus('Encrypted token created successfully.');
-          addMessage('Encrypted token generated and ready for transport.', false, 'System');
-        } else {
-          setStatus('Encrypt error: ' + JSON.stringify(d));
-        }
-      } catch (e) {
-        setStatus('Encrypt failed: ' + e);
-      }
+        const dec = await api('/api/crypto/decrypt', { passphrase: pass, token });
+        if (dec.plaintext !== undefined) { text = dec.plaintext; encrypted = false; }
+      } catch(e) {}
     }
-  </script>
+    const mine = i % 2 === 0; // placeholder until real sender tracking
+    return { text, encrypted, mine, time: '' };
+  }));
+
+  area.innerHTML = rows.map(m => `
+    <div class="msg-row ${m.mine?'me':''}">
+      <div class="bubble">
+        ${m.mine ? '' : '<div class="bubble-author">peer</div>'}
+        <div>${escHtml(m.text)}${m.encrypted?'<span class="encrypted-badge">🔒 enc</span>':''}</div>
+        <div class="bubble-time">${m.time || ''}</div>
+      </div>
+    </div>`).join('');
+  area.scrollTop = area.scrollHeight;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── send ──
+async function sendMessage() {
+  const input = document.getElementById('composer');
+  const text = input.value.trim();
+  if (!text || !currentChatId) return;
+  input.value = '';
+
+  const pass = passphrase();
+  if (!pass) {
+    appendLocalMessage(text, true, false);
+    await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', { token: text });
+    return;
+  }
+
+  const d = await api('/api/crypto/encrypt', {
+    passphrase: pass,
+    plaintext: text,
+    chat_id: currentChatId,
+    created_at: new Date().toISOString(),
+    prekey: '',
+  });
+
+  if (d.token) {
+    appendLocalMessage(text, true, false);
+    await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', { token: d.token });
+    await loadChats();
+  }
+}
+
+function appendLocalMessage(text, mine, encrypted) {
+  const area = document.getElementById('messages-area');
+  const row = document.createElement('div');
+  row.className = 'msg-row' + (mine?' me':'');
+  const now = new Date();
+  const t = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  row.innerHTML = `<div class="bubble">
+    <div>${escHtml(text)}${encrypted?'<span class="encrypted-badge">🔒 enc</span>':''}</div>
+    <div class="bubble-time">${t}</div>
+  </div>`;
+  area.appendChild(row);
+  area.scrollTop = area.scrollHeight;
+}
+
+// ── new chat ──
+async function newChat() {
+  const id = prompt('chat ID (e.g. phone number, username, group name):');
+  if (!id || !id.trim()) return;
+  await api('/api/chats/' + encodeURIComponent(id.trim()) + '/append', { token: '-- chat started --' });
+  await loadChats();
+  openChat(id.trim());
+}
+
+// ── boot ──
+(async () => {
+  await loadIdentity();
+  await loadChats();
+})();
+</script>
 </body>
 </html>
 """
 
 
+# ── routes ────────────────────────────────────────────────────────────────────
+
 @app.route("/")
 def index():
     return render_template_string(CHAT_HTML)
-
 
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok"})
 
 
+# ─ identity
 @app.route("/api/identity/status")
 def identity_status():
-    return jsonify({"has_identity": identity.has_identity()})
-
+    has = identity.has_identity()
+    return jsonify({
+        "has_identity": has,
+        "username": config.username,
+        "user_id": None,
+    })
 
 @app.route("/api/identity/generate", methods=["POST"])
 def identity_generate():
     data = request.get_json(force=True)
     passphrase = data.get("passphrase", "")
     if not passphrase:
-        return error("passphrase required", 400)
+        return err("passphrase required", 400)
     try:
         user_id = identity.generate_new_identity()
         identity.save_identity(passphrase=passphrase)
         return jsonify({"user_id": user_id})
     except Exception as e:
-        return error(str(e), 500, exc=e)
+        return err(str(e), 500, exc=e)
 
 
+# ─ crypto
 @app.route("/api/crypto/encrypt", methods=["POST"])
 def crypto_encrypt():
     data = request.get_json(force=True)
     missing = {"passphrase", "plaintext", "chat_id", "created_at"} - data.keys()
     if missing:
-        return error(f"missing fields: {missing}", 400)
+        return err(f"missing fields: {missing}", 400)
     try:
         cm = CryptoManager(data["passphrase"])
         token = cm.encrypt(
@@ -607,28 +692,56 @@ def crypto_encrypt():
         )
         return jsonify({"token": token})
     except Exception as e:
-        return error(str(e), 500, exc=e)
-
+        return err(str(e), 500, exc=e)
 
 @app.route("/api/crypto/decrypt", methods=["POST"])
 def crypto_decrypt():
     data = request.get_json(force=True)
     if "passphrase" not in data or "token" not in data:
-        return error("passphrase and token required", 400)
+        return err("passphrase and token required", 400)
     try:
         cm = CryptoManager(data["passphrase"])
         plaintext = cm.decrypt(token=data["token"], prekey=data.get("prekey", ""))
         return jsonify({"plaintext": plaintext})
     except Exception as e:
-        return error(str(e), 500, exc=e)
+        return err(str(e), 500, exc=e)
 
 
+# ─ chats (storage)
+@app.route("/api/chats")
+def list_chats():
+    chat_ids = chats.list_chats()
+    return jsonify({
+        "chats": [{"id": c, "count": chats.message_count(c)} for c in chat_ids]
+    })
+
+@app.route("/api/chats/<chat_id>")
+def get_chat(chat_id):
+    messages = chats.load_messages(chat_id)
+    return jsonify({"chat_id": chat_id, "messages": messages})
+
+@app.route("/api/chats/<chat_id>/append", methods=["POST"])
+def append_to_chat(chat_id):
+    data = request.get_json(force=True)
+    token = data.get("token", "")
+    if not token:
+        return err("token required", 400)
+    chats.append_message(chat_id, token)
+    return jsonify({"status": "ok", "chat_id": chat_id})
+
+@app.route("/api/chats/<chat_id>", methods=["DELETE"])
+def delete_chat(chat_id):
+    chats.delete_chat(chat_id)
+    return jsonify({"status": "deleted"})
+
+
+# ─ sms
 @app.route("/api/sms/config", methods=["POST"])
 def sms_config():
     data = request.get_json(force=True)
     missing = {"username", "password"} - data.keys()
     if missing:
-        return error(f"missing fields: {missing}", 400)
+        return err(f"missing fields: {missing}", 400)
     config.set_sms_gateway(
         provider=data["username"],
         api_key=data["password"],
@@ -636,33 +749,35 @@ def sms_config():
     )
     return jsonify({"status": "saved"})
 
-
 @app.route("/api/sms/send", methods=["POST"])
 def sms_send():
+    from core.plugins import SMSGateway
     data = request.get_json(force=True)
     if "to" not in data or "message" not in data:
-        return error("to and message required", 400)
+        return err("to and message required", 400)
     gw = config.get_sms_gateway()
     if not gw.get("api_key"):
-        return error("SMS gateway not configured. POST /api/sms/config first.", 503)
+        return err("SMS gateway not configured. POST /api/sms/config first.", 503)
     try:
         sms = SMSGateway.from_config(config)
         result = sms.send(data["to"], data["message"])
         return jsonify(result)
     except Exception as e:
-        return error(str(e), 500, exc=e)
-
+        return err(str(e), 500, exc=e)
 
 @app.route("/api/sms/status/<message_id>")
 def sms_status(message_id):
+    from core.plugins import SMSGateway
     try:
         sms = SMSGateway.from_config(config)
         return jsonify(sms.get_status(message_id))
     except Exception as e:
-        return error(str(e), 500, exc=e)
+        return err(str(e), 500, exc=e)
 
+
+# ── run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    port = config.get_setting("port", 5000)
+    port  = config.get_setting("port", 5000)
     debug = config.get_setting("debug", False)
     app.run(host="127.0.0.1", port=port, debug=debug)
