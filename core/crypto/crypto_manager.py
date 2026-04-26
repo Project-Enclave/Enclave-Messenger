@@ -1,6 +1,5 @@
 import os
 import json
-import time
 import base64
 import hashlib
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -153,11 +152,15 @@ class CryptoManager:
     def decrypt(self, token: str, prekey: str = "") -> str:
         envelope = json.loads(_b64d(token).decode("utf-8"))
 
+        if "header" not in envelope or "ciphertext" not in envelope:
+            raise ValueError("Invalid envelope")
+
         header = envelope["header"]
-        if header["v"] != SCHEMA_VERSION:
+
+        if header.get("v") != SCHEMA_VERSION:
             raise ValueError("Unsupported schema version.")
 
-        if header["purpose"] != "message":
+        if header.get("purpose") != "message":
             raise ValueError("Invalid envelope purpose.")
 
         salt = _b64d(header["salt"])
@@ -177,14 +180,17 @@ class CryptoManager:
             prekey=prekey,
         )
 
-    def encrypt_message(self, message_type: str, body: dict, chat_id: str, prekey: str = "") -> str:
-        created_at = str(int(time.time()))
+    def encrypt_message(self, message_type: str, body: dict, chat_id: str, created_at: str, prekey: str = "") -> str:
+        if not isinstance(body, dict):
+            raise TypeError("body must be a dict")
+
         payload = {
             "type": message_type,
             "chat_id": chat_id,
             "created_at": created_at,
             "body": body,
         }
+
         plaintext = json.dumps(payload, separators=(",", ":"), sort_keys=True)
         return self.encrypt(plaintext, chat_id=chat_id, created_at=created_at, prekey=prekey)
 
