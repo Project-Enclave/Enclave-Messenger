@@ -3,17 +3,20 @@ setup.py — Enclave Messenger first-run setup.
 
 Does:
   1. Checks Python version (3.10+)
-  2. Installs dependencies from requirements.txt
+  2. Installs dependencies (pip first, falls back to uv venv)
   3. Walks through config (username, SMS gateway creds)
   4. Creates the identity if none exists
   5. Deletes itself on success
 
-Run with: python setup.py
+Run with: python3 setup.py
 """
 
 import sys
 import os
 import subprocess
+import shutil
+
+VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv")
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -23,20 +26,12 @@ def banner(text):
     print(f"\033[96m  {text}\033[0m")
     print(f"\033[96m{'=' * 50}\033[0m")
 
-
-def ok(text):
-    print(f"  \033[92m✓\033[0m  {text}")
-
-
-def err(text):
-    print(f"  \033[91m✗\033[0m  {text}")
-
+def ok(text):  print(f"  \033[92m✓\033[0m  {text}")
+def err(text): print(f"  \033[91m✗\033[0m  {text}")
+def info(text): print(f"  \033[93m→\033[0m  {text}")
 
 def ask(prompt, default=None, secret=False):
-    if default:
-        display = f"{prompt} [{default}]: "
-    else:
-        display = f"{prompt}: "
+    display = f"{prompt} [{default}]: " if default else f"{prompt}: "
     if secret:
         import getpass
         val = getpass.getpass(display).strip()
@@ -45,7 +40,25 @@ def ask(prompt, default=None, secret=False):
     return val if val else default
 
 
-# ── steps ───────────────────────────────────────────────────────────────────
+def run(cmd, **kwargs):
+    return subprocess.run(cmd, **kwargs)
+
+
+def venv_python():
+    """Return the Python executable inside .venv."""
+    if sys.platform == "win32":
+        return os.path.join(VENV_DIR, "Scripts", "python.exe")
+    return os.path.join(VENV_DIR, "bin", "python")
+
+
+def venv_active():
+    """True if we're already running inside .venv."""
+    return sys.prefix == VENV_DIR or os.path.abspath(sys.executable).startswith(
+        os.path.abspath(VENV_DIR)
+    )
+
+
+# ── steps ─────────────────────────────────────────────────────────────────
 
 def step_python_version():
     banner("Step 1 — Python version check")
@@ -58,18 +71,56 @@ def step_python_version():
 
 def step_install_requirements():
     banner("Step 2 — Installing requirements")
-    req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+    req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
     if not os.path.exists(req_file):
         err("requirements.txt not found!")
         sys.exit(1)
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", req_file],
-        capture_output=False,
-    )
-    if result.returncode != 0:
+
+    # ─ try pip first ────────────────────────────────────────────────────
+    pip_check = run([sys.executable, "-m", "pip", "--version"], capture_output=True)
+    if pip_check.returncode == 0:
+        result = run([sys.executable, "-m", "pip", "install", "-r", req_file])
+        if result.returncode == 0:
+            ok("All requirements installed via pip.")
+            return
         err("pip install failed.")
         sys.exit(1)
-    ok("All requirements installed.")
+
+    # ─ pip not available: fall back to uv ──────────────────────────────
+    info("pip not found — falling back to uv")
+
+    uv = shutil.which("uv")
+    if not uv:
+        err("uv not found either. Install uv first: https://github.com/astral-sh/uv")
+        err("  curl -Ls https://astral.sh/uv/install.sh | sh")
+        sys.exit(1)
+
+    # create venv if not already inside one
+    if not venv_active():
+        if not os.path.exists(VENV_DIR):
+            info(f"Creating venv at {VENV_DIR} ...")
+            result = run([uv, "venv", VENV_DIR])
+            if result.returncode != 0:
+                err("uv venv creation failed.")
+                sys.exit(1)
+            ok(f"Venv created at {VENV_DIR}")
+        else:
+            ok(f"Venv already exists at {VENV_DIR}")
+
+        # re-launch setup.py inside the venv
+        info("Re-launching setup inside venv...")
+        py = venv_python()
+        result = run([py, os.path.abspath(__file__)])
+        sys.exit(result.returncode)
+
+    # we are inside venv — install with uv pip
+    info("Installing requirements with uv pip ...")
+    result = run([uv, "pip", "install", "-r", req_file])
+    if result.returncode != 0:
+        err("uv pip install failed.")
+        sys.exit(1)
+    ok("All requirements installed via uv.")
+    ok(f"Activate venv with: source {VENV_DIR}/bin/activate")
 
 
 def step_config():
@@ -77,7 +128,6 @@ def step_config():
     from core.storage import ConfigStore
     config = ConfigStore()
 
-    # username
     current_user = config.username or ""
     username = ask("Your display name", default=current_user or None)
     if username:
@@ -86,7 +136,6 @@ def step_config():
     else:
         ok("Username skipped.")
 
-    # SMS gateway
     print("\n  SMS Gateway (android-sms-gateway) — optional, press Enter to skip")
     sms_user = ask("  Gateway username", default=None)
     if sms_user:
@@ -101,12 +150,11 @@ def step_config():
     else:
         ok("SMS gateway skipped.")
 
-    # port
     port_str = ask("  Web UI port", default="5000")
     try:
         config.set_setting("port", int(port_str))
         ok(f"Port set to: {port_str}")
-    except ValueError:
+    except (ValueError, TypeError):
         ok("Invalid port, keeping default 5000.")
 
 
@@ -135,7 +183,7 @@ def step_identity():
 def step_self_destruct():
     banner("Step 5 — Cleanup")
     try:
-        os.remove(__file__)
+        os.remove(os.path.abspath(__file__))
         ok("setup.py deleted — setup complete!")
     except OSError as e:
         err(f"Could not delete setup.py: {e}")
