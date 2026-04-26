@@ -34,7 +34,6 @@ CHAT_HTML = r"""
   <link rel="preconnect" href="https://api.fontshare.com"/>
   <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=zodiak@400,700&display=swap" rel="stylesheet"/>
   <style>
-    /* ── tokens (from Enclave-Site) ── */
     :root {
       --bg:      #fdf5f0;
       --surface: #fef8f4;
@@ -74,7 +73,6 @@ CHAT_HTML = r"""
       overflow:hidden;
     }
 
-    /* ── left panel ── */
     .sidebar{
       width:300px;
       min-width:260px;
@@ -108,7 +106,6 @@ CHAT_HTML = r"""
       color:var(--muted);
       font-size:.85rem;
     }
-
     .search-wrap{padding:.75rem 1rem;}
     .search-wrap input{
       width:100%;
@@ -122,7 +119,6 @@ CHAT_HTML = r"""
       outline:none;
     }
     .search-wrap input::placeholder{color:var(--faint);}
-
     .chat-list{
       flex:1;
       overflow-y:auto;
@@ -138,7 +134,10 @@ CHAT_HTML = r"""
       transition:background .12s;
     }
     .chat-item:hover{background:var(--border);}
-    .chat-item.active{background:rgba(242,114,128,.13);border-left:3px solid var(--coral);}
+    .chat-item.active{
+      background:rgba(242,114,128,.13);
+      border-left:3px solid var(--coral);
+    }
     .avatar{
       width:42px;
       height:42px;
@@ -152,7 +151,7 @@ CHAT_HTML = r"""
       flex-shrink:0;
     }
     .chat-meta{min-width:0;flex:1;}
-    .chat-name{font-weight:600;font-size:.9rem;truncate}
+    .chat-name{font-weight:600;font-size:.9rem;}
     .chat-preview{
       color:var(--faint);
       font-size:.78rem;
@@ -174,8 +173,6 @@ CHAT_HTML = r"""
       transition:background .12s;
     }
     .new-chat-btn:hover{background:var(--border);}
-
-    /* ── bottom of sidebar: profile + settings ── */
     .sidebar-footer{
       border-top:2px solid var(--border);
       padding:.85rem 1rem;
@@ -190,7 +187,6 @@ CHAT_HTML = r"""
     .profile-row .avatar{width:36px;height:36px;font-size:.8rem;}
     .profile-info .name{font-weight:600;font-size:.88rem;}
     .profile-info .uid{font-size:.72rem;color:var(--faint);word-break:break-all;}
-
     details.settings-panel{margin-top:0;}
     details summary{
       cursor:pointer;
@@ -229,9 +225,8 @@ CHAT_HTML = r"""
     .btn-primary{background:var(--primary);color:#fff9f7;}
     .btn-primary:hover{background:var(--coral);}
     .btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);}
-    .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;}
+    .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;min-height:1.2em;}
 
-    /* ── right panel: chat ── */
     .chat-panel{
       flex:1;
       display:flex;
@@ -246,6 +241,7 @@ CHAT_HTML = r"""
       padding:.9rem 1.4rem;
       border-bottom:2px solid var(--border);
       background:var(--surface);
+      flex-shrink:0;
     }
     .chat-topbar .avatar{width:36px;height:36px;font-size:.8rem;}
     .topbar-info .title{font-weight:700;font-size:1rem;}
@@ -260,7 +256,6 @@ CHAT_HTML = r"""
       color:var(--muted);
       font-size:.82rem;
     }
-
     .messages-area{
       flex:1;
       overflow-y:auto;
@@ -290,16 +285,16 @@ CHAT_HTML = r"""
     .bubble-author{font-size:.72rem;font-weight:700;margin-bottom:.3rem;opacity:.7;}
     .bubble-time{font-size:.68rem;color:var(--faint);margin-top:.3rem;text-align:right;}
     .msg-row.me .bubble-time{color:rgba(255,255,255,.65);}
-    .encrypted-badge{
+    .badge{
       font-size:.65rem;
-      background:rgba(242,114,128,.15);
-      color:var(--coral);
       border-radius:4px;
       padding:1px 5px;
       margin-left:5px;
       vertical-align:middle;
     }
-
+    .badge-enc{background:rgba(242,114,128,.15);color:var(--coral);}
+    .badge-sms{background:rgba(51,93,126,.15);color:#6faad4;}
+    .badge-err{background:rgba(255,80,80,.15);color:#ff7b7b;}
     .empty-state{
       flex:1;
       display:flex;
@@ -311,7 +306,6 @@ CHAT_HTML = r"""
       font-size:.9rem;
     }
     .empty-state .big{font-family:var(--display);font-size:1.8rem;color:var(--border);}
-
     .composer-area{
       display:flex;
       align-items:center;
@@ -319,6 +313,7 @@ CHAT_HTML = r"""
       padding:.85rem 1.2rem;
       border-top:2px solid var(--border);
       background:var(--surface);
+      flex-shrink:0;
     }
     .composer-area input{
       flex:1;
@@ -342,9 +337,10 @@ CHAT_HTML = r"""
       font-family:var(--font);
       font-weight:600;
       font-size:.88rem;
+      white-space:nowrap;
     }
     .send-btn:hover{background:var(--coral);}
-
+    .send-btn:disabled{opacity:.5;cursor:not-allowed;}
     .no-chat{
       flex:1;
       display:flex;
@@ -355,68 +351,57 @@ CHAT_HTML = r"""
       color:var(--muted);
     }
     .no-chat .big{font-family:var(--display);font-size:2.2rem;color:var(--border);}
-
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
   </style>
 </head>
 <body>
 
-<!-- ── sidebar ── -->
 <aside class="sidebar">
   <div class="brand">
     <div class="logo">project <span>enclave</span></div>
     <button class="theme-btn" onclick="toggleTheme()">◐</button>
   </div>
-
   <div class="search-wrap">
     <input id="search" placeholder="Search chats…" oninput="filterChats(this.value)"/>
   </div>
-
   <div class="chat-list" id="chat-list">
-    <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">Loading chats…</div>
+    <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading…</div>
   </div>
-
   <button class="new-chat-btn" onclick="newChat()">＋ new chat</button>
-
   <div class="sidebar-footer">
-    <div class="profile-row" id="profile-row">
+    <div class="profile-row">
       <div class="avatar" id="me-avatar">?</div>
       <div class="profile-info">
         <div class="name" id="me-name">—</div>
-        <div class="uid" id="me-uid">no identity loaded</div>
+        <div class="uid" id="me-uid">no identity</div>
       </div>
     </div>
-
     <details class="settings-panel">
-      <summary>⚙ settings &amp; config</summary>
+      <summary>⚙️ settings &amp; config</summary>
       <div class="settings-body">
-        <label>passphrase</label>
-        <input id="cfg-pass" type="password" placeholder="session passphrase"/>
-
+        <label>session passphrase</label>
+        <input id="cfg-pass" type="password" placeholder="used for encrypt / decrypt"/>
         <label>sms gateway username</label>
-        <input id="cfg-sms-user" placeholder="username"/>
+        <input id="cfg-sms-user"/>
         <label>sms gateway password</label>
-        <input id="cfg-sms-pass" type="password" placeholder="password"/>
-        <label>device host (ip:port or "cloud")</label>
+        <input id="cfg-sms-pass" type="password"/>
+        <label>device host (ip:port or cloud)</label>
         <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
-
-        <button class="btn btn-primary" onclick="saveConfig()">save config</button>
-        <button class="btn btn-ghost" onclick="loadIdentity()">load identity</button>
+        <button class="btn btn-primary" onclick="saveConfig()">save sms config</button>
+        <button class="btn btn-ghost" onclick="loadIdentity()">reload identity</button>
         <div class="status-line" id="cfg-status">—</div>
       </div>
     </details>
   </div>
 </aside>
 
-<!-- ── chat panel ── -->
-<section class="chat-panel" id="chat-panel">
+<section class="chat-panel">
   <div class="no-chat" id="no-chat">
     <div class="big">🔐</div>
-    <div>select a chat or create a new one</div>
+    <div>select a chat or create one</div>
     <div style="font-size:.78rem;color:var(--faint);">messages are end-to-end encrypted</div>
   </div>
-
   <div id="active-chat" style="display:none;flex-direction:column;height:100%;">
     <div class="chat-topbar">
       <div class="avatar" id="chat-avatar">?</div>
@@ -425,69 +410,59 @@ CHAT_HTML = r"""
         <div class="sub" id="chat-sub">—</div>
       </div>
       <div class="topbar-actions">
-        <button onclick="refreshMessages()">↻</button>
-        <button onclick="closeChat()">✕</button>
+        <button onclick="refreshMessages()" title="refresh">↻</button>
+        <button onclick="closeChat()" title="close">✕</button>
       </div>
     </div>
-
     <div class="messages-area" id="messages-area"></div>
-
     <div class="composer-area">
-      <input id="composer" placeholder="write a secure message…" onkeydown="if(event.key==='Enter')sendMessage()"/>
-      <button class="send-btn" onclick="sendMessage()">send →</button>
+      <input id="composer"
+             placeholder="write a secure message…"
+             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"/>
+      <button class="send-btn" id="send-btn" onclick="sendMessage()">send →</button>
     </div>
   </div>
 </section>
 
 <script>
-// ── state ──
 let currentChatId = null;
 let allChats = [];
-const passphrase = () => document.getElementById('cfg-pass').value;
+const $  = id => document.getElementById(id);
+const pass = () => $('cfg-pass').value;
+const isPhone = id => /^\+?[0-9]{7,15}$/.test(id.replace(/\s/g,''));
 
-// ── api ──
 async function api(url, body) {
   const opts = body
-    ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }
+    ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}
     : {};
   const r = await fetch(url, opts);
   return r.json();
 }
 
-// ── theme ──
+function setStatus(txt) { $('cfg-status').textContent = txt; }
+
 function toggleTheme() {
-  const html = document.documentElement;
-  html.setAttribute('data-theme', html.getAttribute('data-theme')==='dark' ? 'light' : 'dark');
+  const h = document.documentElement;
+  h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
 }
 
-// ── identity ──
 async function loadIdentity() {
   const d = await api('/api/identity/status');
-  if (d.has_identity) {
-    const uid = d.user_id || 'loaded';
-    document.getElementById('me-uid').textContent = uid;
-    document.getElementById('me-name').textContent = d.username || 'you';
-    document.getElementById('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
-    document.getElementById('cfg-status').textContent = '✓ identity loaded';
-  } else {
-    document.getElementById('cfg-status').textContent = '⚠ no identity — run setup.py first';
-  }
+  $('me-uid').textContent   = d.user_id || (d.has_identity ? 'loaded' : 'none');
+  $('me-name').textContent  = d.username || 'you';
+  $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
+  setStatus(d.has_identity ? '✓ identity ok' : '⚠ no identity — run setup.py');
 }
 
-// ── config ──
 async function saveConfig() {
-  const u = document.getElementById('cfg-sms-user').value;
-  const p = document.getElementById('cfg-sms-pass').value;
-  const h = document.getElementById('cfg-sms-host').value;
-  if (u && p) {
-    const d = await api('/api/sms/config', { username:u, password:p, host:h||null });
-    document.getElementById('cfg-status').textContent = 'SMS config: ' + JSON.stringify(d);
-  } else {
-    document.getElementById('cfg-status').textContent = '⚠ enter sms username + password';
-  }
+  const u = $('cfg-sms-user').value.trim();
+  const p = $('cfg-sms-pass').value;
+  const h = $('cfg-sms-host').value.trim();
+  if (!u || !p) { setStatus('⚠ username + password required'); return; }
+  const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
+  setStatus('sms config: ' + JSON.stringify(d));
 }
 
-// ── chat list ──
 async function loadChats() {
   const d = await api('/api/chats');
   allChats = d.chats || [];
@@ -495,141 +470,186 @@ async function loadChats() {
 }
 
 function renderChatList(list) {
-  const el = document.getElementById('chat-list');
+  const el = $('chat-list');
   if (!list.length) {
-    el.innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">no chats yet — create one below</div>';
+    el.innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">no chats yet</div>';
     return;
   }
-  el.innerHTML = list.map(c => `
-    <div class="chat-item ${c.id===currentChatId?'active':''}" onclick="openChat('${c.id}')">
+  el.innerHTML = list.map(c => {
+    const icon = isPhone(c.id) ? '📱' : '💬';
+    return `<div class="chat-item ${c.id===currentChatId?'active':''}" onclick="openChat('${escAttr(c.id)}')">
       <div class="avatar">${c.id.slice(0,2).toUpperCase()}</div>
       <div class="chat-meta">
-        <div class="chat-name">${c.id}</div>
-        <div class="chat-preview">${c.count} message${c.count!==1?'s':''}</div>
+        <div class="chat-name">${icon} ${escHtml(c.id)}</div>
+        <div class="chat-preview">${c.count} msg${c.count!==1?'s':''}</div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function filterChats(q) {
   renderChatList(allChats.filter(c => c.id.toLowerCase().includes(q.toLowerCase())));
 }
 
-// ── open chat ──
 async function openChat(chatId) {
   currentChatId = chatId;
-  document.getElementById('no-chat').style.display = 'none';
-  const ac = document.getElementById('active-chat');
+  $('no-chat').style.display  = 'none';
+  const ac = $('active-chat');
   ac.style.display = 'flex';
-
-  document.getElementById('chat-avatar').textContent = chatId.slice(0,2).toUpperCase();
-  document.getElementById('chat-title').textContent = chatId;
-  document.getElementById('chat-sub').textContent = 'encrypted channel';
-
+  $('chat-avatar').textContent = chatId.slice(0,2).toUpperCase();
+  $('chat-title').textContent  = chatId;
+  $('chat-sub').textContent    = isPhone(chatId) ? '📱 sms channel • encrypted' : '💬 local channel';
   renderChatList(allChats);
   await refreshMessages();
+  $('composer').focus();
 }
 
 function closeChat() {
   currentChatId = null;
-  document.getElementById('active-chat').style.display = 'none';
-  document.getElementById('no-chat').style.display = 'flex';
+  $('active-chat').style.display = 'none';
+  $('no-chat').style.display = 'flex';
   renderChatList(allChats);
 }
 
-// ── messages ──
 async function refreshMessages() {
   if (!currentChatId) return;
   const d = await api('/api/chats/' + encodeURIComponent(currentChatId));
-  const area = document.getElementById('messages-area');
-  const pass = passphrase();
+  const area = $('messages-area');
   const msgs = d.messages || [];
+  const p = pass();
 
   if (!msgs.length) {
     area.innerHTML = '<div class="empty-state"><div class="big">🔒</div><div>no messages yet</div></div>';
     return;
   }
 
-  const rows = await Promise.all(msgs.map(async (token, i) => {
-    let text = token;
-    let encrypted = true;
-    if (pass) {
+  const rows = await Promise.all(msgs.map(async (entry, i) => {
+    // entry is either a plain string (old) or {token, sender, ts}
+    const token    = typeof entry === 'object' ? entry.token  : entry;
+    const sender   = typeof entry === 'object' ? entry.sender : null;
+    const ts       = typeof entry === 'object' ? entry.ts     : null;
+    const mine     = sender === 'me' || (sender === null && i % 2 === 0);
+    let text = token, encrypted = true;
+    if (p) {
       try {
-        const dec = await api('/api/crypto/decrypt', { passphrase: pass, token });
+        const dec = await api('/api/crypto/decrypt', {passphrase:p, token});
         if (dec.plaintext !== undefined) { text = dec.plaintext; encrypted = false; }
-      } catch(e) {}
+      } catch(_) {}
     }
-    const mine = i % 2 === 0; // placeholder until real sender tracking
-    return { text, encrypted, mine, time: '' };
+    return {text, encrypted, mine, ts};
   }));
 
   area.innerHTML = rows.map(m => `
     <div class="msg-row ${m.mine?'me':''}">
       <div class="bubble">
-        ${m.mine ? '' : '<div class="bubble-author">peer</div>'}
-        <div>${escHtml(m.text)}${m.encrypted?'<span class="encrypted-badge">🔒 enc</span>':''}</div>
-        <div class="bubble-time">${m.time || ''}</div>
+        ${!m.mine?'<div class="bubble-author">peer</div>':''}
+        <div>${escHtml(m.text)}
+          ${m.encrypted?'<span class="badge badge-enc">🔒 enc</span>':''}
+        </div>
+        <div class="bubble-time">${m.ts ? fmtTs(m.ts) : ''}</div>
       </div>
     </div>`).join('');
   area.scrollTop = area.scrollHeight;
 }
 
-function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function fmtTs(ts) {
+  const d = new Date(ts);
+  return isNaN(d) ? ts : `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
-// ── send ──
 async function sendMessage() {
-  const input = document.getElementById('composer');
+  const input = $('composer');
   const text = input.value.trim();
   if (!text || !currentChatId) return;
+
+  const btn = $('send-btn');
+  btn.disabled = true;
   input.value = '';
 
-  const pass = passphrase();
-  if (!pass) {
-    appendLocalMessage(text, true, false);
-    await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', { token: text });
-    return;
+  const p = pass();
+  const ts = new Date().toISOString();
+  let token = text;
+  let encrypted = false;
+
+  // 1. encrypt if passphrase set
+  if (p) {
+    try {
+      const d = await api('/api/crypto/encrypt', {
+        passphrase: p, plaintext: text,
+        chat_id: currentChatId, created_at: ts, prekey: '',
+      });
+      if (d.token) { token = d.token; encrypted = true; }
+    } catch(_) {}
   }
 
-  const d = await api('/api/crypto/encrypt', {
-    passphrase: pass,
-    plaintext: text,
-    chat_id: currentChatId,
-    created_at: new Date().toISOString(),
-    prekey: '',
+  // 2. store locally
+  appendLocalMessage(text, true, encrypted, ts);
+  await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', {
+    token, sender: 'me', ts,
   });
 
-  if (d.token) {
-    appendLocalMessage(text, true, false);
-    await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', { token: d.token });
-    await loadChats();
+  // 3. send via SMS if chat ID is a phone number
+  if (isPhone(currentChatId)) {
+    try {
+      const smsBody = encrypted ? text : text; // always send plaintext over SMS
+      const r = await api('/api/sms/send', {to: currentChatId, message: smsBody});
+      if (r.error) {
+        appendSystemMessage('⚠ sms failed: ' + r.error);
+      } else {
+        appendSystemMessage('✓ sms sent — id: ' + (r.id || '?') + ' • state: ' + (r.state || '?'));
+      }
+    } catch(e) {
+      appendSystemMessage('⚠ sms error: ' + e);
+    }
   }
+
+  await loadChats();
+  btn.disabled = false;
+  $('composer').focus();
 }
 
-function appendLocalMessage(text, mine, encrypted) {
-  const area = document.getElementById('messages-area');
+function appendLocalMessage(text, mine, encrypted, ts) {
+  const area = $('messages-area');
+  // remove empty-state if present
+  const empty = area.querySelector('.empty-state');
+  if (empty) empty.remove();
   const row = document.createElement('div');
-  row.className = 'msg-row' + (mine?' me':'');
-  const now = new Date();
-  const t = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  row.className = 'msg-row' + (mine ? ' me' : '');
   row.innerHTML = `<div class="bubble">
-    <div>${escHtml(text)}${encrypted?'<span class="encrypted-badge">🔒 enc</span>':''}</div>
-    <div class="bubble-time">${t}</div>
+    <div>${escHtml(text)}${encrypted?'<span class="badge badge-enc">🔒 enc</span>':''}</div>
+    <div class="bubble-time">${fmtTs(ts)}</div>
   </div>`;
   area.appendChild(row);
   area.scrollTop = area.scrollHeight;
 }
 
-// ── new chat ──
-async function newChat() {
-  const id = prompt('chat ID (e.g. phone number, username, group name):');
-  if (!id || !id.trim()) return;
-  await api('/api/chats/' + encodeURIComponent(id.trim()) + '/append', { token: '-- chat started --' });
-  await loadChats();
-  openChat(id.trim());
+function appendSystemMessage(msg) {
+  const area = $('messages-area');
+  const row = document.createElement('div');
+  row.style.cssText = 'text-align:center;font-size:.72rem;color:var(--faint);padding:.2rem 0;';
+  row.textContent = msg;
+  area.appendChild(row);
+  area.scrollTop = area.scrollHeight;
 }
 
-// ── boot ──
+async function newChat() {
+  const id = prompt('phone number (E.164) or chat name:');
+  if (!id || !id.trim()) return;
+  const clean = id.trim();
+  await api('/api/chats/' + encodeURIComponent(clean) + '/append', {
+    token: '-- chat started --', sender: 'system', ts: new Date().toISOString(),
+  });
+  await loadChats();
+  openChat(clean);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return String(s).replace(/'/g,"&#39;");
+}
+
 (async () => {
   await loadIdentity();
   await loadChats();
@@ -650,38 +670,33 @@ def index():
 def health():
     return jsonify({"status": "ok"})
 
-
-# ─ identity
 @app.route("/api/identity/status")
 def identity_status():
-    has = identity.has_identity()
     return jsonify({
-        "has_identity": has,
-        "username": config.username,
+        "has_identity": identity.has_identity(),
+        "username": getattr(config, 'username', None),
         "user_id": None,
     })
 
 @app.route("/api/identity/generate", methods=["POST"])
 def identity_generate():
     data = request.get_json(force=True)
-    passphrase = data.get("passphrase", "")
-    if not passphrase:
+    p = data.get("passphrase", "")
+    if not p:
         return err("passphrase required", 400)
     try:
-        user_id = identity.generate_new_identity()
-        identity.save_identity(passphrase=passphrase)
-        return jsonify({"user_id": user_id})
+        uid = identity.generate_new_identity()
+        identity.save_identity(passphrase=p)
+        return jsonify({"user_id": uid})
     except Exception as e:
         return err(str(e), 500, exc=e)
 
-
-# ─ crypto
 @app.route("/api/crypto/encrypt", methods=["POST"])
 def crypto_encrypt():
     data = request.get_json(force=True)
     missing = {"passphrase", "plaintext", "chat_id", "created_at"} - data.keys()
     if missing:
-        return err(f"missing fields: {missing}", 400)
+        return err(f"missing: {missing}", 400)
     try:
         cm = CryptoManager(data["passphrase"])
         token = cm.encrypt(
@@ -701,39 +716,36 @@ def crypto_decrypt():
         return err("passphrase and token required", 400)
     try:
         cm = CryptoManager(data["passphrase"])
-        plaintext = cm.decrypt(token=data["token"], prekey=data.get("prekey", ""))
-        return jsonify({"plaintext": plaintext})
+        pt = cm.decrypt(token=data["token"], prekey=data.get("prekey", ""))
+        return jsonify({"plaintext": pt})
     except Exception as e:
         return err(str(e), 500, exc=e)
 
-
-# ─ chats (storage)
+# ─ chats
 @app.route("/api/chats")
 def list_chats():
-    chat_ids = chats.list_chats()
-    return jsonify({
-        "chats": [{"id": c, "count": chats.message_count(c)} for c in chat_ids]
-    })
+    return jsonify({"chats": [
+        {"id": c, "count": chats.message_count(c)} for c in chats.list_chats()
+    ]})
 
-@app.route("/api/chats/<chat_id>")
+@app.route("/api/chats/<path:chat_id>")
 def get_chat(chat_id):
-    messages = chats.load_messages(chat_id)
-    return jsonify({"chat_id": chat_id, "messages": messages})
+    return jsonify({"chat_id": chat_id, "messages": chats.load_messages(chat_id)})
 
-@app.route("/api/chats/<chat_id>/append", methods=["POST"])
+@app.route("/api/chats/<path:chat_id>/append", methods=["POST"])
 def append_to_chat(chat_id):
     data = request.get_json(force=True)
     token = data.get("token", "")
     if not token:
         return err("token required", 400)
-    chats.append_message(chat_id, token)
-    return jsonify({"status": "ok", "chat_id": chat_id})
+    entry = {"token": token, "sender": data.get("sender"), "ts": data.get("ts")}
+    chats.append_message(chat_id, entry)
+    return jsonify({"status": "ok"})
 
-@app.route("/api/chats/<chat_id>", methods=["DELETE"])
+@app.route("/api/chats/<path:chat_id>", methods=["DELETE"])
 def delete_chat(chat_id):
     chats.delete_chat(chat_id)
     return jsonify({"status": "deleted"})
-
 
 # ─ sms
 @app.route("/api/sms/config", methods=["POST"])
@@ -741,7 +753,7 @@ def sms_config():
     data = request.get_json(force=True)
     missing = {"username", "password"} - data.keys()
     if missing:
-        return err(f"missing fields: {missing}", 400)
+        return err(f"missing: {missing}", 400)
     config.set_sms_gateway(
         provider=data["username"],
         api_key=data["password"],
@@ -757,11 +769,10 @@ def sms_send():
         return err("to and message required", 400)
     gw = config.get_sms_gateway()
     if not gw.get("api_key"):
-        return err("SMS gateway not configured. POST /api/sms/config first.", 503)
+        return err("SMS gateway not configured", 503)
     try:
         sms = SMSGateway.from_config(config)
-        result = sms.send(data["to"], data["message"])
-        return jsonify(result)
+        return jsonify(sms.send(data["to"], data["message"]))
     except Exception as e:
         return err(str(e), 500, exc=e)
 
@@ -769,13 +780,10 @@ def sms_send():
 def sms_status(message_id):
     from core.plugins import SMSGateway
     try:
-        sms = SMSGateway.from_config(config)
-        return jsonify(sms.get_status(message_id))
+        return jsonify(SMSGateway.from_config(config).get_status(message_id))
     except Exception as e:
         return err(str(e), 500, exc=e)
 
-
-# ── run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port  = config.get_setting("port", 5000)
