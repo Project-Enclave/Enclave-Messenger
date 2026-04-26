@@ -20,6 +20,7 @@ the goal is a messenger that doesn't die when a single server goes offline. it f
 transport layer
   ├── internet      → raw DHT (kademlia-based, no central tracker)
   ├── local network → nmap-style peer discovery
+  ├── sms           → via a local or cloud sms api
   ├── bluetooth     → arduino / esp32
   └── lora          → arduino / esp32 (long range, low bandwidth)
 
