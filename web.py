@@ -22,8 +22,6 @@ def err(msg, code=500, exc=None):
     return jsonify(p), code
 
 
-# ── HTML ──────────────────────────────────────────────────────────────────────
-
 CHAT_HTML = r"""
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -45,7 +43,6 @@ CHAT_HTML = r"""
       --coral:   #f27280;
       --warm:    #f9b294;
       --purple:  #6d5c7d;
-      --blue:    #335d7e;
       --font:    'Satoshi', sans-serif;
       --display: 'Zodiak', serif;
     }
@@ -61,295 +58,73 @@ CHAT_HTML = r"""
       --warm:    #f9b294;
       --purple:  #c16c86;
     }
-
     *{box-sizing:border-box;margin:0;padding:0;}
     html,body{height:100%;}
-    body{
-      font-family:var(--font);
-      background:var(--bg);
-      color:var(--text);
-      display:flex;
-      height:100vh;
-      overflow:hidden;
-    }
+    body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;}
 
-    .sidebar{
-      width:300px;
-      min-width:260px;
-      display:flex;
-      flex-direction:column;
-      background:var(--surface);
-      border-right:2px solid var(--border);
-      height:100%;
-    }
-    .brand{
-      padding:1.1rem 1.2rem .9rem;
-      border-bottom:1px solid var(--border);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-    }
-    .logo{
-      font-family:var(--display);
-      font-size:1.25rem;
-      font-weight:700;
-      color:var(--primary);
-      letter-spacing:-.01em;
-    }
+    .sidebar{width:300px;min-width:260px;display:flex;flex-direction:column;background:var(--surface);border-right:2px solid var(--border);height:100%;}
+    .brand{padding:1.1rem 1.2rem .9rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+    .logo{font-family:var(--display);font-size:1.25rem;font-weight:700;color:var(--primary);letter-spacing:-.01em;}
     .logo span{color:var(--coral);}
-    .theme-btn{
-      background:none;
-      border:1px solid var(--border);
-      border-radius:6px;
-      padding:.3rem .55rem;
-      cursor:pointer;
-      color:var(--muted);
-      font-size:.85rem;
-    }
+    .theme-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:.3rem .55rem;cursor:pointer;color:var(--muted);font-size:.85rem;}
     .search-wrap{padding:.75rem 1rem;}
-    .search-wrap input{
-      width:100%;
-      background:var(--bg);
-      border:1px solid var(--border);
-      border-radius:8px;
-      padding:.5rem .85rem;
-      font-size:.875rem;
-      color:var(--text);
-      font-family:var(--font);
-      outline:none;
-    }
+    .search-wrap input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.5rem .85rem;font-size:.875rem;color:var(--text);font-family:var(--font);outline:none;}
     .search-wrap input::placeholder{color:var(--faint);}
-    .chat-list{
-      flex:1;
-      overflow-y:auto;
-      padding:.25rem .5rem;
-    }
-    .chat-item{
-      display:flex;
-      align-items:center;
-      gap:.75rem;
-      padding:.7rem .8rem;
-      border-radius:10px;
-      cursor:pointer;
-      transition:background .12s;
-    }
+    .chat-list{flex:1;overflow-y:auto;padding:.25rem .5rem;}
+    .chat-item{display:flex;align-items:center;gap:.75rem;padding:.7rem .8rem;border-radius:10px;cursor:pointer;transition:background .12s;}
     .chat-item:hover{background:var(--border);}
-    .chat-item.active{
-      background:rgba(242,114,128,.13);
-      border-left:3px solid var(--coral);
-    }
-    .avatar{
-      width:42px;
-      height:42px;
-      border-radius:10px;
-      background:linear-gradient(135deg,var(--primary),var(--purple));
-      color:white;
-      display:grid;
-      place-items:center;
-      font-weight:700;
-      font-size:.95rem;
-      flex-shrink:0;
-    }
+    .chat-item.active{background:rgba(242,114,128,.13);border-left:3px solid var(--coral);}
+    .avatar{width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,var(--primary),var(--purple));color:white;display:grid;place-items:center;font-weight:700;font-size:.95rem;flex-shrink:0;}
     .chat-meta{min-width:0;flex:1;}
     .chat-name{font-weight:600;font-size:.9rem;}
-    .chat-preview{
-      color:var(--faint);
-      font-size:.78rem;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      margin-top:2px;
-    }
-    .new-chat-btn{
-      margin:.75rem;
-      padding:.6rem;
-      border:1px dashed var(--border);
-      border-radius:10px;
-      background:none;
-      cursor:pointer;
-      color:var(--muted);
-      font-family:var(--font);
-      font-size:.85rem;
-      transition:background .12s;
-    }
+    .chat-preview{color:var(--faint);font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
+    .new-chat-btn{margin:.75rem;padding:.6rem;border:1px dashed var(--border);border-radius:10px;background:none;cursor:pointer;color:var(--muted);font-family:var(--font);font-size:.85rem;transition:background .12s;}
     .new-chat-btn:hover{background:var(--border);}
-    .sidebar-footer{
-      border-top:2px solid var(--border);
-      padding:.85rem 1rem;
-    }
-    .profile-row{
-      display:flex;
-      align-items:center;
-      gap:.75rem;
-      cursor:pointer;
-      margin-bottom:.65rem;
-    }
+    .sidebar-footer{border-top:2px solid var(--border);padding:.85rem 1rem;}
+    .profile-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.65rem;}
     .profile-row .avatar{width:36px;height:36px;font-size:.8rem;}
     .profile-info .name{font-weight:600;font-size:.88rem;}
     .profile-info .uid{font-size:.72rem;color:var(--faint);word-break:break-all;}
-    details.settings-panel{margin-top:0;}
-    details summary{
-      cursor:pointer;
-      color:var(--muted);
-      font-size:.82rem;
-      list-style:none;
-      display:flex;
-      align-items:center;
-      gap:.4rem;
-      padding:.35rem 0;
-    }
+    details summary{cursor:pointer;color:var(--muted);font-size:.82rem;list-style:none;display:flex;align-items:center;gap:.4rem;padding:.35rem 0;}
     details summary::-webkit-details-marker{display:none;}
     .settings-body{padding:.6rem 0 0;display:flex;flex-direction:column;gap:.5rem;}
     .settings-body label{font-size:.75rem;color:var(--faint);margin-bottom:-2px;}
-    .settings-body input{
-      background:var(--bg);
-      border:1px solid var(--border);
-      border-radius:7px;
-      padding:.4rem .7rem;
-      font-size:.82rem;
-      color:var(--text);
-      font-family:var(--font);
-      outline:none;
-      width:100%;
-    }
+    .settings-body input{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:.4rem .7rem;font-size:.82rem;color:var(--text);font-family:var(--font);outline:none;width:100%;}
     .settings-body input[type=password]{letter-spacing:.1em;}
-    .btn{
-      padding:.45rem .9rem;
-      border-radius:7px;
-      font-size:.82rem;
-      font-weight:600;
-      cursor:pointer;
-      font-family:var(--font);
-      border:none;
-    }
+    .btn{padding:.45rem .9rem;border-radius:7px;font-size:.82rem;font-weight:600;cursor:pointer;font-family:var(--font);border:none;}
     .btn-primary{background:var(--primary);color:#fff9f7;}
     .btn-primary:hover{background:var(--coral);}
     .btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);}
     .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;min-height:1.2em;}
 
-    .chat-panel{
-      flex:1;
-      display:flex;
-      flex-direction:column;
-      height:100%;
-      min-width:0;
-    }
-    .chat-topbar{
-      display:flex;
-      align-items:center;
-      gap:.85rem;
-      padding:.9rem 1.4rem;
-      border-bottom:2px solid var(--border);
-      background:var(--surface);
-      flex-shrink:0;
-    }
+    .chat-panel{flex:1;display:flex;flex-direction:column;height:100%;min-width:0;}
+    .chat-topbar{display:flex;align-items:center;gap:.85rem;padding:.9rem 1.4rem;border-bottom:2px solid var(--border);background:var(--surface);flex-shrink:0;}
     .chat-topbar .avatar{width:36px;height:36px;font-size:.8rem;}
     .topbar-info .title{font-weight:700;font-size:1rem;}
     .topbar-info .sub{font-size:.75rem;color:var(--faint);}
     .topbar-actions{margin-left:auto;display:flex;gap:.5rem;}
-    .topbar-actions button{
-      background:none;
-      border:1px solid var(--border);
-      border-radius:7px;
-      padding:.35rem .65rem;
-      cursor:pointer;
-      color:var(--muted);
-      font-size:.82rem;
-    }
-    .messages-area{
-      flex:1;
-      overflow-y:auto;
-      padding:1.2rem 1.4rem;
-      display:flex;
-      flex-direction:column;
-      gap:.85rem;
-    }
+    .topbar-actions button{background:none;border:1px solid var(--border);border-radius:7px;padding:.35rem .65rem;cursor:pointer;color:var(--muted);font-size:.82rem;}
+    .messages-area{flex:1;overflow-y:auto;padding:1.2rem 1.4rem;display:flex;flex-direction:column;gap:.85rem;}
     .msg-row{display:flex;gap:.75rem;max-width:72%;align-items:flex-end;}
     .msg-row.me{margin-left:auto;flex-direction:row-reverse;}
-    .bubble{
-      padding:.7rem 1rem;
-      border-radius:16px 16px 16px 5px;
-      background:var(--surface);
-      border:1px solid var(--border);
-      font-size:.9rem;
-      line-height:1.45;
-      white-space:pre-wrap;
-      word-break:break-word;
-    }
-    .msg-row.me .bubble{
-      background:linear-gradient(135deg,var(--primary),var(--coral));
-      color:white;
-      border:none;
-      border-radius:16px 16px 5px 16px;
-    }
+    .bubble{padding:.7rem 1rem;border-radius:16px 16px 16px 5px;background:var(--surface);border:1px solid var(--border);font-size:.9rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;}
+    .msg-row.me .bubble{background:linear-gradient(135deg,var(--primary),var(--coral));color:white;border:none;border-radius:16px 16px 5px 16px;}
     .bubble-author{font-size:.72rem;font-weight:700;margin-bottom:.3rem;opacity:.7;}
     .bubble-time{font-size:.68rem;color:var(--faint);margin-top:.3rem;text-align:right;}
     .msg-row.me .bubble-time{color:rgba(255,255,255,.65);}
-    .badge{
-      font-size:.65rem;
-      border-radius:4px;
-      padding:1px 5px;
-      margin-left:5px;
-      vertical-align:middle;
-    }
+    .badge{font-size:.65rem;border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;}
     .badge-enc{background:rgba(242,114,128,.15);color:var(--coral);}
-    .badge-sms{background:rgba(51,93,126,.15);color:#6faad4;}
-    .badge-err{background:rgba(255,80,80,.15);color:#ff7b7b;}
-    .empty-state{
-      flex:1;
-      display:flex;
-      flex-direction:column;
-      align-items:center;
-      justify-content:center;
-      gap:.6rem;
-      color:var(--faint);
-      font-size:.9rem;
-    }
+    .badge-ok{background:rgba(80,200,120,.12);color:#6fcf97;}
+    .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.6rem;color:var(--faint);font-size:.9rem;}
     .empty-state .big{font-family:var(--display);font-size:1.8rem;color:var(--border);}
-    .composer-area{
-      display:flex;
-      align-items:center;
-      gap:.65rem;
-      padding:.85rem 1.2rem;
-      border-top:2px solid var(--border);
-      background:var(--surface);
-      flex-shrink:0;
-    }
-    .composer-area input{
-      flex:1;
-      background:var(--bg);
-      border:1px solid var(--border);
-      border-radius:10px;
-      padding:.6rem 1rem;
-      font-size:.9rem;
-      color:var(--text);
-      font-family:var(--font);
-      outline:none;
-    }
+    .sys-msg{text-align:center;font-size:.72rem;color:var(--faint);padding:.25rem 0;}
+    .composer-area{display:flex;align-items:center;gap:.65rem;padding:.85rem 1.2rem;border-top:2px solid var(--border);background:var(--surface);flex-shrink:0;}
+    .composer-area input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:.6rem 1rem;font-size:.9rem;color:var(--text);font-family:var(--font);outline:none;}
     .composer-area input::placeholder{color:var(--faint);}
-    .send-btn{
-      padding:.6rem 1.2rem;
-      background:var(--primary);
-      color:white;
-      border:none;
-      border-radius:10px;
-      cursor:pointer;
-      font-family:var(--font);
-      font-weight:600;
-      font-size:.88rem;
-      white-space:nowrap;
-    }
+    .send-btn{padding:.6rem 1.2rem;background:var(--primary);color:white;border:none;border-radius:10px;cursor:pointer;font-family:var(--font);font-weight:600;font-size:.88rem;white-space:nowrap;}
     .send-btn:hover{background:var(--coral);}
     .send-btn:disabled{opacity:.5;cursor:not-allowed;}
-    .no-chat{
-      flex:1;
-      display:flex;
-      flex-direction:column;
-      align-items:center;
-      justify-content:center;
-      gap:.75rem;
-      color:var(--muted);
-    }
+    .no-chat{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.75rem;color:var(--muted);}
     .no-chat .big{font-family:var(--display);font-size:2.2rem;color:var(--border);}
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
@@ -377,11 +152,13 @@ CHAT_HTML = r"""
         <div class="uid" id="me-uid">no identity</div>
       </div>
     </div>
-    <details class="settings-panel">
+    <details class="settings-panel" id="settings-panel">
       <summary>⚙️ settings &amp; config</summary>
       <div class="settings-body">
         <label>session passphrase</label>
-        <input id="cfg-pass" type="password" placeholder="used for encrypt / decrypt"/>
+        <!-- oninput: re-decrypt open chat whenever passphrase changes -->
+        <input id="cfg-pass" type="password" placeholder="used for encrypt / decrypt"
+               oninput="onPassphraseChange()"/>
         <label>sms gateway username</label>
         <input id="cfg-sms-user"/>
         <label>sms gateway password</label>
@@ -427,9 +204,10 @@ CHAT_HTML = r"""
 <script>
 let currentChatId = null;
 let allChats = [];
+let decryptDebounce = null;
 const $  = id => document.getElementById(id);
 const pass = () => $('cfg-pass').value;
-const isPhone = id => /^\+?[0-9]{7,15}$/.test(id.replace(/\s/g,''));
+const isPhone = id => /^\+?[0-9]{7,15}$/.test((id||"").replace(/\s/g,''));
 
 async function api(url, body) {
   const opts = body
@@ -446,10 +224,18 @@ function toggleTheme() {
   h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
 }
 
+// Re-decrypt open chat whenever passphrase changes (debounced 400ms)
+function onPassphraseChange() {
+  clearTimeout(decryptDebounce);
+  decryptDebounce = setTimeout(() => {
+    if (currentChatId) refreshMessages();
+  }, 400);
+}
+
 async function loadIdentity() {
   const d = await api('/api/identity/status');
-  $('me-uid').textContent   = d.user_id || (d.has_identity ? 'loaded' : 'none');
-  $('me-name').textContent  = d.username || 'you';
+  $('me-uid').textContent    = d.user_id || (d.has_identity ? 'loaded' : 'none');
+  $('me-name').textContent   = d.username || 'you';
   $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
   setStatus(d.has_identity ? '✓ identity ok' : '⚠ no identity — run setup.py');
 }
@@ -493,9 +279,8 @@ function filterChats(q) {
 
 async function openChat(chatId) {
   currentChatId = chatId;
-  $('no-chat').style.display  = 'none';
-  const ac = $('active-chat');
-  ac.style.display = 'flex';
+  $('no-chat').style.display = 'none';
+  $('active-chat').style.display = 'flex';
   $('chat-avatar').textContent = chatId.slice(0,2).toUpperCase();
   $('chat-title').textContent  = chatId;
   $('chat-sub').textContent    = isPhone(chatId) ? '📱 sms channel • encrypted' : '💬 local channel';
@@ -513,65 +298,72 @@ function closeChat() {
 
 async function refreshMessages() {
   if (!currentChatId) return;
-  const d = await api('/api/chats/' + encodeURIComponent(currentChatId));
+  const d    = await api('/api/chats/' + encodeURIComponent(currentChatId));
   const area = $('messages-area');
   const msgs = d.messages || [];
-  const p = pass();
+  const p    = pass();
 
   if (!msgs.length) {
     area.innerHTML = '<div class="empty-state"><div class="big">🔒</div><div>no messages yet</div></div>';
     return;
   }
 
-  const rows = await Promise.all(msgs.map(async (entry, i) => {
-    // entry is either a plain string (old) or {token, sender, ts}
-    const token    = typeof entry === 'object' ? entry.token  : entry;
-    const sender   = typeof entry === 'object' ? entry.sender : null;
-    const ts       = typeof entry === 'object' ? entry.ts     : null;
-    const mine     = sender === 'me' || (sender === null && i % 2 === 0);
-    let text = token, encrypted = true;
-    if (p) {
+  const rows = await Promise.all(msgs.map(async (entry) => {
+    const token  = typeof entry === 'object' ? entry.token  : entry;
+    const sender = typeof entry === 'object' ? entry.sender : null;
+    const ts     = typeof entry === 'object' ? entry.ts     : null;
+    const mine   = sender === 'me';
+    const isSystem = sender === 'system';
+
+    // system messages ("-- chat started --") shown as-is
+    if (isSystem) return {system: true, text: token, ts};
+
+    let text = token, decrypted = false;
+    if (p && token && token !== '-- chat started --') {
       try {
-        const dec = await api('/api/crypto/decrypt', {passphrase:p, token});
-        if (dec.plaintext !== undefined) { text = dec.plaintext; encrypted = false; }
+        const dec = await api('/api/crypto/decrypt', {passphrase: p, token});
+        if (dec.plaintext !== undefined) { text = dec.plaintext; decrypted = true; }
       } catch(_) {}
     }
-    return {text, encrypted, mine, ts};
+    return {text, decrypted, mine, ts, system: false};
   }));
 
-  area.innerHTML = rows.map(m => `
-    <div class="msg-row ${m.mine?'me':''}">
+  area.innerHTML = rows.map(m => {
+    if (m.system) {
+      return `<div class="sys-msg">${escHtml(m.text)}</div>`;
+    }
+    return `<div class="msg-row ${m.mine?'me':''}">
       <div class="bubble">
         ${!m.mine?'<div class="bubble-author">peer</div>':''}
         <div>${escHtml(m.text)}
-          ${m.encrypted?'<span class="badge badge-enc">🔒 enc</span>':''}
+          ${!m.decrypted && p ? '<span class="badge badge-enc">🔒 enc</span>' : ''}
+          ${m.decrypted ? '<span class="badge badge-ok">✓ dec</span>' : ''}
         </div>
         <div class="bubble-time">${m.ts ? fmtTs(m.ts) : ''}</div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   area.scrollTop = area.scrollHeight;
 }
 
 function fmtTs(ts) {
   const d = new Date(ts);
-  return isNaN(d) ? ts : `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  if (isNaN(d)) return ts;
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
 async function sendMessage() {
   const input = $('composer');
   const text = input.value.trim();
   if (!text || !currentChatId) return;
-
   const btn = $('send-btn');
   btn.disabled = true;
   input.value = '';
 
-  const p = pass();
+  const p  = pass();
   const ts = new Date().toISOString();
-  let token = text;
-  let encrypted = false;
+  let token = text, encrypted = false;
 
-  // 1. encrypt if passphrase set
   if (p) {
     try {
       const d = await api('/api/crypto/encrypt', {
@@ -582,24 +374,19 @@ async function sendMessage() {
     } catch(_) {}
   }
 
-  // 2. store locally
   appendLocalMessage(text, true, encrypted, ts);
   await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', {
     token, sender: 'me', ts,
   });
 
-  // 3. send via SMS if chat ID is a phone number
   if (isPhone(currentChatId)) {
     try {
-      const smsBody = encrypted ? text : text; // always send plaintext over SMS
-      const r = await api('/api/sms/send', {to: currentChatId, message: smsBody});
-      if (r.error) {
-        appendSystemMessage('⚠ sms failed: ' + r.error);
-      } else {
-        appendSystemMessage('✓ sms sent — id: ' + (r.id || '?') + ' • state: ' + (r.state || '?'));
-      }
+      const r = await api('/api/sms/send', {to: currentChatId, message: text});
+      appendSysMsg(r.error
+        ? '⚠ sms failed: ' + r.error
+        : '✓ sms sent • id: ' + (r.id||'?') + ' • state: ' + (r.state||'?'));
     } catch(e) {
-      appendSystemMessage('⚠ sms error: ' + e);
+      appendSysMsg('⚠ sms error: ' + e);
     }
   }
 
@@ -610,25 +397,26 @@ async function sendMessage() {
 
 function appendLocalMessage(text, mine, encrypted, ts) {
   const area = $('messages-area');
-  // remove empty-state if present
   const empty = area.querySelector('.empty-state');
   if (empty) empty.remove();
   const row = document.createElement('div');
   row.className = 'msg-row' + (mine ? ' me' : '');
   row.innerHTML = `<div class="bubble">
-    <div>${escHtml(text)}${encrypted?'<span class="badge badge-enc">🔒 enc</span>':''}</div>
+    <div>${escHtml(text)}
+      ${encrypted ? '<span class="badge badge-enc">🔒 enc</span>' : ''}
+    </div>
     <div class="bubble-time">${fmtTs(ts)}</div>
   </div>`;
   area.appendChild(row);
   area.scrollTop = area.scrollHeight;
 }
 
-function appendSystemMessage(msg) {
+function appendSysMsg(msg) {
   const area = $('messages-area');
-  const row = document.createElement('div');
-  row.style.cssText = 'text-align:center;font-size:.72rem;color:var(--faint);padding:.2rem 0;';
-  row.textContent = msg;
-  area.appendChild(row);
+  const div = document.createElement('div');
+  div.className = 'sys-msg';
+  div.textContent = msg;
+  area.appendChild(div);
   area.scrollTop = area.scrollHeight;
 }
 
@@ -647,7 +435,7 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 function escAttr(s) {
-  return String(s).replace(/'/g,"&#39;");
+  return String(s).replace(/'/g,"&#39;").replace(/\"/g,'&quot;');
 }
 
 (async () => {
@@ -721,7 +509,6 @@ def crypto_decrypt():
     except Exception as e:
         return err(str(e), 500, exc=e)
 
-# ─ chats
 @app.route("/api/chats")
 def list_chats():
     return jsonify({"chats": [
@@ -747,7 +534,6 @@ def delete_chat(chat_id):
     chats.delete_chat(chat_id)
     return jsonify({"status": "deleted"})
 
-# ─ sms
 @app.route("/api/sms/config", methods=["POST"])
 def sms_config():
     data = request.get_json(force=True)

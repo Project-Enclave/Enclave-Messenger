@@ -1,4 +1,9 @@
+"""
+main.py — Enclave Messenger CLI
+"""
+
 import argparse
+import json
 import sys
 from core.identity import IdentityManager
 from core.crypto import CryptoManager
@@ -20,9 +25,8 @@ def cmd_init(args):
 
 def cmd_encrypt(args):
     crypto = CryptoManager(args.passphrase)
-    token = crypto.encrypt_message(
-        message_type=args.type,
-        body={"text": args.message},
+    token = crypto.encrypt(
+        plaintext=args.message,
         chat_id=args.chat_id,
         created_at=args.created_at,
         prekey=args.prekey,
@@ -33,9 +37,28 @@ def cmd_encrypt(args):
 
 def cmd_decrypt(args):
     crypto = CryptoManager(args.passphrase)
-    message = crypto.decrypt_message(args.token, prekey=args.prekey)
-    print(message)
-    return 0
+    # Try plain decrypt first (web UI format), then structured message format
+    try:
+        plaintext = crypto.decrypt(args.token, prekey=args.prekey)
+        # If it's valid JSON with message schema, pretty-print it
+        try:
+            parsed = json.loads(plaintext)
+            if isinstance(parsed, dict) and "body" in parsed:
+                print(json.dumps(parsed, indent=2))
+            else:
+                print(plaintext)
+        except json.JSONDecodeError:
+            print(plaintext)
+        return 0
+    except Exception as e1:
+        # Fall back to decrypt_message (structured envelope)
+        try:
+            message = crypto.decrypt_message(args.token, prekey=args.prekey)
+            print(json.dumps(message, indent=2))
+            return 0
+        except Exception as e2:
+            print(f"Decrypt failed.\n  plain: {e1}\n  structured: {e2}", file=sys.stderr)
+            return 1
 
 
 def cmd_sms_send(args):
@@ -70,19 +93,18 @@ def build_parser():
     p_init.set_defaults(func=cmd_init)
 
     # crypto
-    p_enc = sub.add_parser("encrypt", help="Encrypt a message")
+    p_enc = sub.add_parser("encrypt", help="Encrypt a message (plain format)")
     p_enc.add_argument("--passphrase", required=True)
     p_enc.add_argument("--chat-id", required=True)
     p_enc.add_argument("--created-at", required=True)
     p_enc.add_argument("--prekey", default="")
-    p_enc.add_argument("--type", default="text")
     p_enc.add_argument("--message", required=True)
     p_enc.set_defaults(func=cmd_encrypt)
 
-    p_dec = sub.add_parser("decrypt", help="Decrypt a message")
+    p_dec = sub.add_parser("decrypt", help="Decrypt a message token")
     p_dec.add_argument("--passphrase", required=True)
     p_dec.add_argument("--prekey", default="")
-    p_dec.add_argument("token")
+    p_dec.add_argument("token", help="Base64 token from encrypt or web UI")
     p_dec.set_defaults(func=cmd_decrypt)
 
     # sms
@@ -90,14 +112,14 @@ def build_parser():
     sms_sub = p_sms.add_subparsers(dest="sms_cmd", required=True)
 
     p_sms_cfg = sms_sub.add_parser("config", help="Save SMS gateway credentials")
-    p_sms_cfg.add_argument("--username", required=True, help="Gateway username")
-    p_sms_cfg.add_argument("--password", required=True, help="Gateway password")
-    p_sms_cfg.add_argument("--host", default=None, help="Device local IP (omit for cloud mode)")
+    p_sms_cfg.add_argument("--username", required=True)
+    p_sms_cfg.add_argument("--password", required=True)
+    p_sms_cfg.add_argument("--host", default=None)
     p_sms_cfg.set_defaults(func=cmd_sms_config)
 
     p_sms_send = sms_sub.add_parser("send", help="Send an SMS")
-    p_sms_send.add_argument("--to", required=True, help="Phone number (E.164)")
-    p_sms_send.add_argument("--message", required=True, help="Message text")
+    p_sms_send.add_argument("--to", required=True)
+    p_sms_send.add_argument("--message", required=True)
     p_sms_send.set_defaults(func=cmd_sms_send)
 
     return parser
