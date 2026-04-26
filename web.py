@@ -1,18 +1,18 @@
 """
 web.py — Enclave Messenger Flask web entrypoint.
-Serves the local API and chat UI on http://localhost:5000
 Run with: python web.py
+Serves: http://localhost:5000
 """
 
 from flask import Flask, request, jsonify, render_template_string
 from core.crypto.crypto_manager import CryptoManager
 from core.identity.key_manager import IdentityManager
+from core.storage import ConfigStore
+from core.plugins import SMSGateway
 
 app = Flask(__name__)
-
-# ── identity ────────────────────────────────────────────────────────────────
-
 identity = IdentityManager()
+config = ConfigStore()
 
 # ── minimal chat UI ─────────────────────────────────────────────────────────
 
@@ -46,15 +46,15 @@ CHAT_HTML = """
   <div class="section">
     <h2>Encrypt Message</h2>
     <label>Passphrase</label>
-    <input id="enc-pass" type="password" placeholder="passphrase" />
+    <input id="enc-pass" type="password" />
     <label>Plaintext</label>
-    <textarea id="enc-plain" rows="3" placeholder="your message"></textarea>
+    <textarea id="enc-plain" rows="3"></textarea>
     <label>Chat ID</label>
-    <input id="enc-chatid" placeholder="chat_id" />
+    <input id="enc-chatid" />
     <label>Created At</label>
     <input id="enc-createdat" placeholder="2026-01-01T00:00:00Z" />
     <label>Prekey (optional)</label>
-    <input id="enc-prekey" placeholder="prekey" />
+    <input id="enc-prekey" />
     <button onclick="encryptMsg()">Encrypt</button>
     <pre id="enc-out"></pre>
   </div>
@@ -62,22 +62,30 @@ CHAT_HTML = """
   <div class="section">
     <h2>Decrypt Message</h2>
     <label>Passphrase</label>
-    <input id="dec-pass" type="password" placeholder="passphrase" />
+    <input id="dec-pass" type="password" />
     <label>Token</label>
-    <textarea id="dec-token" rows="4" placeholder="paste encrypted token"></textarea>
+    <textarea id="dec-token" rows="4"></textarea>
     <label>Prekey (optional)</label>
-    <input id="dec-prekey" placeholder="prekey" />
+    <input id="dec-prekey" />
     <button onclick="decryptMsg()">Decrypt</button>
     <pre id="dec-out"></pre>
+  </div>
+
+  <div class="section">
+    <h2>Send SMS</h2>
+    <label>Phone Number (E.164)</label>
+    <input id="sms-to" placeholder="+911234567890" />
+    <label>Message</label>
+    <textarea id="sms-msg" rows="2"></textarea>
+    <button onclick="sendSMS()">Send SMS</button>
+    <pre id="sms-out"></pre>
   </div>
 
   <script>
     async function loadStatus() {
       const r = await fetch("/api/identity/status");
-      const d = await r.json();
-      document.getElementById("identity-out").textContent = JSON.stringify(d, null, 2);
+      document.getElementById("identity-out").textContent = JSON.stringify(await r.json(), null, 2);
     }
-
     async function encryptMsg() {
       const body = {
         passphrase: document.getElementById("enc-pass").value,
@@ -86,28 +94,25 @@ CHAT_HTML = """
         created_at: document.getElementById("enc-createdat").value,
         prekey:     document.getElementById("enc-prekey").value,
       };
-      const r = await fetch("/api/crypto/encrypt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const d = await r.json();
-      document.getElementById("enc-out").textContent = JSON.stringify(d, null, 2);
+      const r = await fetch("/api/crypto/encrypt", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+      document.getElementById("enc-out").textContent = JSON.stringify(await r.json(), null, 2);
     }
-
     async function decryptMsg() {
       const body = {
         passphrase: document.getElementById("dec-pass").value,
         token:      document.getElementById("dec-token").value,
         prekey:     document.getElementById("dec-prekey").value,
       };
-      const r = await fetch("/api/crypto/decrypt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const d = await r.json();
-      document.getElementById("dec-out").textContent = JSON.stringify(d, null, 2);
+      const r = await fetch("/api/crypto/decrypt", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+      document.getElementById("dec-out").textContent = JSON.stringify(await r.json(), null, 2);
+    }
+    async function sendSMS() {
+      const body = {
+        to:      document.getElementById("sms-to").value,
+        message: document.getElementById("sms-msg").value,
+      };
+      const r = await fetch("/api/sms/send", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+      document.getElementById("sms-out").textContent = JSON.stringify(await r.json(), null, 2);
     }
   </script>
 </body>
@@ -120,19 +125,14 @@ CHAT_HTML = """
 def index():
     return render_template_string(CHAT_HTML)
 
+@app.route("/api/health")
+def health():
+    return jsonify({"status": "ok"})
 
+# ─ identity
 @app.route("/api/identity/status")
 def identity_status():
-    has = identity.has_identity()
-    user_id = None
-    if has:
-        try:
-            # load without passphrase to at least check files exist
-            user_id = "identity files present (passphrase needed to load)"
-        except Exception:
-            pass
-    return jsonify({"has_identity": has, "user_id": user_id})
-
+    return jsonify({"has_identity": identity.has_identity()})
 
 @app.route("/api/identity/generate", methods=["POST"])
 def identity_generate():
@@ -147,12 +147,11 @@ def identity_generate():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
+# ─ crypto
 @app.route("/api/crypto/encrypt", methods=["POST"])
 def crypto_encrypt():
     data = request.get_json(force=True)
-    required = {"passphrase", "plaintext", "chat_id", "created_at"}
-    missing = required - data.keys()
+    missing = {"passphrase", "plaintext", "chat_id", "created_at"} - data.keys()
     if missing:
         return jsonify({"error": f"missing fields: {missing}"}), 400
     try:
@@ -167,7 +166,6 @@ def crypto_encrypt():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/api/crypto/decrypt", methods=["POST"])
 def crypto_decrypt():
     data = request.get_json(force=True)
@@ -175,21 +173,49 @@ def crypto_decrypt():
         return jsonify({"error": "passphrase and token required"}), 400
     try:
         cm = CryptoManager(data["passphrase"])
-        plaintext = cm.decrypt(
-            token=data["token"],
-            prekey=data.get("prekey", ""),
-        )
+        plaintext = cm.decrypt(token=data["token"], prekey=data.get("prekey", ""))
         return jsonify({"plaintext": plaintext})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ─ sms
+@app.route("/api/sms/send", methods=["POST"])
+def sms_send():
+    data = request.get_json(force=True)
+    if "to" not in data or "message" not in data:
+        return jsonify({"error": "to and message required"}), 400
+    try:
+        sms = SMSGateway.from_config(config)
+        result = sms.send(data["to"], data["message"])
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/api/health")
-def health():
-    return jsonify({"status": "ok"})
+@app.route("/api/sms/status/<message_id>")
+def sms_status(message_id):
+    try:
+        sms = SMSGateway.from_config(config)
+        return jsonify(sms.get_status(message_id))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
+@app.route("/api/sms/config", methods=["POST"])
+def sms_config():
+    data = request.get_json(force=True)
+    required = {"username", "password"}
+    missing = required - data.keys()
+    if missing:
+        return jsonify({"error": f"missing fields: {missing}"}), 400
+    config.set_sms_gateway(
+        provider=data["username"],
+        api_key=data["password"],
+        sender_id=data.get("host", "cloud"),
+    )
+    return jsonify({"status": "saved"})
 
 # ── run ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    port = config.get_setting("port", 5000)
+    debug = config.get_setting("debug", False)
+    app.run(host="127.0.0.1", port=port, debug=debug)
