@@ -7,6 +7,8 @@ Credentials are loaded from ConfigStore (sms_gateway section).
 Usage:
     from core.plugins.sms_gateway import SMSGateway
     sms = SMSGateway(host="192.168.1.5", username="user", password="pass")
+    # or with port included in host string:
+    sms = SMSGateway(host="192.168.1.5:8080", username="user", password="pass")
     result = sms.send("+911234567890", "Hello from Enclave!")
 """
 
@@ -15,6 +17,20 @@ from requests.auth import HTTPBasicAuth
 
 LOCAL_PORT = 8080
 CLOUD_URL = "https://api.sms-gate.app/3rdparty/v1"
+
+
+def _parse_host_port(host: str, default_port: int) -> tuple[str, int]:
+    """
+    Split 'host' or 'host:port' into (host, port).
+    If host already contains a port, use it and ignore default_port.
+    """
+    if ":" in host:
+        h, p = host.rsplit(":", 1)
+        try:
+            return h.strip(), int(p.strip())
+        except ValueError:
+            pass
+    return host.strip(), default_port
 
 
 class SMSGateway:
@@ -28,10 +44,11 @@ class SMSGateway:
     ):
         """
         Args:
-            username: Basic auth username shown in the app.
-            password: Basic auth password shown in the app.
-            host:     Local device IP (e.g. '192.168.1.5'). Required if use_cloud=False.
-            port:     Local server port (default 8080).
+            username:  Basic auth username shown in the app.
+            password:  Basic auth password shown in the app.
+            host:      Local device IP, e.g. '192.168.1.5' or '192.168.1.5:8080'.
+                       If port is already embedded, the port param is ignored.
+            port:      Local server port (default 8080). Ignored if host contains port.
             use_cloud: Use api.sms-gate.app instead of local server.
         """
         self.username = username
@@ -43,7 +60,8 @@ class SMSGateway:
         else:
             if not host:
                 raise ValueError("host is required for local server mode")
-            self.base_url = f"http://{host}:{port}"
+            clean_host, clean_port = _parse_host_port(host, port)
+            self.base_url = f"http://{clean_host}:{clean_port}"
 
         self.auth = HTTPBasicAuth(username, password)
 
@@ -105,7 +123,7 @@ class SMSGateway:
         Build an SMSGateway instance from a ConfigStore object.
 
         Expects config.get_sms_gateway() to return:
-          { provider, api_key (password), sender_id (host or 'cloud') }
+          { provider, api_key (password), sender_id (host:port or 'cloud') }
         """
         gw = config.get_sms_gateway()
         host = gw.get("sender_id")
