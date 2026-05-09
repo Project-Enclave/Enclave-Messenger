@@ -19,10 +19,45 @@ try:
     _SOCK_AVAILABLE = True
 except ImportError:
     _SOCK_AVAILABLE = False
+try:
+    from flask_sock import Sock
+    _SOCK_AVAILABLE = True
+except ImportError:
+    _SOCK_AVAILABLE = False
 
 import main as app_core
 
 app = Flask(__name__)
+
+# ---------------------------------------------------------------------------
+# WebSocket broker
+# ---------------------------------------------------------------------------
+import json as _json
+
+if _SOCK_AVAILABLE:
+    _sock = Sock(app)
+
+_ws_clients: list = []
+_ws_lock = threading.Lock()
+
+
+def _ws_broadcast(event: str, data: dict):
+    frame = _json.dumps({"event": event, **data})
+    dead = []
+    with _ws_lock:
+        clients = list(_ws_clients)
+    for ws in clients:
+        try:
+            ws.send(frame)
+        except Exception:
+            dead.append(ws)
+    if dead:
+        with _ws_lock:
+            for ws in dead:
+                try:
+                    _ws_clients.remove(ws)
+                except ValueError:
+                    pass
 
 # ---------------------------------------------------------------------------
 # WebSocket broker
@@ -307,6 +342,8 @@ CHAT_HTML = r"""
     }
     .modal-skip{font-size:.75rem;color:var(--faint);text-align:center;cursor:pointer;background:none;border:none;font-family:var(--font);transition:color .15s;}
     .modal-skip:hover{color:var(--muted);}
+    .conn-chip{font-size:.72rem;padding:.22rem .65rem;border-radius:9999px;color:var(--faint);transition:background .15s,color .15s;font-family:var(--font);}
+    .conn-chip.active{background:var(--primary);color:#fff;}
     .conn-chip{font-size:.72rem;padding:.22rem .65rem;border-radius:9999px;color:var(--faint);transition:background .15s,color .15s;font-family:var(--font);}
     .conn-chip.active{background:var(--primary);color:#fff;}
     .modal-field-group{display:flex;flex-direction:column;gap:.35rem;}
@@ -595,7 +632,7 @@ CHAT_HTML = r"""
       font-family:var(--font);font-weight:600;transition:background .15s,color .15s,transform .15s;
     }
     .topbar-actions button:hover{background:var(--border);color:var(--text);}
-    .topbar-actions button:first-child:hover{transform:rotate(180deg);}
+    .topbar-actions button:first-child{transition:opacity .15s;}.topbar-actions button:first-child:hover{opacity:.75;}
     .messages-area{flex:1;overflow-y:auto;padding:1.2rem 1.4rem;display:flex;flex-direction:column;gap:.85rem;}
     .msg-row{
       display:flex;gap:.75rem;max-width:72%;align-items:flex-end;
@@ -680,6 +717,14 @@ CHAT_HTML = r"""
       <div id="conn-toggle" onclick="toggleConnMode()"
            style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:9999px;
                   padding:3px;gap:3px;cursor:pointer;user-select:none;">
+        <span id="conn-ws"   class="conn-chip active">⚡ real-time</span>
+        <span id="conn-poll" class="conn-chip">↺ polling</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:.6rem;margin-top:-.2rem;">
+      <span style="font-size:.78rem;color:var(--faint);">connection mode</span>
+      <div id="conn-toggle" onclick="toggleConnMode()"
+           style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:9999px;padding:3px;gap:3px;cursor:pointer;user-select:none;">
         <span id="conn-ws"   class="conn-chip active">⚡ real-time</span>
         <span id="conn-poll" class="conn-chip">↺ polling</span>
       </div>
@@ -1740,6 +1785,43 @@ if _SOCK_AVAILABLE:
         Client sends {"type":"ping"} keepalives every 20 s.
         Server pushes: init (snapshot on connect), new_message, peer_update.
         """
+        with _ws_lock:
+            _ws_clients.append(ws)
+        try:
+            raw_peers = app_core.get_peers()
+            ws.send(_json.dumps({
+                "event":    "init",
+                "peers":    _stamp_online(raw_peers),
+                "chats":    app_core.get_chats(),
+                "identity": app_core.get_identity_status(),
+            }))
+            while True:
+                msg = ws.receive(timeout=30)
+                if msg is None:
+                    break
+                try:
+                    frame = _json.loads(msg)
+                    if frame.get("type") == "ping":
+                        ws.send(_json.dumps({"event": "pong"}))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            with _ws_lock:
+                try:
+                    _ws_clients.remove(ws)
+                except ValueError:
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+if _SOCK_AVAILABLE:
+    @_sock.route("/ws")
+    def ws_handler(ws):
         with _ws_lock:
             _ws_clients.append(ws)
         try:
