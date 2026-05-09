@@ -1227,7 +1227,7 @@ async function refreshMessages() {
     let text = token, decrypted = false;
     if (p && token && token !== '-- chat started --') {
       try {
-        const dec = await api('/api/crypto/decrypt', {passphrase: p, token});
+        const dec = await api('/api/crypto/decrypt', {passphrase: p, token, chat_id: currentChatId});
         if (dec.plaintext !== undefined) { text = dec.plaintext; decrypted = true; }
       } catch(_) {}
     }
@@ -1440,6 +1440,7 @@ def crypto_decrypt():
         pt = app_core.decrypt_message(
             token=data["token"],
             passphrase=data["passphrase"],
+            chat_id=data.get("chat_id"),
         )
         return jsonify({"plaintext": pt})
     except Exception as e:
