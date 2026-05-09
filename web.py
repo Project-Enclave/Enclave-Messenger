@@ -1,18 +1,17 @@
 """
-web.py — Enclave Messenger Flask web entrypoint.
+web.py — Enclave Messenger browser UI.
 Run with: python web.py  →  http://localhost:5000
+
+All business logic lives in main.py.
+This file only handles HTTP ↔ browser.
 """
 
 import traceback
 from flask import Flask, request, jsonify, render_template_string
-from core.crypto.crypto_manager import CryptoManager
-from core.identity.key_manager import IdentityManager
-from core.storage import ConfigStore, ChatStore
+
+import main as app_core
 
 app = Flask(__name__)
-identity = IdentityManager()
-config   = ConfigStore()
-chats    = ChatStore()
 
 
 def err(msg, code=500, exc=None):
@@ -96,6 +95,9 @@ CHAT_HTML = r"""
     .btn-primary:hover{background:var(--coral);}
     .btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);}
     .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;min-height:1.2em;}
+    .node-status{font-size:.72rem;padding:.2rem .5rem;border-radius:4px;display:inline-block;margin-bottom:.4rem;}
+    .node-status.on{background:rgba(80,200,120,.12);color:#6fcf97;}
+    .node-status.off{background:rgba(242,114,128,.12);color:var(--coral);}
 
     .chat-panel{flex:1;display:flex;flex-direction:column;height:100%;min-width:0;}
     .chat-topbar{display:flex;align-items:center;gap:.85rem;padding:.9rem 1.4rem;border-bottom:2px solid var(--border);background:var(--surface);flex-shrink:0;}
@@ -115,6 +117,7 @@ CHAT_HTML = r"""
     .badge{font-size:.65rem;border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;}
     .badge-enc{background:rgba(242,114,128,.15);color:var(--coral);}
     .badge-ok{background:rgba(80,200,120,.12);color:#6fcf97;}
+    .badge-net{background:rgba(100,160,255,.12);color:#7ab4f5;}
     .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.6rem;color:var(--faint);font-size:.9rem;}
     .empty-state .big{font-family:var(--display);font-size:1.8rem;color:var(--border);}
     .sys-msg{text-align:center;font-size:.72rem;color:var(--faint);padding:.25rem 0;}
@@ -135,7 +138,7 @@ CHAT_HTML = r"""
 <aside class="sidebar">
   <div class="brand">
     <div class="logo">project <span>enclave</span></div>
-    <button class="theme-btn" onclick="toggleTheme()">◐</button>
+    <button class="theme-btn" onclick="toggleTheme()">&#9680;</button>
   </div>
   <div class="search-wrap">
     <input id="search" placeholder="Search chats…" oninput="filterChats(this.value)"/>
@@ -152,21 +155,21 @@ CHAT_HTML = r"""
         <div class="uid" id="me-uid">no identity</div>
       </div>
     </div>
+    <div id="node-status" class="node-status off">● node offline</div>
     <details class="settings-panel" id="settings-panel">
-      <summary>⚙️ settings &amp; config</summary>
+      <summary>&#9881;&#65039; settings &amp; config</summary>
       <div class="settings-body">
         <label>session passphrase</label>
-        <!-- oninput: re-decrypt open chat whenever passphrase changes -->
-        <input id="cfg-pass" type="password" placeholder="used for encrypt / decrypt"
+        <input id="cfg-pass" type="password" placeholder="unlock identity + encrypt/decrypt"
                oninput="onPassphraseChange()"/>
+        <button class="btn btn-primary" onclick="startNode()">unlock &amp; start node</button>
         <label>sms gateway username</label>
         <input id="cfg-sms-user"/>
         <label>sms gateway password</label>
         <input id="cfg-sms-pass" type="password"/>
         <label>device host (ip:port or cloud)</label>
         <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
-        <button class="btn btn-primary" onclick="saveConfig()">save sms config</button>
-        <button class="btn btn-ghost" onclick="loadIdentity()">reload identity</button>
+        <button class="btn btn-ghost" onclick="saveConfig()">save sms config</button>
         <div class="status-line" id="cfg-status">—</div>
       </div>
     </details>
@@ -175,7 +178,7 @@ CHAT_HTML = r"""
 
 <section class="chat-panel">
   <div class="no-chat" id="no-chat">
-    <div class="big">🔐</div>
+    <div class="big">&#128272;</div>
     <div>select a chat or create one</div>
     <div style="font-size:.78rem;color:var(--faint);">messages are end-to-end encrypted</div>
   </div>
@@ -187,8 +190,8 @@ CHAT_HTML = r"""
         <div class="sub" id="chat-sub">—</div>
       </div>
       <div class="topbar-actions">
-        <button onclick="refreshMessages()" title="refresh">↻</button>
-        <button onclick="closeChat()" title="close">✕</button>
+        <button onclick="refreshMessages()" title="refresh">&#8635;</button>
+        <button onclick="closeChat()" title="close">&#10005;</button>
       </div>
     </div>
     <div class="messages-area" id="messages-area"></div>
@@ -196,7 +199,7 @@ CHAT_HTML = r"""
       <input id="composer"
              placeholder="write a secure message…"
              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"/>
-      <button class="send-btn" id="send-btn" onclick="sendMessage()">send →</button>
+      <button class="send-btn" id="send-btn" onclick="sendMessage()">send &rarr;</button>
     </div>
   </div>
 </section>
@@ -204,6 +207,7 @@ CHAT_HTML = r"""
 <script>
 let currentChatId = null;
 let allChats = [];
+let knownPeers = {};
 let decryptDebounce = null;
 const $  = id => document.getElementById(id);
 const pass = () => $('cfg-pass').value;
@@ -224,7 +228,6 @@ function toggleTheme() {
   h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
 }
 
-// Re-decrypt open chat whenever passphrase changes (debounced 400ms)
 function onPassphraseChange() {
   clearTimeout(decryptDebounce);
   decryptDebounce = setTimeout(() => {
@@ -234,17 +237,41 @@ function onPassphraseChange() {
 
 async function loadIdentity() {
   const d = await api('/api/identity/status');
-  $('me-uid').textContent    = d.user_id || (d.has_identity ? 'loaded' : 'none');
+  $('me-uid').textContent    = d.user_id ? d.user_id.slice(0,20)+'...' : (d.has_identity ? 'locked' : 'none');
   $('me-name').textContent   = d.username || 'you';
   $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
-  setStatus(d.has_identity ? '✓ identity ok' : '⚠ no identity — run setup.py');
+  const ns = $('node-status');
+  if (d.node_running) {
+    ns.textContent = '\u25cf node online';
+    ns.className = 'node-status on';
+  } else {
+    ns.textContent = '\u25cf node offline';
+    ns.className = 'node-status off';
+  }
+}
+
+async function startNode() {
+  const p = pass();
+  if (!p) { setStatus('\u26a0 enter passphrase first'); return; }
+  setStatus('starting node...');
+  const d = await api('/api/node/start', {passphrase: p});
+  if (d.error) { setStatus('\u26a0 ' + d.error); return; }
+  setStatus('\u2713 node started');
+  await loadIdentity();
+  await loadPeers();
+}
+
+async function loadPeers() {
+  const d = await api('/api/peers');
+  knownPeers = {};
+  (d.peers || []).forEach(p => { knownPeers[p.user_id] = p; });
 }
 
 async function saveConfig() {
   const u = $('cfg-sms-user').value.trim();
   const p = $('cfg-sms-pass').value;
   const h = $('cfg-sms-host').value.trim();
-  if (!u || !p) { setStatus('⚠ username + password required'); return; }
+  if (!u || !p) { setStatus('\u26a0 username + password required'); return; }
   const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
   setStatus('sms config: ' + JSON.stringify(d));
 }
@@ -262,11 +289,13 @@ function renderChatList(list) {
     return;
   }
   el.innerHTML = list.map(c => {
-    const icon = isPhone(c.id) ? '📱' : '💬';
+    const peer = knownPeers[c.id];
+    const icon = isPhone(c.id) ? '\ud83d\udcf1' : (peer ? '\ud83d\udfe2' : '\ud83d\udcac');
+    const label = (peer && peer.username) ? peer.username : c.id;
     return `<div class="chat-item ${c.id===currentChatId?'active':''}" onclick="openChat('${escAttr(c.id)}')">
-      <div class="avatar">${c.id.slice(0,2).toUpperCase()}</div>
+      <div class="avatar">${label.slice(0,2).toUpperCase()}</div>
       <div class="chat-meta">
-        <div class="chat-name">${icon} ${escHtml(c.id)}</div>
+        <div class="chat-name">${icon} ${escHtml(label)}</div>
         <div class="chat-preview">${c.count} msg${c.count!==1?'s':''}</div>
       </div>
     </div>`;
@@ -281,9 +310,15 @@ async function openChat(chatId) {
   currentChatId = chatId;
   $('no-chat').style.display = 'none';
   $('active-chat').style.display = 'flex';
-  $('chat-avatar').textContent = chatId.slice(0,2).toUpperCase();
-  $('chat-title').textContent  = chatId;
-  $('chat-sub').textContent    = isPhone(chatId) ? '📱 sms channel • encrypted' : '💬 local channel';
+  const peer = knownPeers[chatId];
+  const label = (peer && peer.username) ? peer.username : chatId;
+  $('chat-avatar').textContent = label.slice(0,2).toUpperCase();
+  $('chat-title').textContent  = label;
+  const isNet = !!peer;
+  $('chat-sub').textContent = isPhone(chatId)
+    ? '\ud83d\udcf1 sms channel \u2022 encrypted'
+    : isNet ? `\ud83d\udfe2 enclave peer \u2022 ${peer.ip}:${peer.port}`
+    : '\ud83d\udcac local only';
   renderChatList(allChats);
   await refreshMessages();
   $('composer').focus();
@@ -304,18 +339,17 @@ async function refreshMessages() {
   const p    = pass();
 
   if (!msgs.length) {
-    area.innerHTML = '<div class="empty-state"><div class="big">🔒</div><div>no messages yet</div></div>';
+    area.innerHTML = '<div class="empty-state"><div class="big">\ud83d\udd12</div><div>no messages yet</div></div>';
     return;
   }
 
   const rows = await Promise.all(msgs.map(async (entry) => {
-    const token  = typeof entry === 'object' ? entry.token  : entry;
-    const sender = typeof entry === 'object' ? entry.sender : null;
-    const ts     = typeof entry === 'object' ? entry.ts     : null;
-    const mine   = sender === 'me';
+    const token    = typeof entry === 'object' ? entry.token  : entry;
+    const sender   = typeof entry === 'object' ? entry.sender : null;
+    const ts       = typeof entry === 'object' ? entry.ts     : null;
+    const mine     = sender === 'me';
     const isSystem = sender === 'system';
 
-    // system messages ("-- chat started --") shown as-is
     if (isSystem) return {system: true, text: token, ts};
 
     let text = token, decrypted = false;
@@ -329,15 +363,15 @@ async function refreshMessages() {
   }));
 
   area.innerHTML = rows.map(m => {
-    if (m.system) {
-      return `<div class="sys-msg">${escHtml(m.text)}</div>`;
-    }
+    if (m.system) return `<div class="sys-msg">${escHtml(m.text)}</div>`;
+    const peer = knownPeers[currentChatId];
+    const authorLabel = m.mine ? '' : ((peer && peer.username) || 'peer');
     return `<div class="msg-row ${m.mine?'me':''}">
       <div class="bubble">
-        ${!m.mine?'<div class="bubble-author">peer</div>':''}
+        ${!m.mine ? `<div class="bubble-author">${escHtml(authorLabel)}</div>` : ''}
         <div>${escHtml(m.text)}
-          ${!m.decrypted && p ? '<span class="badge badge-enc">🔒 enc</span>' : ''}
-          ${m.decrypted ? '<span class="badge badge-ok">✓ dec</span>' : ''}
+          ${!m.decrypted && p ? '<span class="badge badge-enc">&#128274; enc</span>' : ''}
+          ${m.decrypted ? '<span class="badge badge-ok">&#10003; dec</span>' : ''}
         </div>
         <div class="bubble-time">${m.ts ? fmtTs(m.ts) : ''}</div>
       </div>
@@ -354,27 +388,42 @@ function fmtTs(ts) {
 
 async function sendMessage() {
   const input = $('composer');
-  const text = input.value.trim();
+  const text  = input.value.trim();
   if (!text || !currentChatId) return;
   const btn = $('send-btn');
   btn.disabled = true;
-  input.value = '';
+  input.value  = '';
 
-  const p  = pass();
-  const ts = new Date().toISOString();
+  const p    = pass();
+  const ts   = new Date().toISOString();
+  const peer = knownPeers[currentChatId];
+
+  // Try network delivery first if this is a known Enclave peer
+  if (peer) {
+    const r = await api('/api/message/send', {peer_id: currentChatId, plaintext: text});
+    if (r.ok) {
+      appendLocalMessage(text, true, true, ts, true);
+      await loadChats();
+      btn.disabled = false;
+      $('composer').focus();
+      return;
+    }
+    appendSysMsg('\u26a0 network delivery failed, saving locally only');
+  }
+
+  // Fallback: encrypt locally and store (SMS if phone number)
   let token = text, encrypted = false;
-
   if (p) {
     try {
       const d = await api('/api/crypto/encrypt', {
         passphrase: p, plaintext: text,
-        chat_id: currentChatId, created_at: ts, prekey: '',
+        chat_id: currentChatId, created_at: ts,
       });
       if (d.token) { token = d.token; encrypted = true; }
     } catch(_) {}
   }
 
-  appendLocalMessage(text, true, encrypted, ts);
+  appendLocalMessage(text, true, encrypted, ts, false);
   await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', {
     token, sender: 'me', ts,
   });
@@ -383,10 +432,10 @@ async function sendMessage() {
     try {
       const r = await api('/api/sms/send', {to: currentChatId, message: text});
       appendSysMsg(r.error
-        ? '⚠ sms failed: ' + r.error
-        : '✓ sms sent • id: ' + (r.id||'?') + ' • state: ' + (r.state||'?'));
+        ? '\u26a0 sms failed: ' + r.error
+        : '\u2713 sms sent \u2022 id: ' + (r.id||'?') + ' \u2022 state: ' + (r.state||'?'));
     } catch(e) {
-      appendSysMsg('⚠ sms error: ' + e);
+      appendSysMsg('\u26a0 sms error: ' + e);
     }
   }
 
@@ -395,15 +444,16 @@ async function sendMessage() {
   $('composer').focus();
 }
 
-function appendLocalMessage(text, mine, encrypted, ts) {
-  const area = $('messages-area');
+function appendLocalMessage(text, mine, encrypted, ts, viaNetwork) {
+  const area  = $('messages-area');
   const empty = area.querySelector('.empty-state');
   if (empty) empty.remove();
   const row = document.createElement('div');
   row.className = 'msg-row' + (mine ? ' me' : '');
   row.innerHTML = `<div class="bubble">
     <div>${escHtml(text)}
-      ${encrypted ? '<span class="badge badge-enc">🔒 enc</span>' : ''}
+      ${encrypted && !viaNetwork ? '<span class="badge badge-enc">&#128274; enc</span>' : ''}
+      ${viaNetwork ? '<span class="badge badge-net">&#128640; sent</span>' : ''}
     </div>
     <div class="bubble-time">${fmtTs(ts)}</div>
   </div>`;
@@ -413,15 +463,15 @@ function appendLocalMessage(text, mine, encrypted, ts) {
 
 function appendSysMsg(msg) {
   const area = $('messages-area');
-  const div = document.createElement('div');
-  div.className = 'sys-msg';
+  const div  = document.createElement('div');
+  div.className   = 'sys-msg';
   div.textContent = msg;
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
 }
 
 async function newChat() {
-  const id = prompt('phone number (E.164) or chat name:');
+  const id = prompt('peer user_id, phone number (E.164), or chat name:');
   if (!id || !id.trim()) return;
   const clean = id.trim();
   await api('/api/chats/' + encodeURIComponent(clean) + '/append', {
@@ -441,6 +491,11 @@ function escAttr(s) {
 (async () => {
   await loadIdentity();
   await loadChats();
+  setInterval(async () => {
+    await loadIdentity();
+    await loadPeers();
+    if (currentChatId) await refreshMessages();
+  }, 5000);
 })();
 </script>
 </body>
@@ -448,7 +503,9 @@ function escAttr(s) {
 """
 
 
-# ── routes ────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
@@ -458,13 +515,11 @@ def index():
 def health():
     return jsonify({"status": "ok"})
 
+# -- Identity ----------------------------------------------------------------
+
 @app.route("/api/identity/status")
 def identity_status():
-    return jsonify({
-        "has_identity": identity.has_identity(),
-        "username": getattr(config, 'username', None),
-        "user_id": None,
-    })
+    return jsonify(app_core.get_identity_status())
 
 @app.route("/api/identity/generate", methods=["POST"])
 def identity_generate():
@@ -473,11 +528,33 @@ def identity_generate():
     if not p:
         return err("passphrase required", 400)
     try:
-        uid = identity.generate_new_identity()
-        identity.save_identity(passphrase=p)
-        return jsonify({"user_id": uid})
+        app_core.identity.generate_new_identity()
+        app_core.identity.save_identity(passphrase=p)
+        return jsonify({"user_id": app_core.identity.get_user_id()})
     except Exception as e:
         return err(str(e), 500, exc=e)
+
+# -- Node --------------------------------------------------------------------
+
+@app.route("/api/node/start", methods=["POST"])
+def node_start():
+    data = request.get_json(force=True)
+    p = data.get("passphrase", "")
+    if not p:
+        return err("passphrase required", 400)
+    try:
+        app_core.start_node(passphrase=p)
+        return jsonify({"ok": True, "user_id": app_core.identity.get_user_id()})
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+# -- Peers -------------------------------------------------------------------
+
+@app.route("/api/peers")
+def list_peers():
+    return jsonify({"peers": app_core.get_peers()})
+
+# -- Crypto ------------------------------------------------------------------
 
 @app.route("/api/crypto/encrypt", methods=["POST"])
 def crypto_encrypt():
@@ -486,12 +563,11 @@ def crypto_encrypt():
     if missing:
         return err(f"missing: {missing}", 400)
     try:
-        cm = CryptoManager(data["passphrase"])
-        token = cm.encrypt(
+        token = app_core.encrypt_message(
             plaintext=data["plaintext"],
             chat_id=data["chat_id"],
             created_at=data["created_at"],
-            prekey=data.get("prekey", ""),
+            passphrase=data["passphrase"],
         )
         return jsonify({"token": token})
     except Exception as e:
@@ -503,36 +579,60 @@ def crypto_decrypt():
     if "passphrase" not in data or "token" not in data:
         return err("passphrase and token required", 400)
     try:
-        cm = CryptoManager(data["passphrase"])
-        pt = cm.decrypt(token=data["token"], prekey=data.get("prekey", ""))
+        pt = app_core.decrypt_message(
+            token=data["token"],
+            passphrase=data["passphrase"],
+        )
         return jsonify({"plaintext": pt})
     except Exception as e:
         return err(str(e), 500, exc=e)
 
+# -- Chats -------------------------------------------------------------------
+
 @app.route("/api/chats")
 def list_chats():
-    return jsonify({"chats": [
-        {"id": c, "count": chats.message_count(c)} for c in chats.list_chats()
-    ]})
+    return jsonify({"chats": app_core.get_chats()})
 
 @app.route("/api/chats/<path:chat_id>")
 def get_chat(chat_id):
-    return jsonify({"chat_id": chat_id, "messages": chats.load_messages(chat_id)})
+    return jsonify({"chat_id": chat_id, "messages": app_core.get_messages(chat_id)})
 
 @app.route("/api/chats/<path:chat_id>/append", methods=["POST"])
 def append_to_chat(chat_id):
-    data = request.get_json(force=True)
+    data  = request.get_json(force=True)
     token = data.get("token", "")
     if not token:
         return err("token required", 400)
-    entry = {"token": token, "sender": data.get("sender"), "ts": data.get("ts")}
-    chats.append_message(chat_id, entry)
+    app_core.chats.append_message(chat_id, {
+        "token":  token,
+        "sender": data.get("sender"),
+        "ts":     data.get("ts"),
+    })
     return jsonify({"status": "ok"})
 
 @app.route("/api/chats/<path:chat_id>", methods=["DELETE"])
 def delete_chat(chat_id):
-    chats.delete_chat(chat_id)
+    app_core.chats.delete_chat(chat_id)
     return jsonify({"status": "deleted"})
+
+# -- Network message send ----------------------------------------------------
+
+@app.route("/api/message/send", methods=["POST"])
+def message_send():
+    data = request.get_json(force=True)
+    peer_id  = data.get("peer_id", "")
+    plaintext = data.get("plaintext", "")
+    if not peer_id or not plaintext:
+        return err("peer_id and plaintext required", 400)
+    try:
+        ok = app_core.send_message(peer_id, plaintext)
+        return jsonify({"ok": ok})
+    except RuntimeError as e:
+        return err(str(e), 503)
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+# -- SMS ---------------------------------------------------------------------
 
 @app.route("/api/sms/config", methods=["POST"])
 def sms_config():
@@ -540,38 +640,37 @@ def sms_config():
     missing = {"username", "password"} - data.keys()
     if missing:
         return err(f"missing: {missing}", 400)
-    config.set_sms_gateway(
-        provider=data["username"],
-        api_key=data["password"],
-        sender_id=data.get("host") or "cloud",
+    app_core.configure_sms(
+        username=data["username"],
+        password=data["password"],
+        host=data.get("host"),
     )
     return jsonify({"status": "saved"})
 
 @app.route("/api/sms/send", methods=["POST"])
 def sms_send():
-    from core.plugins import SMSGateway
     data = request.get_json(force=True)
     if "to" not in data or "message" not in data:
         return err("to and message required", 400)
-    gw = config.get_sms_gateway()
-    if not gw.get("api_key"):
-        return err("SMS gateway not configured", 503)
     try:
-        sms = SMSGateway.from_config(config)
-        return jsonify(sms.send(data["to"], data["message"]))
+        return jsonify(app_core.send_sms(data["to"], data["message"]))
     except Exception as e:
         return err(str(e), 500, exc=e)
 
 @app.route("/api/sms/status/<message_id>")
 def sms_status(message_id):
-    from core.plugins import SMSGateway
     try:
-        return jsonify(SMSGateway.from_config(config).get_status(message_id))
+        from core.plugins import SMSGateway
+        return jsonify(SMSGateway.from_config(app_core.config).get_status(message_id))
     except Exception as e:
         return err(str(e), 500, exc=e)
 
 
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    port  = config.get_setting("port", 5000)
-    debug = config.get_setting("debug", False)
+    port  = app_core.config.get_setting("port", 5000)
+    debug = app_core.config.get_setting("debug", False)
     app.run(host="127.0.0.1", port=port, debug=debug)
