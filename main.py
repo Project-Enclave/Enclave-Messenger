@@ -142,7 +142,6 @@ def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: s
     PeerStore, use E2EManager (X25519-AES-256-GCM).  Otherwise fall back
     to the legacy CryptoManager (passphrase + AES-256-GCM).
     """
-    # Try E2E path: identity unlocked + peer pub key available
     if identity.x25519_priv is not None:
         peer_info = peers.get(chat_id)
         peer_pub  = peer_info.get("x25519_pub") if peer_info else None
@@ -162,14 +161,16 @@ def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: s
     )
 
 
-def decrypt_message(token: str, passphrase: str) -> str:
+def decrypt_message(token: str, passphrase: str, chat_id: str | None = None) -> str:
     """
     Decrypt a message token.
 
-    E2E tokens (alg == "X25519-AES-256-GCM") are decrypted with
-    E2EManager using the local X25519 private key — the passphrase is
-    not needed for these.  Legacy passphrase tokens fall back to
-    CryptoManager.
+    E2E tokens are decrypted with E2EManager using the local X25519 private
+    key.  When the local node is the original sender (sender_pub == local_pub),
+    E2EManager needs the recipient’s pub key to re-derive the shared secret;
+    this is looked up from PeerStore via *chat_id*.
+
+    Legacy passphrase tokens fall back to CryptoManager.
     """
     if E2EManager.is_e2e_token(token):
         if identity.x25519_priv is None:
@@ -177,7 +178,15 @@ def decrypt_message(token: str, passphrase: str) -> str:
                 "Identity not unlocked — cannot decrypt E2E token. "
                 "Start the node with your passphrase first."
             )
-        return E2EManager(identity.x25519_priv).decrypt(token)
+        # Look up peer pub key so the sender can re-read their own messages.
+        peer_pub = None
+        if chat_id:
+            peer_info = peers.get(chat_id)
+            peer_pub  = peer_info.get("x25519_pub") if peer_info else None
+        return E2EManager(identity.x25519_priv).decrypt(
+            token,
+            peer_x25519_pub_b64=peer_pub,
+        )
 
     # Legacy path
     return CryptoManager(passphrase).decrypt(token)
