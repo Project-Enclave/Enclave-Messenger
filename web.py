@@ -61,98 +61,45 @@ CHAT_HTML = r"""
     html,body{height:100%;}
     body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;}
 
-    /* ── Splash screen ────────────────────────────────────────── */
+    /* ── Splash ───────────────────────────────────────────────────── */
     #splash {
-      position:fixed;inset:0;
-      background:var(--bg);
-      display:flex;flex-direction:column;
-      align-items:center;justify-content:center;
-      z-index:9999;
-      gap:1.2rem;
+      position:fixed;inset:0;background:var(--bg);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      z-index:9999;gap:1.2rem;
     }
-    #splash.fade-out {
-      animation: splashFadeOut 0.6s cubic-bezier(0.4,0,0.2,1) forwards;
-    }
-    @keyframes splashFadeOut {
-      to { opacity:0; transform:scale(1.03); pointer-events:none; }
-    }
-    .splash-logo {
-      display:flex;
-      align-items:baseline;
-      gap:.55rem;
-      overflow:hidden;
-    }
+    #splash.fade-out { animation: splashFadeOut 0.6s cubic-bezier(0.4,0,0.2,1) forwards; }
+    @keyframes splashFadeOut { to { opacity:0; transform:scale(1.03); pointer-events:none; } }
+    .splash-logo { display:flex;align-items:baseline;gap:.55rem;overflow:hidden; }
     .splash-word-project {
-      font-family:var(--display);
-      font-size:clamp(2rem,6vw,3.5rem);
-      font-weight:700;
-      color:var(--muted);
-      opacity:0;
-      transform:translateX(60px);
+      font-family:var(--display);font-size:clamp(2rem,6vw,3.5rem);font-weight:700;
+      color:var(--muted);opacity:0;transform:translateX(60px);
       animation: slideLeft 0.75s cubic-bezier(0.16,1,0.3,1) 0.2s forwards;
     }
     .splash-word-enclave {
-      font-family:var(--display);
-      font-size:clamp(2rem,6vw,3.5rem);
-      font-weight:700;
-      color:var(--primary);
-      opacity:0;
-      transform:translateX(-60px);
+      font-family:var(--display);font-size:clamp(2rem,6vw,3.5rem);font-weight:700;
+      color:var(--primary);opacity:0;transform:translateX(-60px);
       animation: slideRight 0.75s cubic-bezier(0.16,1,0.3,1) 0.2s forwards;
     }
-    @keyframes slideLeft {
-      to { opacity:1; transform:translateX(0); }
-    }
-    @keyframes slideRight {
-      to { opacity:1; transform:translateX(0); }
-    }
+    @keyframes slideLeft  { to { opacity:1; transform:translateX(0); } }
+    @keyframes slideRight { to { opacity:1; transform:translateX(0); } }
     .splash-sub {
-      font-size:.82rem;
-      color:var(--faint);
-      letter-spacing:.08em;
-      text-transform:uppercase;
-      opacity:0;
-      animation: fadeUp 0.5s ease 1.1s forwards;
+      font-size:.82rem;color:var(--faint);letter-spacing:.08em;text-transform:uppercase;
+      opacity:0;animation: fadeUp 0.5s ease 1.1s forwards;
     }
-    @keyframes fadeUp {
-      from { opacity:0; transform:translateY(8px); }
-      to   { opacity:1; transform:translateY(0); }
-    }
-    .splash-bar {
-      width:120px;height:2px;
-      border-radius:2px;
-      background:var(--border);
-      overflow:hidden;
-      opacity:0;
-      animation: fadeUp 0.4s ease 1.2s forwards;
-    }
-    .splash-bar-fill {
-      height:100%;
-      width:0%;
-      background:linear-gradient(90deg,var(--primary),var(--coral));
-      border-radius:2px;
-      animation: barFill 1s ease 1.3s forwards;
-    }
-    @keyframes barFill {
-      to { width:100%; }
-    }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    .splash-bar { width:120px;height:2px;border-radius:2px;background:var(--border);overflow:hidden;opacity:0;animation: fadeUp 0.4s ease 1.2s forwards; }
+    .splash-bar-fill { height:100%;width:0%;background:linear-gradient(90deg,var(--primary),var(--coral));border-radius:2px;animation: barFill 1s ease 1.3s forwards; }
+    @keyframes barFill { to { width:100%; } }
 
-    /* ── Shared modal base ────────────────────────────────────── */
+    /* ── Modals ─────────────────────────────────────────────────── */
     .modal-backdrop{
-      position:fixed;inset:0;
-      background:rgba(0,0,0,.55);
-      backdrop-filter:blur(6px);
-      display:flex;align-items:center;justify-content:center;
-      z-index:1000;
-      transition:opacity .2s;
+      position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+      display:flex;align-items:center;justify-content:center;z-index:1000;transition:opacity .2s;
     }
     .modal-backdrop.hidden{opacity:0;pointer-events:none;}
     .modal-card{
-      background:var(--surface);
-      border:1px solid var(--border);
-      border-radius:16px;
-      padding:2rem 2rem 1.75rem;
-      width:min(440px,90vw);
+      background:var(--surface);border:1px solid var(--border);border-radius:16px;
+      padding:2rem 2rem 1.75rem;width:min(440px,90vw);
       box-shadow:0 24px 64px rgba(0,0,0,.35);
       display:flex;flex-direction:column;gap:1.1rem;
       animation: modalPop 0.4s cubic-bezier(0.16,1,0.3,1) both;
@@ -161,144 +108,86 @@ CHAT_HTML = r"""
       from { opacity:0; transform:scale(0.93) translateY(12px); }
       to   { opacity:1; transform:scale(1) translateY(0); }
     }
-    .modal-title{
-      font-family:var(--display);
-      font-size:1.35rem;
-      font-weight:700;
-      color:var(--text);
-      text-align:center;
-      letter-spacing:-.01em;
-    }
-    .modal-sub{
-      font-size:.82rem;
-      color:var(--muted);
-      text-align:center;
-      line-height:1.5;
-      margin-top:-.4rem;
-    }
+    .modal-title{font-family:var(--display);font-size:1.35rem;font-weight:700;color:var(--text);text-align:center;letter-spacing:-.01em;}
+    .modal-sub{font-size:.82rem;color:var(--muted);text-align:center;line-height:1.5;margin-top:-.4rem;}
     .modal-input-wrap{position:relative;}
     .modal-input-wrap input{
-      width:100%;
-      background:var(--bg);
-      border:1.5px solid var(--border);
-      border-radius:10px;
-      padding:.65rem 2.6rem .65rem 1rem;
-      font-size:.95rem;
-      color:var(--text);
-      font-family:var(--font);
-      outline:none;
-      transition:border-color .15s, box-shadow .15s;
+      width:100%;background:var(--bg);border:1.5px solid var(--border);border-radius:10px;
+      padding:.65rem 2.6rem .65rem 1rem;font-size:.95rem;color:var(--text);font-family:var(--font);
+      outline:none;transition:border-color .15s, box-shadow .15s;
     }
     .modal-input-wrap input.plain{padding-right:1rem;}
-    .modal-input-wrap input:focus{
-      border-color:var(--primary);
-      box-shadow:0 0 0 3px rgba(242,114,128,.15);
-    }
+    .modal-input-wrap input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.15);}
     .modal-input-wrap input.input-ok  {border-color:#6fcf97 !important;}
     .modal-input-wrap input.input-err {border-color:var(--coral) !important;}
     .modal-eye{
       position:absolute;right:.75rem;top:50%;transform:translateY(-50%);
-      background:none;border:none;cursor:pointer;
-      color:var(--faint);font-size:.75rem;padding:0;line-height:1;
-      font-family:var(--font);font-weight:600;letter-spacing:.02em;
+      background:none;border:none;cursor:pointer;color:var(--faint);font-size:.75rem;
+      padding:0;line-height:1;font-family:var(--font);font-weight:600;letter-spacing:.02em;
       transition:color .15s;
     }
     .modal-eye:hover{color:var(--muted);}
     .modal-unlock-btn{
-      width:100%;padding:.7rem;
-      background:var(--primary);color:#fff9f7;
-      border:none;border-radius:10px;
-      font-family:var(--font);font-size:.95rem;font-weight:700;
-      cursor:pointer;
-      transition:background .15s,transform .1s,box-shadow .15s;
+      width:100%;padding:.7rem;background:var(--primary);color:#fff9f7;
+      border:none;border-radius:10px;font-family:var(--font);font-size:.95rem;font-weight:700;
+      cursor:pointer;transition:background .15s,transform .1s,box-shadow .15s;
     }
     .modal-unlock-btn:hover{background:var(--coral);box-shadow:0 4px 16px rgba(242,114,128,.35);}
     .modal-unlock-btn:active{transform:scale(.97);}
     .modal-unlock-btn:disabled{opacity:.5;cursor:not-allowed;}
-    .modal-error{
-      font-size:.78rem;color:var(--coral);
-      text-align:center;min-height:1.1em;
-      animation: errShake 0.35s ease both;
-    }
+    .modal-error{font-size:.78rem;color:var(--coral);text-align:center;min-height:1.1em;animation: errShake 0.35s ease both;}
     @keyframes errShake {
-      0%,100%{transform:translateX(0)}
-      25%{transform:translateX(-5px)}
-      75%{transform:translateX(5px)}
+      0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)}
     }
-    .modal-skip{
-      font-size:.75rem;color:var(--faint);
-      text-align:center;cursor:pointer;
-      background:none;border:none;font-family:var(--font);
-      transition:color .15s;
-    }
+    .modal-skip{font-size:.75rem;color:var(--faint);text-align:center;cursor:pointer;background:none;border:none;font-family:var(--font);transition:color .15s;}
     .modal-skip:hover{color:var(--muted);}
-
-    /* ── New-chat modal extras ────────────────────────────────── */
     .modal-field-group{display:flex;flex-direction:column;gap:.35rem;}
     .modal-field-label{font-size:.75rem;color:var(--faint);padding-left:.1rem;}
-    .field-hint{
-      font-size:.7rem;color:var(--faint);
-      min-height:1em;padding-left:.1rem;
-      transition:color .15s;
-    }
+    .field-hint{font-size:.7rem;color:var(--faint);min-height:1em;padding-left:.1rem;transition:color .15s;}
     .field-hint.ok  {color:#6fcf97;}
     .field-hint.err {color:var(--coral);}
     .modal-divider{display:flex;align-items:center;gap:.75rem;color:var(--faint);font-size:.75rem;}
     .modal-divider::before,.modal-divider::after{content:'';flex:1;height:1px;background:var(--border);}
 
-    /* ── Sidebar ──────────────────────────────────────────────── */
+    /* ── Sidebar ────────────────────────────────────────────────── */
     .sidebar{
       width:300px;min-width:260px;display:flex;flex-direction:column;
       background:var(--surface);border-right:2px solid var(--border);height:100%;
       animation: sidebarSlide 0.5s cubic-bezier(0.16,1,0.3,1) both;
     }
     @keyframes sidebarSlide {
-      from { opacity:0; transform:translateX(-24px); }
-      to   { opacity:1; transform:translateX(0); }
+      from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:translateX(0); }
     }
     .brand{
-      padding:1.1rem 1.2rem .9rem;
-      border-bottom:1px solid var(--border);
-      display:flex;align-items:center;justify-content:center;
-      position:relative;
+      padding:1.1rem 1.2rem .9rem;border-bottom:1px solid var(--border);
+      display:flex;align-items:center;justify-content:center;position:relative;
     }
-    .logo{
-      font-family:var(--display);font-size:1.25rem;font-weight:700;
-      color:var(--primary);letter-spacing:-.01em;
-      text-align:center;
-    }
+    .logo{font-family:var(--display);font-size:1.25rem;font-weight:700;color:var(--primary);letter-spacing:-.01em;text-align:center;}
     .logo span{color:var(--coral);}
     .theme-btn{
-      position:absolute;right:1rem;
-      background:none;border:1px solid var(--border);border-radius:6px;
+      position:absolute;right:1rem;background:none;border:1px solid var(--border);border-radius:6px;
       padding:.3rem .55rem;cursor:pointer;color:var(--muted);font-size:.7rem;
-      font-family:var(--font);font-weight:600;
-      transition:background .15s, color .15s, transform .15s;
+      font-family:var(--font);font-weight:600;transition:background .15s, color .15s, transform .15s;
     }
     .theme-btn:hover{background:var(--border);color:var(--text);transform:rotate(18deg);}
     .search-wrap{padding:.75rem 1rem;}
     .search-wrap input{
-      width:100%;background:var(--bg);border:1px solid var(--border);
-      border-radius:8px;padding:.5rem .85rem;font-size:.875rem;color:var(--text);
-      font-family:var(--font);outline:none;
-      transition:border-color .15s, box-shadow .15s;
+      width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+      padding:.5rem .85rem;font-size:.875rem;color:var(--text);font-family:var(--font);
+      outline:none;transition:border-color .15s, box-shadow .15s;
     }
     .search-wrap input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.1);}
     .search-wrap input::placeholder{color:var(--faint);}
     .chat-list{flex:1;overflow-y:auto;padding:.25rem .5rem;}
     .chat-item{
-      display:flex;align-items:center;gap:.75rem;padding:.7rem .8rem;
-      border-radius:10px;cursor:pointer;
+      display:flex;align-items:center;gap:.75rem;padding:.7rem .8rem;border-radius:10px;cursor:pointer;
       transition:background .12s, transform .12s;
       animation: chatItemIn 0.3s cubic-bezier(0.16,1,0.3,1) both;
     }
     .chat-item:hover{background:var(--border);transform:translateX(3px);}
     .chat-item:active{transform:translateX(3px) scale(.98);}
     .chat-item.active{background:rgba(242,114,128,.13);border-left:3px solid var(--coral);}
-    @keyframes chatItemIn {
-      from { opacity:0; transform:translateX(-10px); }
-      to   { opacity:1; transform:translateX(0); }
-    }
+    @keyframes chatItemIn { from { opacity:0; transform:translateX(-10px); } to { opacity:1; transform:translateX(0); } }
     .avatar{
       width:42px;height:42px;border-radius:10px;
       background:linear-gradient(135deg,var(--primary),var(--purple));
@@ -310,25 +199,130 @@ CHAT_HTML = r"""
     .chat-name{font-weight:600;font-size:.9rem;}
     .chat-preview{color:var(--faint);font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
     .new-chat-btn{
-      margin:.75rem;padding:.6rem;border:1px dashed var(--border);
-      border-radius:10px;background:none;cursor:pointer;color:var(--muted);
-      font-family:var(--font);font-size:.85rem;
+      margin:.75rem;padding:.6rem;border:1px dashed var(--border);border-radius:10px;
+      background:none;cursor:pointer;color:var(--muted);font-family:var(--font);font-size:.85rem;
       transition:background .12s, color .12s, transform .12s;
     }
     .new-chat-btn:hover{background:var(--border);color:var(--text);transform:scale(1.02);}
+
+    /* ── Sidebar footer ─────────────────────────────────────────── */
     .sidebar-footer{border-top:2px solid var(--border);padding:.85rem 1rem;}
     .profile-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.65rem;}
     .profile-row .avatar{width:36px;height:36px;font-size:.8rem;}
     .profile-info .name{font-weight:600;font-size:.88rem;}
     .profile-info .uid{font-size:.72rem;color:var(--faint);word-break:break-all;}
-    details summary{cursor:pointer;color:var(--muted);font-size:.82rem;list-style:none;display:flex;align-items:center;gap:.4rem;padding:.35rem 0;transition:color .15s;}
-    details summary:hover{color:var(--text);}
-    details summary::-webkit-details-marker{display:none;}
-    .settings-body{padding:.6rem 0 0;display:flex;flex-direction:column;gap:.5rem;}
+    .node-status{font-size:.72rem;padding:.2rem .5rem;border-radius:4px;display:inline-block;margin-bottom:.4rem;}
+    .node-status.on{background:rgba(80,200,120,.12);color:#6fcf97;}
+    .node-status.off{background:rgba(242,114,128,.12);color:var(--coral);}
+
+    /* ── Animated accordion (settings + peers) ───────────────────── */
+    .accordion { margin-bottom:.2rem; }
+    .accordion-trigger {
+      width:100%;background:none;border:none;cursor:pointer;
+      color:var(--muted);font-size:.82rem;font-family:var(--font);
+      display:flex;align-items:center;justify-content:space-between;
+      padding:.35rem 0;transition:color .15s;
+      user-select:none;
+    }
+    .accordion-trigger:hover { color:var(--text); }
+    .accordion-arrow {
+      display:inline-block;
+      font-size:.65rem;
+      transition:transform 0.3s cubic-bezier(0.16,1,0.3,1);
+      color:var(--faint);
+    }
+    .accordion-trigger[aria-expanded="true"] .accordion-arrow {
+      transform: rotate(180deg);
+    }
+    .accordion-body {
+      overflow:hidden;
+      max-height:0;
+      opacity:0;
+      transform:translateY(-6px);
+      transition:
+        max-height 0.38s cubic-bezier(0.16,1,0.3,1),
+        opacity    0.28s cubic-bezier(0.16,1,0.3,1),
+        transform  0.28s cubic-bezier(0.16,1,0.3,1);
+    }
+    .accordion-body.open {
+      opacity:1;
+      transform:translateY(0);
+      /* max-height set by JS */
+    }
+
+    /* ── Settings body ────────────────────────────────────────── */
+    .settings-body{padding:.6rem 0 .4rem;display:flex;flex-direction:column;gap:.5rem;}
     .settings-body label{font-size:.75rem;color:var(--faint);margin-bottom:-2px;}
-    .settings-body input{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:.4rem .7rem;font-size:.82rem;color:var(--text);font-family:var(--font);outline:none;width:100%;transition:border-color .15s;}
+    .settings-body input{
+      background:var(--bg);border:1px solid var(--border);border-radius:7px;
+      padding:.4rem .7rem;font-size:.82rem;color:var(--text);font-family:var(--font);
+      outline:none;width:100%;transition:border-color .15s;
+    }
     .settings-body input:focus{border-color:var(--primary);}
     .settings-body input[type=password]{letter-spacing:.1em;}
+    /* staggered row reveal */
+    .settings-row {
+      opacity:0;
+      transform:translateY(6px);
+      transition: opacity 0.22s ease, transform 0.22s ease;
+    }
+    .accordion-body.open .settings-row { opacity:1; transform:translateY(0); }
+    .accordion-body.open .settings-row:nth-child(1){transition-delay:.04s}
+    .accordion-body.open .settings-row:nth-child(2){transition-delay:.08s}
+    .accordion-body.open .settings-row:nth-child(3){transition-delay:.12s}
+    .accordion-body.open .settings-row:nth-child(4){transition-delay:.16s}
+    .accordion-body.open .settings-row:nth-child(5){transition-delay:.20s}
+    .accordion-body.open .settings-row:nth-child(6){transition-delay:.24s}
+    .accordion-body.open .settings-row:nth-child(7){transition-delay:.28s}
+    .accordion-body.open .settings-row:nth-child(8){transition-delay:.32s}
+
+    /* ── Peers panel ───────────────────────────────────────────── */
+    .peers-body{padding:.5rem 0 .2rem;display:flex;flex-direction:column;gap:.4rem;}
+    .peer-row{
+      display:flex;align-items:center;gap:.6rem;padding:.35rem .5rem;
+      border-radius:8px;cursor:pointer;
+      transition:background .12s, transform .1s;
+      opacity:0;transform:translateX(-8px);
+    }
+    .accordion-body.open .peer-row{opacity:1;transform:translateX(0);}
+    .accordion-body.open .peer-row:nth-child(1){transition-delay:.05s}
+    .accordion-body.open .peer-row:nth-child(2){transition-delay:.10s}
+    .accordion-body.open .peer-row:nth-child(3){transition-delay:.15s}
+    .accordion-body.open .peer-row:nth-child(4){transition-delay:.20s}
+    .accordion-body.open .peer-row:nth-child(5){transition-delay:.25s}
+    .peer-row:hover{background:var(--border);transform:translateX(3px);}
+    .peer-avatar{
+      width:26px;height:26px;border-radius:6px;flex-shrink:0;
+      background:linear-gradient(135deg,var(--primary),var(--purple));
+      color:white;display:grid;place-items:center;font-size:.65rem;font-weight:700;
+    }
+    .peer-info{flex:1;min-width:0;}
+    .peer-name{font-size:.78rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .peer-addr{font-size:.66rem;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .peer-badge{
+      font-size:.6rem;font-weight:700;letter-spacing:.03em;padding:.15rem .4rem;
+      border-radius:4px;flex-shrink:0;
+    }
+    .peer-badge.online {background:rgba(80,200,120,.15);color:#6fcf97;}
+    .peer-badge.offline{background:rgba(242,114,128,.1);color:var(--coral);}
+    .peers-empty{font-size:.75rem;color:var(--faint);padding:.3rem .5rem;}
+    .scan-btn{
+      margin-top:.3rem;padding:.38rem .7rem;
+      background:none;border:1px solid var(--border);border-radius:7px;
+      color:var(--muted);font-size:.75rem;font-family:var(--font);font-weight:600;
+      cursor:pointer;transition:background .15s,color .15s,transform .15s;
+      display:flex;align-items:center;gap:.4rem;
+    }
+    .scan-btn:hover{background:var(--border);color:var(--text);transform:scale(1.02);}
+    .scan-btn.scanning { animation: scanPulse 0.9s ease-in-out infinite alternate; }
+    @keyframes scanPulse { from{opacity:.6} to{opacity:1} }
+    .scan-dot{
+      width:6px;height:6px;border-radius:50%;background:var(--primary);
+      transition:background .2s;
+    }
+    .scan-btn.scanning .scan-dot { background:var(--coral); }
+
+    /* ── Misc ───────────────────────────────────────────────────── */
     .btn{padding:.45rem .9rem;border-radius:7px;font-size:.82rem;font-weight:600;cursor:pointer;font-family:var(--font);border:none;transition:background .15s,transform .1s;}
     .btn:active{transform:scale(.97);}
     .btn-primary{background:var(--primary);color:#fff9f7;}
@@ -336,21 +330,15 @@ CHAT_HTML = r"""
     .btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);}
     .btn-ghost:hover{background:var(--border);color:var(--text);}
     .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;min-height:1.2em;}
-    .node-status{font-size:.72rem;padding:.2rem .5rem;border-radius:4px;display:inline-block;margin-bottom:.4rem;}
-    .node-status.on{background:rgba(80,200,120,.12);color:#6fcf97;}
-    .node-status.off{background:rgba(242,114,128,.12);color:var(--coral);}
 
-    /* ── Chat panel ───────────────────────────────────────────── */
+    /* ── Chat panel ─────────────────────────────────────────────── */
     .chat-panel{flex:1;display:flex;flex-direction:column;height:100%;min-width:0;}
     .chat-topbar{
       display:flex;align-items:center;gap:.85rem;padding:.9rem 1.4rem;
       border-bottom:2px solid var(--border);background:var(--surface);flex-shrink:0;
       animation: topbarIn 0.4s cubic-bezier(0.16,1,0.3,1) both;
     }
-    @keyframes topbarIn {
-      from { opacity:0; transform:translateY(-8px); }
-      to   { opacity:1; transform:translateY(0); }
-    }
+    @keyframes topbarIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
     .chat-topbar .avatar{width:36px;height:36px;font-size:.8rem;}
     .topbar-info .title{font-weight:700;font-size:1rem;}
     .topbar-info .sub{font-size:.75rem;color:var(--faint);}
@@ -358,8 +346,7 @@ CHAT_HTML = r"""
     .topbar-actions button{
       background:none;border:1px solid var(--border);border-radius:7px;
       padding:.35rem .65rem;cursor:pointer;color:var(--muted);font-size:.75rem;
-      font-family:var(--font);font-weight:600;
-      transition:background .15s,color .15s,transform .15s;
+      font-family:var(--font);font-weight:600;transition:background .15s,color .15s,transform .15s;
     }
     .topbar-actions button:hover{background:var(--border);color:var(--text);}
     .topbar-actions button:first-child:hover{transform:rotate(180deg);}
@@ -370,8 +357,7 @@ CHAT_HTML = r"""
     }
     .msg-row.me{margin-left:auto;flex-direction:row-reverse;}
     @keyframes bubbleIn {
-      from { opacity:0; transform:scale(0.85) translateY(8px); }
-      to   { opacity:1; transform:scale(1) translateY(0); }
+      from { opacity:0; transform:scale(0.85) translateY(8px); } to { opacity:1; transform:scale(1) translateY(0); }
     }
     .bubble{
       padding:.7rem 1rem;border-radius:16px 16px 16px 5px;
@@ -396,20 +382,15 @@ CHAT_HTML = r"""
       border-top:2px solid var(--border);background:var(--surface);flex-shrink:0;
     }
     .composer-area input{
-      flex:1;background:var(--bg);border:1px solid var(--border);
-      border-radius:10px;padding:.6rem 1rem;font-size:.9rem;color:var(--text);
-      font-family:var(--font);outline:none;
-      transition:border-color .15s, box-shadow .2s;
+      flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;
+      padding:.6rem 1rem;font-size:.9rem;color:var(--text);font-family:var(--font);
+      outline:none;transition:border-color .15s, box-shadow .2s;
     }
-    .composer-area input:focus{
-      border-color:var(--primary);
-      box-shadow:0 0 0 3px rgba(242,114,128,.15);
-    }
+    .composer-area input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.15);}
     .composer-area input::placeholder{color:var(--faint);}
     .send-btn{
-      padding:.6rem 1.2rem;background:var(--primary);color:white;
-      border:none;border-radius:10px;cursor:pointer;
-      font-family:var(--font);font-weight:600;font-size:.88rem;white-space:nowrap;
+      padding:.6rem 1.2rem;background:var(--primary);color:white;border:none;border-radius:10px;
+      cursor:pointer;font-family:var(--font);font-weight:600;font-size:.88rem;white-space:nowrap;
       transition:background .15s,transform .1s,box-shadow .15s;
     }
     .send-btn:hover{background:var(--coral);box-shadow:0 4px 16px rgba(242,114,128,.4);}
@@ -419,18 +400,14 @@ CHAT_HTML = r"""
     .no-chat .big{font-family:var(--display);font-size:2rem;color:var(--border);}
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
-
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation-duration: 0.01ms !important;
-        transition-duration: 0.01ms !important;
-      }
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
   </style>
 </head>
 <body>
 
-<!-- ── Splash screen ────────────────────────────────────────────────────── -->
+<!-- splash -->
 <div id="splash">
   <div class="splash-logo">
     <span class="splash-word-project">project</span>
@@ -440,7 +417,7 @@ CHAT_HTML = r"""
   <div class="splash-bar"><div class="splash-bar-fill"></div></div>
 </div>
 
-<!-- ── Unlock modal ─────────────────────────────────────────────────────── -->
+<!-- unlock modal -->
 <div class="modal-backdrop hidden" id="unlock-backdrop">
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-title" id="modal-title">unlock enclave</div>
@@ -457,12 +434,11 @@ CHAT_HTML = r"""
   </div>
 </div>
 
-<!-- ── New chat modal ───────────────────────────────────────────────────── -->
+<!-- new chat modal -->
 <div class="modal-backdrop hidden" id="newchat-backdrop">
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="newchat-title">
     <div class="modal-title" id="newchat-title">new chat</div>
     <div class="modal-sub">start a conversation with an enclave peer, phone number, or direct IP</div>
-
     <div class="modal-field-group">
       <div class="modal-field-label">peer user_id <span style="color:var(--faint);font-weight:400;">(enclave network)</span></div>
       <div class="modal-input-wrap">
@@ -473,9 +449,7 @@ CHAT_HTML = r"""
       </div>
       <div class="field-hint" id="hint-userid"></div>
     </div>
-
     <div class="modal-divider">or</div>
-
     <div class="modal-field-group">
       <div class="modal-field-label">phone number <span style="color:var(--faint);font-weight:400;">(E.164 for SMS)</span></div>
       <div class="modal-input-wrap">
@@ -486,9 +460,7 @@ CHAT_HTML = r"""
       </div>
       <div class="field-hint" id="hint-phone"></div>
     </div>
-
     <div class="modal-divider">or</div>
-
     <div class="modal-field-group">
       <div class="modal-field-label">IP address &amp; port <span style="color:var(--faint);font-weight:400;">(direct peer)</span></div>
       <div class="modal-input-wrap">
@@ -499,14 +471,13 @@ CHAT_HTML = r"""
       </div>
       <div class="field-hint" id="hint-ip"></div>
     </div>
-
     <div class="modal-error" id="newchat-error"></div>
     <button class="modal-unlock-btn" onclick="submitNewChat()">open chat &rarr;</button>
     <button class="modal-skip" onclick="dismissNewChat()">cancel</button>
   </div>
 </div>
 
-<!-- ── Main layout ──────────────────────────────────────────────────────── -->
+<!-- main layout -->
 <aside class="sidebar">
   <div class="brand">
     <div class="logo">project <span>enclave</span></div>
@@ -528,23 +499,61 @@ CHAT_HTML = r"""
       </div>
     </div>
     <div id="node-status" class="node-status off">node offline</div>
-    <details class="settings-panel" id="settings-panel">
-      <summary>settings &amp; config</summary>
-      <div class="settings-body">
-        <label>session passphrase</label>
-        <input id="cfg-pass" type="password" placeholder="unlock identity + encrypt/decrypt"
-               oninput="onPassphraseChange()"/>
-        <button class="btn btn-primary" onclick="startNode()">unlock &amp; start node</button>
-        <label>sms gateway username</label>
-        <input id="cfg-sms-user"/>
-        <label>sms gateway password</label>
-        <input id="cfg-sms-pass" type="password"/>
-        <label>device host (ip:port or cloud)</label>
-        <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
-        <button class="btn btn-ghost" onclick="saveConfig()">save sms config</button>
-        <div class="status-line" id="cfg-status">&mdash;</div>
+
+    <!-- peers accordion -->
+    <div class="accordion" id="peers-accordion">
+      <button class="accordion-trigger" onclick="toggleAccordion('peers')" aria-expanded="false" id="peers-trigger">
+        <span>peers <span id="peers-count" style="color:var(--faint);font-size:.7rem;"></span></span>
+        <span class="accordion-arrow">&#9660;</span>
+      </button>
+      <div class="accordion-body" id="peers-body">
+        <div class="peers-body" id="peers-list">
+          <div class="peers-empty">no peers detected yet</div>
+        </div>
+        <button class="scan-btn" id="scan-btn" onclick="scanPeers()">
+          <span class="scan-dot"></span> scan network
+        </button>
       </div>
-    </details>
+    </div>
+
+    <!-- settings accordion -->
+    <div class="accordion" id="settings-accordion">
+      <button class="accordion-trigger" onclick="toggleAccordion('settings')" aria-expanded="false" id="settings-trigger">
+        <span>settings &amp; config</span>
+        <span class="accordion-arrow">&#9660;</span>
+      </button>
+      <div class="accordion-body" id="settings-body">
+        <div class="settings-body">
+          <div class="settings-row">
+            <label>session passphrase</label>
+            <input id="cfg-pass" type="password" placeholder="unlock identity + encrypt/decrypt"
+                   oninput="onPassphraseChange()"/>
+          </div>
+          <div class="settings-row">
+            <button class="btn btn-primary" onclick="startNode()">unlock &amp; start node</button>
+          </div>
+          <div class="settings-row">
+            <label>sms gateway username</label>
+            <input id="cfg-sms-user"/>
+          </div>
+          <div class="settings-row">
+            <label>sms gateway password</label>
+            <input id="cfg-sms-pass" type="password"/>
+          </div>
+          <div class="settings-row">
+            <label>device host (ip:port or cloud)</label>
+            <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
+          </div>
+          <div class="settings-row">
+            <button class="btn btn-ghost" onclick="saveConfig()">save sms config</button>
+          </div>
+          <div class="settings-row">
+            <div class="status-line" id="cfg-status">&mdash;</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </aside>
 
@@ -600,7 +609,34 @@ function toggleTheme() {
   h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
 }
 
-// ── Splash ──────────────────────────────────────────────────────────────────
+// ── Accordion ───────────────────────────────────────────────────────────
+
+function toggleAccordion(name) {
+  const trigger = $(name + '-trigger');
+  const body    = $(name + '-body');
+  const isOpen  = trigger.getAttribute('aria-expanded') === 'true';
+  if (isOpen) {
+    trigger.setAttribute('aria-expanded', 'false');
+    body.style.maxHeight = body.scrollHeight + 'px'; // pin before collapsing
+    requestAnimationFrame(() => {
+      body.style.maxHeight = '0';
+      body.classList.remove('open');
+    });
+  } else {
+    trigger.setAttribute('aria-expanded', 'true');
+    body.classList.add('open');
+    body.style.maxHeight = body.scrollHeight + 'px';
+    // after transition, remove fixed maxHeight so dynamic content can resize
+    body.addEventListener('transitionend', function onEnd(e) {
+      if (e.propertyName === 'max-height') {
+        body.style.maxHeight = 'none';
+        body.removeEventListener('transitionend', onEnd);
+      }
+    });
+  }
+}
+
+// ── Splash ────────────────────────────────────────────────────────────────
 
 function showSplash() {
   const splash = $('splash');
@@ -620,7 +656,7 @@ function showUnlockModal() {
   setTimeout(() => $('modal-pass').focus(), 80);
 }
 
-// ── Unlock modal ────────────────────────────────────────────────────────────
+// ── Unlock modal ───────────────────────────────────────────────────────────
 
 function toggleModalEye() {
   const inp = $('modal-pass');
@@ -685,27 +721,21 @@ function validateField(field) {
   const phone = $('nc-phone').value.trim();
   const ip    = $('nc-ip').value.trim();
   $('newchat-error').textContent = '';
-
   if (field === 'userid') {
-    const inp  = $('nc-userid');
-    const hint = $('hint-userid');
+    const inp  = $('nc-userid'), hint = $('hint-userid');
     if (!uid) { setFieldState(field, inp, hint, 'idle'); return; }
     if (RE_USERID.test(uid)) setFieldState(field, inp, hint, 'ok',  '\u2713 looks good');
     else                     setFieldState(field, inp, hint, 'err', 'use only letters, numbers, _ - . @ + (min 3 chars)');
   }
-
   if (field === 'phone') {
-    const inp  = $('nc-phone');
-    const hint = $('hint-phone');
+    const inp  = $('nc-phone'), hint = $('hint-phone');
     if (!phone) { setFieldState(field, inp, hint, 'idle'); return; }
     if (RE_PHONE.test(phone))  setFieldState(field, inp, hint, 'ok',  '\u2713 valid E.164 number');
     else if (/^[0-9+\s-]{7,}$/.test(phone)) setFieldState(field, inp, hint, 'err', 'use E.164 format: +[country][number] e.g. +919876543210');
     else                                     setFieldState(field, inp, hint, 'err', 'not a valid phone number');
   }
-
   if (field === 'ip') {
-    const inp  = $('nc-ip');
-    const hint = $('hint-ip');
+    const inp  = $('nc-ip'), hint = $('hint-ip');
     if (!ip) { setFieldState(field, inp, hint, 'idle'); return; }
     if (RE_IP.test(ip)) {
       const [addr, portStr] = ip.split(':');
@@ -727,14 +757,10 @@ function validateField(field) {
 
 function newChat() {
   ['nc-userid','nc-phone','nc-ip'].forEach(id => {
-    const el = $(id);
-    el.value = '';
-    el.classList.remove('input-ok','input-err');
+    const el = $(id); el.value = ''; el.classList.remove('input-ok','input-err');
   });
   ['hint-userid','hint-phone','hint-ip'].forEach(id => {
-    const el = $(id);
-    el.textContent = '';
-    el.classList.remove('ok','err');
+    const el = $(id); el.textContent = ''; el.classList.remove('ok','err');
   });
   $('newchat-error').textContent = '';
   const bd = $('newchat-backdrop');
@@ -754,26 +780,18 @@ async function submitNewChat() {
   const phone = $('nc-phone').value.trim();
   const ip    = $('nc-ip').value.trim();
   const errEl = $('newchat-error');
-
   if (uid)   validateField('userid');
   if (phone) validateField('phone');
   if (ip)    validateField('ip');
-
   if (!uid && !phone && !ip) {
-    errEl.textContent = 'fill in at least one field';
-    shakeError('newchat-error');
-    return;
+    errEl.textContent = 'fill in at least one field'; shakeError('newchat-error'); return;
   }
-
   const uidErr   = uid   && $('nc-userid').classList.contains('input-err');
   const phoneErr = phone && $('nc-phone').classList.contains('input-err');
   const ipErr    = ip    && $('nc-ip').classList.contains('input-err');
   if (uidErr || phoneErr || ipErr) {
-    errEl.textContent = 'fix the highlighted field(s) before continuing';
-    shakeError('newchat-error');
-    return;
+    errEl.textContent = 'fix the highlighted field(s) before continuing'; shakeError('newchat-error'); return;
   }
-
   const id = uid || phone || ip;
   dismissNewChat();
   await api('/api/chats/' + encodeURIComponent(id) + '/append', {
@@ -783,7 +801,7 @@ async function submitNewChat() {
   openChat(id);
 }
 
-// ── Settings ────────────────────────────────────────────────────────────────
+// ── Identity & peers ─────────────────────────────────────────────────────────
 
 function onPassphraseChange() {
   clearTimeout(decryptDebounce);
@@ -798,13 +816,8 @@ async function loadIdentity() {
   $('me-name').textContent   = d.username || 'you';
   $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
   const ns = $('node-status');
-  if (d.node_running) {
-    ns.textContent = 'node online';
-    ns.className = 'node-status on';
-  } else {
-    ns.textContent = 'node offline';
-    ns.className = 'node-status off';
-  }
+  if (d.node_running) { ns.textContent = 'node online';  ns.className = 'node-status on'; }
+  else                { ns.textContent = 'node offline'; ns.className = 'node-status off'; }
 }
 
 async function startNode() {
@@ -822,7 +835,56 @@ async function loadPeers() {
   const d = await api('/api/peers');
   knownPeers = {};
   (d.peers || []).forEach(p => { knownPeers[p.user_id] = p; });
+  renderPeers(d.peers || []);
 }
+
+function renderPeers(peers) {
+  const list  = $('peers-list');
+  const count = $('peers-count');
+  if (!peers.length) {
+    list.innerHTML = '<div class="peers-empty">no peers detected yet</div>';
+    count.textContent = '';
+    return;
+  }
+  count.textContent = '(' + peers.length + ')';
+  list.innerHTML = peers.map((p, i) => {
+    const label  = p.username || p.user_id || 'unknown';
+    const addr   = (p.ip && p.port) ? `${p.ip}:${p.port}` : (p.user_id || '');
+    const online = p.online !== false; // default to true if field absent
+    return `<div class="peer-row" style="transition-delay:${i*50}ms"
+              onclick="openChat('${escAttr(p.user_id || addr)}')">
+      <div class="peer-avatar">${label.slice(0,2).toUpperCase()}</div>
+      <div class="peer-info">
+        <div class="peer-name">${escHtml(label)}</div>
+        <div class="peer-addr">${escHtml(addr)}</div>
+      </div>
+      <span class="peer-badge ${online ? 'online' : 'offline'}">${online ? 'online' : 'offline'}</span>
+    </div>`;
+  }).join('');
+
+  // re-open accordion if already open, to recalc height
+  const body = $('peers-body');
+  if (body.classList.contains('open')) {
+    body.style.maxHeight = body.scrollHeight + 'px';
+  }
+}
+
+async function scanPeers() {
+  const btn = $('scan-btn');
+  btn.classList.add('scanning');
+  btn.querySelector('span:last-child').textContent = ' scanning...';
+  try {
+    await loadPeers();
+    // open the peers accordion if closed
+    const trigger = $('peers-trigger');
+    if (trigger.getAttribute('aria-expanded') !== 'true') toggleAccordion('peers');
+  } finally {
+    btn.classList.remove('scanning');
+    btn.querySelector('span:last-child').textContent = ' scan network';
+  }
+}
+
+// ── Settings ────────────────────────────────────────────────────────────────
 
 async function saveConfig() {
   const u = $('cfg-sms-user').value.trim();
@@ -832,6 +894,8 @@ async function saveConfig() {
   const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
   setStatus('sms config: ' + JSON.stringify(d));
 }
+
+// ── Chats ──────────────────────────────────────────────────────────────────
 
 async function loadChats() {
   const d = await api('/api/chats');
@@ -846,9 +910,9 @@ function renderChatList(list) {
     return;
   }
   el.innerHTML = list.map((c, i) => {
-    const peer = knownPeers[c.id];
+    const peer  = knownPeers[c.id];
     const label = (peer && peer.username) ? peer.username : c.id;
-    const type = isPhone(c.id) ? 'sms' : (peer ? 'peer' : 'local');
+    const type  = isPhone(c.id) ? 'sms' : (peer ? 'peer' : 'local');
     return `<div class="chat-item ${c.id===currentChatId?'active':''}"
               style="animation-delay:${i*40}ms"
               onclick="openChat('${escAttr(c.id)}')">
@@ -869,14 +933,13 @@ async function openChat(chatId) {
   currentChatId = chatId;
   $('no-chat').style.display = 'none';
   $('active-chat').style.display = 'flex';
-  const peer = knownPeers[chatId];
+  const peer  = knownPeers[chatId];
   const label = (peer && peer.username) ? peer.username : chatId;
   $('chat-avatar').textContent = label.slice(0,2).toUpperCase();
   $('chat-title').textContent  = label;
-  const isNet = !!peer;
   $('chat-sub').textContent = isPhone(chatId)
     ? 'sms channel \u2022 encrypted'
-    : isNet ? `enclave peer \u2022 ${peer.ip}:${peer.port}`
+    : peer ? `enclave peer \u2022 ${peer.ip}:${peer.port}`
     : 'local only';
   renderChatList(allChats);
   await refreshMessages();
@@ -896,21 +959,17 @@ async function refreshMessages() {
   const area = $('messages-area');
   const msgs = d.messages || [];
   const p    = pass();
-
   if (!msgs.length) {
     area.innerHTML = '<div class="empty-state"><div class="big">enclave</div><div>no messages yet</div></div>';
     return;
   }
-
   const rows = await Promise.all(msgs.map(async (entry) => {
     const token    = typeof entry === 'object' ? entry.token  : entry;
     const sender   = typeof entry === 'object' ? entry.sender : null;
     const ts       = typeof entry === 'object' ? entry.ts     : null;
     const mine     = sender === 'me';
     const isSystem = sender === 'system';
-
     if (isSystem) return {system: true, text: token, ts};
-
     let text = token, decrypted = false;
     if (p && token && token !== '-- chat started --') {
       try {
@@ -920,7 +979,6 @@ async function refreshMessages() {
     }
     return {text, decrypted, mine, ts, system: false};
   }));
-
   area.innerHTML = rows.map((m, i) => {
     if (m.system) return `<div class="sys-msg" style="animation-delay:${i*30}ms">${escHtml(m.text)}</div>`;
     const peer = knownPeers[currentChatId];
@@ -952,50 +1010,38 @@ async function sendMessage() {
   const btn = $('send-btn');
   btn.disabled = true;
   input.value  = '';
-
   const p    = pass();
   const ts   = new Date().toISOString();
   const peer = knownPeers[currentChatId];
-
   if (peer) {
     const r = await api('/api/message/send', {peer_id: currentChatId, plaintext: text});
     if (r.ok) {
       appendLocalMessage(text, true, true, ts, true);
-      await loadChats();
-      btn.disabled = false;
-      $('composer').focus();
-      return;
+      await loadChats(); btn.disabled = false; $('composer').focus(); return;
     }
     appendSysMsg('network delivery failed, saving locally only');
   }
-
   let token = text, encrypted = false;
   if (p) {
     try {
       const d = await api('/api/crypto/encrypt', {
-        passphrase: p, plaintext: text,
-        chat_id: currentChatId, created_at: ts,
+        passphrase: p, plaintext: text, chat_id: currentChatId, created_at: ts,
       });
       if (d.token) { token = d.token; encrypted = true; }
     } catch(_) {}
   }
-
   appendLocalMessage(text, true, encrypted, ts, false);
   await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', {
     token, sender: 'me', ts,
   });
-
   if (isPhone(currentChatId)) {
     try {
       const r = await api('/api/sms/send', {to: currentChatId, message: text});
       appendSysMsg(r.error
         ? 'sms failed: ' + r.error
         : 'sms sent \u2022 id: ' + (r.id||'?') + ' \u2022 state: ' + (r.state||'?'));
-    } catch(e) {
-      appendSysMsg('sms error: ' + e);
-    }
+    } catch(e) { appendSysMsg('sms error: ' + e); }
   }
-
   await loadChats();
   btn.disabled = false;
   $('composer').focus();
@@ -1038,6 +1084,7 @@ function escAttr(s) {
   showSplash();
   await loadIdentity();
   await loadChats();
+  await loadPeers();
   setInterval(async () => {
     await loadIdentity();
     await loadPeers();
