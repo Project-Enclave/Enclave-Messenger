@@ -313,7 +313,8 @@ CHAT_HTML = r"""
       padding:.85rem 1rem;
       overflow-y:auto;
       flex-shrink:0;
-      max-height:60vh;
+      /* removed fixed max-height — now grows up to available space and scrolls */
+      max-height:calc(100vh - 180px);
     }
     .sidebar-footer::-webkit-scrollbar{width:3px;}
     .sidebar-footer::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
@@ -817,7 +818,7 @@ function toggleAccordion(name) {
         body.style.maxHeight = 'none';
         body.removeEventListener('transitionend', onEnd);
         // scroll the footer so newly revealed content is visible
-        body.scrollIntoView({behavior:'smooth', block:'nearest'});
+        body.closest('.sidebar-footer').scrollTo({top: 99999, behavior: 'smooth'});
       }
     });
   }
