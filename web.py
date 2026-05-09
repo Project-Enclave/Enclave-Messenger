@@ -76,7 +76,6 @@ CHAT_HTML = r"""
     @keyframes splashFadeOut {
       to { opacity:0; transform:scale(1.03); pointer-events:none; }
     }
-
     .splash-logo {
       display:flex;
       align-items:baseline;
@@ -107,18 +106,6 @@ CHAT_HTML = r"""
     @keyframes slideRight {
       to { opacity:1; transform:translateX(0); }
     }
-
-    .splash-lock {
-      font-size:2rem;
-      opacity:0;
-      animation: lockPop 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.85s forwards;
-    }
-    @keyframes lockPop {
-      0%   { opacity:0; transform:scale(0.4) rotate(-10deg); }
-      70%  { opacity:1; transform:scale(1.15) rotate(3deg); }
-      100% { opacity:1; transform:scale(1) rotate(0deg); }
-    }
-
     .splash-sub {
       font-size:.82rem;
       color:var(--faint);
@@ -131,7 +118,6 @@ CHAT_HTML = r"""
       from { opacity:0; transform:translateY(8px); }
       to   { opacity:1; transform:translateY(0); }
     }
-
     .splash-bar {
       width:120px;height:2px;
       border-radius:2px;
@@ -175,11 +161,6 @@ CHAT_HTML = r"""
       from { opacity:0; transform:scale(0.93) translateY(12px); }
       to   { opacity:1; transform:scale(1) translateY(0); }
     }
-    .modal-lock-icon{
-      font-size:2.2rem;
-      text-align:center;
-      line-height:1;
-    }
     .modal-title{
       font-family:var(--display);
       font-size:1.35rem;
@@ -218,7 +199,8 @@ CHAT_HTML = r"""
     .modal-eye{
       position:absolute;right:.75rem;top:50%;transform:translateY(-50%);
       background:none;border:none;cursor:pointer;
-      color:var(--faint);font-size:.9rem;padding:0;line-height:1;
+      color:var(--faint);font-size:.75rem;padding:0;line-height:1;
+      font-family:var(--font);font-weight:600;letter-spacing:.02em;
       transition:color .15s;
     }
     .modal-eye:hover{color:var(--muted);}
@@ -274,12 +256,23 @@ CHAT_HTML = r"""
       from { opacity:0; transform:translateX(-24px); }
       to   { opacity:1; transform:translateX(0); }
     }
-    .brand{padding:1.1rem 1.2rem .9rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
-    .logo{font-family:var(--display);font-size:1.25rem;font-weight:700;color:var(--primary);letter-spacing:-.01em;}
+    .brand{
+      padding:1.1rem 1.2rem .9rem;
+      border-bottom:1px solid var(--border);
+      display:flex;align-items:center;justify-content:center;
+      position:relative;
+    }
+    .logo{
+      font-family:var(--display);font-size:1.25rem;font-weight:700;
+      color:var(--primary);letter-spacing:-.01em;
+      text-align:center;
+    }
     .logo span{color:var(--coral);}
     .theme-btn{
+      position:absolute;right:1rem;
       background:none;border:1px solid var(--border);border-radius:6px;
-      padding:.3rem .55rem;cursor:pointer;color:var(--muted);font-size:.85rem;
+      padding:.3rem .55rem;cursor:pointer;color:var(--muted);font-size:.7rem;
+      font-family:var(--font);font-weight:600;
       transition:background .15s, color .15s, transform .15s;
     }
     .theme-btn:hover{background:var(--border);color:var(--text);transform:rotate(18deg);}
@@ -364,7 +357,8 @@ CHAT_HTML = r"""
     .topbar-actions{margin-left:auto;display:flex;gap:.5rem;}
     .topbar-actions button{
       background:none;border:1px solid var(--border);border-radius:7px;
-      padding:.35rem .65rem;cursor:pointer;color:var(--muted);font-size:.82rem;
+      padding:.35rem .65rem;cursor:pointer;color:var(--muted);font-size:.75rem;
+      font-family:var(--font);font-weight:600;
       transition:background .15s,color .15s,transform .15s;
     }
     .topbar-actions button:hover{background:var(--border);color:var(--text);}
@@ -390,12 +384,12 @@ CHAT_HTML = r"""
     .bubble-author{font-size:.72rem;font-weight:700;margin-bottom:.3rem;opacity:.7;}
     .bubble-time{font-size:.68rem;color:var(--faint);margin-top:.3rem;text-align:right;}
     .msg-row.me .bubble-time{color:rgba(255,255,255,.65);}
-    .badge{font-size:.65rem;border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;}
+    .badge{font-size:.65rem;border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;font-weight:600;}
     .badge-enc{background:rgba(242,114,128,.15);color:var(--coral);}
     .badge-ok{background:rgba(80,200,120,.12);color:#6fcf97;}
     .badge-net{background:rgba(100,160,255,.12);color:#7ab4f5;}
     .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.6rem;color:var(--faint);font-size:.9rem;}
-    .empty-state .big{font-family:var(--display);font-size:1.8rem;color:var(--border);}
+    .empty-state .big{font-family:var(--display);font-size:1.5rem;color:var(--border);}
     .sys-msg{text-align:center;font-size:.72rem;color:var(--faint);padding:.25rem 0;animation:fadeUp 0.3s ease both;}
     .composer-area{
       display:flex;align-items:center;gap:.65rem;padding:.85rem 1.2rem;
@@ -422,7 +416,7 @@ CHAT_HTML = r"""
     .send-btn:active{transform:scale(.95);}
     .send-btn:disabled{opacity:.5;cursor:not-allowed;}
     .no-chat{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.75rem;color:var(--muted);}
-    .no-chat .big{font-family:var(--display);font-size:2.2rem;color:var(--border);}
+    .no-chat .big{font-family:var(--display);font-size:2rem;color:var(--border);}
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
 
@@ -438,44 +432,41 @@ CHAT_HTML = r"""
 
 <!-- ── Splash screen ────────────────────────────────────────────────────── -->
 <div id="splash">
-  <div class="splash-lock">&#128272;</div>
   <div class="splash-logo">
     <span class="splash-word-project">project</span>
     <span class="splash-word-enclave">enclave</span>
   </div>
-  <div class="splash-sub">secure · private · encrypted</div>
+  <div class="splash-sub">secure &middot; private &middot; encrypted</div>
   <div class="splash-bar"><div class="splash-bar-fill"></div></div>
 </div>
 
 <!-- ── Unlock modal ─────────────────────────────────────────────────────── -->
 <div class="modal-backdrop hidden" id="unlock-backdrop">
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    <div class="modal-lock-icon">&#128272;</div>
     <div class="modal-title" id="modal-title">unlock enclave</div>
     <div class="modal-sub">enter your passphrase to start the node and decrypt messages</div>
     <div class="modal-input-wrap">
       <input id="modal-pass" type="password" placeholder="passphrase"
              autocomplete="current-password"
              onkeydown="if(event.key==='Enter') modalUnlock()"/>
-      <button class="modal-eye" onclick="toggleModalEye()" id="modal-eye-btn" title="show/hide">&#128065;</button>
+      <button class="modal-eye" onclick="toggleModalEye()" id="modal-eye-btn" title="show/hide">show</button>
     </div>
     <div class="modal-error" id="modal-error"></div>
     <button class="modal-unlock-btn" id="modal-unlock-btn" onclick="modalUnlock()">unlock &amp; start node</button>
-    <button class="modal-skip" onclick="dismissModal()">skip for now — browse without decryption</button>
+    <button class="modal-skip" onclick="dismissModal()">skip for now &mdash; browse without decryption</button>
   </div>
 </div>
 
 <!-- ── New chat modal ───────────────────────────────────────────────────── -->
 <div class="modal-backdrop hidden" id="newchat-backdrop">
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="newchat-title">
-    <div class="modal-lock-icon">&#128172;</div>
     <div class="modal-title" id="newchat-title">new chat</div>
     <div class="modal-sub">start a conversation with an enclave peer, phone number, or direct IP</div>
 
     <div class="modal-field-group">
       <div class="modal-field-label">peer user_id <span style="color:var(--faint);font-weight:400;">(enclave network)</span></div>
       <div class="modal-input-wrap">
-        <input id="nc-userid" class="plain" type="text" placeholder="e.g. enc_a1b2c3d4…"
+        <input id="nc-userid" class="plain" type="text" placeholder="e.g. enc_a1b2c3d4&hellip;"
                autocomplete="off" spellcheck="false"
                oninput="validateField('userid')"
                onkeydown="if(event.key==='Enter') submitNewChat()"/>
@@ -510,7 +501,7 @@ CHAT_HTML = r"""
     </div>
 
     <div class="modal-error" id="newchat-error"></div>
-    <button class="modal-unlock-btn" onclick="submitNewChat()">open chat &#8594;</button>
+    <button class="modal-unlock-btn" onclick="submitNewChat()">open chat &rarr;</button>
     <button class="modal-skip" onclick="dismissNewChat()">cancel</button>
   </div>
 </div>
@@ -519,7 +510,7 @@ CHAT_HTML = r"""
 <aside class="sidebar">
   <div class="brand">
     <div class="logo">project <span>enclave</span></div>
-    <button class="theme-btn" onclick="toggleTheme()">&#9680;</button>
+    <button class="theme-btn" onclick="toggleTheme()">theme</button>
   </div>
   <div class="search-wrap">
     <input id="search" placeholder="Search chats&hellip;" oninput="filterChats(this.value)"/>
@@ -527,7 +518,7 @@ CHAT_HTML = r"""
   <div class="chat-list" id="chat-list">
     <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading&hellip;</div>
   </div>
-  <button class="new-chat-btn" onclick="newChat()">&#xFF0B; new chat</button>
+  <button class="new-chat-btn" onclick="newChat()">+ new chat</button>
   <div class="sidebar-footer">
     <div class="profile-row">
       <div class="avatar" id="me-avatar">?</div>
@@ -536,9 +527,9 @@ CHAT_HTML = r"""
         <div class="uid" id="me-uid">no identity</div>
       </div>
     </div>
-    <div id="node-status" class="node-status off">&#9679; node offline</div>
+    <div id="node-status" class="node-status off">node offline</div>
     <details class="settings-panel" id="settings-panel">
-      <summary>&#9881;&#65039; settings &amp; config</summary>
+      <summary>settings &amp; config</summary>
       <div class="settings-body">
         <label>session passphrase</label>
         <input id="cfg-pass" type="password" placeholder="unlock identity + encrypt/decrypt"
@@ -559,7 +550,7 @@ CHAT_HTML = r"""
 
 <section class="chat-panel">
   <div class="no-chat" id="no-chat">
-    <div class="big">&#128272;</div>
+    <div class="big">enclave</div>
     <div>select a chat or create one</div>
     <div style="font-size:.78rem;color:var(--faint);">messages are end-to-end encrypted</div>
   </div>
@@ -571,8 +562,8 @@ CHAT_HTML = r"""
         <div class="sub" id="chat-sub">&mdash;</div>
       </div>
       <div class="topbar-actions">
-        <button onclick="refreshMessages()" title="refresh">&#8635;</button>
-        <button onclick="closeChat()" title="close">&#10005;</button>
+        <button onclick="refreshMessages()" title="refresh">refresh</button>
+        <button onclick="closeChat()" title="close">close</button>
       </div>
     </div>
     <div class="messages-area" id="messages-area"></div>
@@ -613,7 +604,6 @@ function toggleTheme() {
 
 function showSplash() {
   const splash = $('splash');
-  // After load bar completes (~2.4s total), fade out and show unlock modal
   setTimeout(() => {
     splash.classList.add('fade-out');
     setTimeout(() => {
@@ -635,8 +625,8 @@ function showUnlockModal() {
 function toggleModalEye() {
   const inp = $('modal-pass');
   const btn = $('modal-eye-btn');
-  if (inp.type === 'password') { inp.type = 'text';     btn.innerHTML = '&#128064;'; }
-  else                         { inp.type = 'password'; btn.innerHTML = '&#128065;'; }
+  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'hide'; }
+  else                         { inp.type = 'password'; btn.textContent = 'show'; }
 }
 
 function dismissModal() {
@@ -668,7 +658,7 @@ async function modalUnlock() {
     return;
   }
   $('cfg-pass').value = p;
-  setStatus('\u2713 node started');
+  setStatus('node started');
   dismissModal();
   await loadIdentity();
   await loadPeers();
@@ -770,7 +760,7 @@ async function submitNewChat() {
   if (ip)    validateField('ip');
 
   if (!uid && !phone && !ip) {
-    errEl.textContent = '\u26a0 fill in at least one field';
+    errEl.textContent = 'fill in at least one field';
     shakeError('newchat-error');
     return;
   }
@@ -779,7 +769,7 @@ async function submitNewChat() {
   const phoneErr = phone && $('nc-phone').classList.contains('input-err');
   const ipErr    = ip    && $('nc-ip').classList.contains('input-err');
   if (uidErr || phoneErr || ipErr) {
-    errEl.textContent = '\u26a0 fix the highlighted field(s) before continuing';
+    errEl.textContent = 'fix the highlighted field(s) before continuing';
     shakeError('newchat-error');
     return;
   }
@@ -809,21 +799,21 @@ async function loadIdentity() {
   $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
   const ns = $('node-status');
   if (d.node_running) {
-    ns.textContent = '\u25cf node online';
+    ns.textContent = 'node online';
     ns.className = 'node-status on';
   } else {
-    ns.textContent = '\u25cf node offline';
+    ns.textContent = 'node offline';
     ns.className = 'node-status off';
   }
 }
 
 async function startNode() {
   const p = pass();
-  if (!p) { setStatus('\u26a0 enter passphrase first'); return; }
+  if (!p) { setStatus('enter passphrase first'); return; }
   setStatus('starting node...');
   const d = await api('/api/node/start', {passphrase: p});
-  if (d.error) { setStatus('\u26a0 ' + d.error); return; }
-  setStatus('\u2713 node started');
+  if (d.error) { setStatus('error: ' + d.error); return; }
+  setStatus('node started');
   await loadIdentity();
   await loadPeers();
 }
@@ -838,7 +828,7 @@ async function saveConfig() {
   const u = $('cfg-sms-user').value.trim();
   const p = $('cfg-sms-pass').value;
   const h = $('cfg-sms-host').value.trim();
-  if (!u || !p) { setStatus('\u26a0 username + password required'); return; }
+  if (!u || !p) { setStatus('username + password required'); return; }
   const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
   setStatus('sms config: ' + JSON.stringify(d));
 }
@@ -857,15 +847,15 @@ function renderChatList(list) {
   }
   el.innerHTML = list.map((c, i) => {
     const peer = knownPeers[c.id];
-    const icon = isPhone(c.id) ? '\ud83d\udcf1' : (peer ? '\ud83d\udfe2' : '\ud83d\udcac');
     const label = (peer && peer.username) ? peer.username : c.id;
+    const type = isPhone(c.id) ? 'sms' : (peer ? 'peer' : 'local');
     return `<div class="chat-item ${c.id===currentChatId?'active':''}"
               style="animation-delay:${i*40}ms"
               onclick="openChat('${escAttr(c.id)}')">
       <div class="avatar">${label.slice(0,2).toUpperCase()}</div>
       <div class="chat-meta">
-        <div class="chat-name">${icon} ${escHtml(label)}</div>
-        <div class="chat-preview">${c.count} msg${c.count!==1?'s':''}</div>
+        <div class="chat-name">${escHtml(label)}</div>
+        <div class="chat-preview">${c.count} msg${c.count!==1?'s':''} &middot; ${type}</div>
       </div>
     </div>`;
   }).join('');
@@ -885,9 +875,9 @@ async function openChat(chatId) {
   $('chat-title').textContent  = label;
   const isNet = !!peer;
   $('chat-sub').textContent = isPhone(chatId)
-    ? '\ud83d\udcf1 sms channel \u2022 encrypted'
-    : isNet ? `\ud83d\udfe2 enclave peer \u2022 ${peer.ip}:${peer.port}`
-    : '\ud83d\udcac local only';
+    ? 'sms channel \u2022 encrypted'
+    : isNet ? `enclave peer \u2022 ${peer.ip}:${peer.port}`
+    : 'local only';
   renderChatList(allChats);
   await refreshMessages();
   $('composer').focus();
@@ -908,7 +898,7 @@ async function refreshMessages() {
   const p    = pass();
 
   if (!msgs.length) {
-    area.innerHTML = '<div class="empty-state"><div class="big">\ud83d\udd12</div><div>no messages yet</div></div>';
+    area.innerHTML = '<div class="empty-state"><div class="big">enclave</div><div>no messages yet</div></div>';
     return;
   }
 
@@ -939,8 +929,8 @@ async function refreshMessages() {
       <div class="bubble">
         ${!m.mine ? `<div class="bubble-author">${escHtml(authorLabel)}</div>` : ''}
         <div>${escHtml(m.text)}
-          ${!m.decrypted && p ? '<span class="badge badge-enc">&#128274; enc</span>' : ''}
-          ${m.decrypted ? '<span class="badge badge-ok">&#10003; dec</span>' : ''}
+          ${!m.decrypted && p ? '<span class="badge badge-enc">enc</span>' : ''}
+          ${m.decrypted ? '<span class="badge badge-ok">decrypted</span>' : ''}
         </div>
         <div class="bubble-time">${m.ts ? fmtTs(m.ts) : ''}</div>
       </div>
@@ -976,7 +966,7 @@ async function sendMessage() {
       $('composer').focus();
       return;
     }
-    appendSysMsg('\u26a0 network delivery failed, saving locally only');
+    appendSysMsg('network delivery failed, saving locally only');
   }
 
   let token = text, encrypted = false;
@@ -999,10 +989,10 @@ async function sendMessage() {
     try {
       const r = await api('/api/sms/send', {to: currentChatId, message: text});
       appendSysMsg(r.error
-        ? '\u26a0 sms failed: ' + r.error
-        : '\u2713 sms sent \u2022 id: ' + (r.id||'?') + ' \u2022 state: ' + (r.state||'?'));
+        ? 'sms failed: ' + r.error
+        : 'sms sent \u2022 id: ' + (r.id||'?') + ' \u2022 state: ' + (r.state||'?'));
     } catch(e) {
-      appendSysMsg('\u26a0 sms error: ' + e);
+      appendSysMsg('sms error: ' + e);
     }
   }
 
@@ -1019,8 +1009,8 @@ function appendLocalMessage(text, mine, encrypted, ts, viaNetwork) {
   row.className = 'msg-row' + (mine ? ' me' : '');
   row.innerHTML = `<div class="bubble">
     <div>${escHtml(text)}
-      ${encrypted && !viaNetwork ? '<span class="badge badge-enc">&#128274; enc</span>' : ''}
-      ${viaNetwork ? '<span class="badge badge-net">&#128640; sent</span>' : ''}
+      ${encrypted && !viaNetwork ? '<span class="badge badge-enc">enc</span>' : ''}
+      ${viaNetwork ? '<span class="badge badge-net">sent</span>' : ''}
     </div>
     <div class="bubble-time">${fmtTs(ts)}</div>
   </div>`;
