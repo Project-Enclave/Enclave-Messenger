@@ -1450,7 +1450,9 @@ function startWebSocket() {
       return;
     }
     if (frame.event === 'new_message') {
-      await loadChats(); if (currentChatId === frame.chat_id) await refreshMessages(); return;
+      await loadChats();
+      if (currentChatId) await refreshMessages();
+      return;
     }
     if (frame.event === 'peer_update') {
       const p = frame.peer; if (!p || !p.user_id) return;
