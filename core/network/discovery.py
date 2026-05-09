@@ -80,9 +80,11 @@ class Discovery:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.settimeout(1.0)
-        data = self._build_datagram()
         while not self._stop.is_set():
             try:
+                # Rebuild each iteration so runtime identity changes
+                # (e.g. username update) are always reflected.
+                data = self._build_datagram()
                 sock.sendto(data, ("255.255.255.255", DISCOVERY_PORT))
                 log.debug("[discovery] announced presence")
             except OSError as e:
