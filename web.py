@@ -261,6 +261,7 @@ CHAT_HTML = r"""
     .brand{
       padding:1.1rem 1.2rem .9rem;border-bottom:1px solid var(--border);
       display:flex;align-items:center;justify-content:center;position:relative;
+      flex-shrink:0;
     }
     .logo{font-family:var(--display);font-size:1.25rem;font-weight:700;color:var(--primary);letter-spacing:-.01em;text-align:center;}
     .logo span{color:var(--coral);}
@@ -270,7 +271,7 @@ CHAT_HTML = r"""
       font-family:var(--font);font-weight:600;transition:background .15s, color .15s, transform .15s;
     }
     .theme-btn:hover{background:var(--border);color:var(--text);transform:rotate(18deg);}
-    .search-wrap{padding:.75rem 1rem;}
+    .search-wrap{padding:.75rem 1rem;flex-shrink:0;}
     .search-wrap input{
       width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
       padding:.5rem .85rem;font-size:.875rem;color:var(--text);font-family:var(--font);
@@ -278,7 +279,7 @@ CHAT_HTML = r"""
     }
     .search-wrap input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.1);}
     .search-wrap input::placeholder{color:var(--faint);}
-    .chat-list{flex:1;overflow-y:auto;padding:.25rem .5rem;}
+    .chat-list{flex:1;overflow-y:auto;padding:.25rem .5rem;min-height:0;}
     .chat-item{
       display:flex;align-items:center;gap:.75rem;padding:.7rem .8rem;border-radius:10px;cursor:pointer;
       transition:background .12s, transform .12s;
@@ -302,11 +303,20 @@ CHAT_HTML = r"""
       margin:.75rem;padding:.6rem;border:1px dashed var(--border);border-radius:10px;
       background:none;cursor:pointer;color:var(--muted);font-family:var(--font);font-size:.85rem;
       transition:background .12s, color .12s, transform .12s;
+      flex-shrink:0;
     }
     .new-chat-btn:hover{background:var(--border);color:var(--text);transform:scale(1.02);}
 
     /* ── Sidebar footer ─────────────────────────────────────────── */
-    .sidebar-footer{border-top:2px solid var(--border);padding:.85rem 1rem;}
+    .sidebar-footer{
+      border-top:2px solid var(--border);
+      padding:.85rem 1rem;
+      overflow-y:auto;
+      flex-shrink:0;
+      max-height:60vh;
+    }
+    .sidebar-footer::-webkit-scrollbar{width:3px;}
+    .sidebar-footer::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
     .profile-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.65rem;}
     .profile-row .avatar{width:36px;height:36px;font-size:.8rem;}
     .profile-info .name{font-weight:600;font-size:.88rem;}
@@ -806,6 +816,8 @@ function toggleAccordion(name) {
       if (e.propertyName === 'max-height') {
         body.style.maxHeight = 'none';
         body.removeEventListener('transitionend', onEnd);
+        // scroll the footer so newly revealed content is visible
+        body.scrollIntoView({behavior:'smooth', block:'nearest'});
       }
     });
   }
