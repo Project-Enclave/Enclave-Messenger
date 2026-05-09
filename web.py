@@ -19,11 +19,6 @@ try:
     _SOCK_AVAILABLE = True
 except ImportError:
     _SOCK_AVAILABLE = False
-try:
-    from flask_sock import Sock
-    _SOCK_AVAILABLE = True
-except ImportError:
-    _SOCK_AVAILABLE = False
 
 import main as app_core
 
@@ -42,37 +37,6 @@ _ws_lock = threading.Lock()
 
 
 def _ws_broadcast(event: str, data: dict):
-    frame = _json.dumps({"event": event, **data})
-    dead = []
-    with _ws_lock:
-        clients = list(_ws_clients)
-    for ws in clients:
-        try:
-            ws.send(frame)
-        except Exception:
-            dead.append(ws)
-    if dead:
-        with _ws_lock:
-            for ws in dead:
-                try:
-                    _ws_clients.remove(ws)
-                except ValueError:
-                    pass
-
-# ---------------------------------------------------------------------------
-# WebSocket broker
-# ---------------------------------------------------------------------------
-import json as _json
-
-if _SOCK_AVAILABLE:
-    _sock = Sock(app)
-
-_ws_clients: list = []
-_ws_lock = threading.Lock()
-
-
-def _ws_broadcast(event: str, data: dict):
-    """Push a JSON event frame to every connected WS client."""
     frame = _json.dumps({"event": event, **data})
     dead = []
     with _ws_lock:
@@ -342,8 +306,6 @@ CHAT_HTML = r"""
     }
     .modal-skip{font-size:.75rem;color:var(--faint);text-align:center;cursor:pointer;background:none;border:none;font-family:var(--font);transition:color .15s;}
     .modal-skip:hover{color:var(--muted);}
-    .conn-chip{font-size:.72rem;padding:.22rem .65rem;border-radius:9999px;color:var(--faint);transition:background .15s,color .15s;font-family:var(--font);}
-    .conn-chip.active{background:var(--primary);color:#fff;}
     .conn-chip{font-size:.72rem;padding:.22rem .65rem;border-radius:9999px;color:var(--faint);transition:background .15s,color .15s;font-family:var(--font);}
     .conn-chip.active{background:var(--primary);color:#fff;}
     .modal-field-group{display:flex;flex-direction:column;gap:.35rem;}
@@ -712,15 +674,6 @@ CHAT_HTML = r"""
       <button class="modal-eye" onclick="toggleModalEye()" id="modal-eye-btn" title="show/hide">show</button>
     </div>
     <div class="modal-error" id="modal-error"></div>
-    <div style="display:flex;align-items:center;justify-content:center;gap:.6rem;margin-top:-.2rem;">
-      <span style="font-size:.78rem;color:var(--faint);">connection mode</span>
-      <div id="conn-toggle" onclick="toggleConnMode()"
-           style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:9999px;
-                  padding:3px;gap:3px;cursor:pointer;user-select:none;">
-        <span id="conn-ws"   class="conn-chip active">⚡ real-time</span>
-        <span id="conn-poll" class="conn-chip">↺ polling</span>
-      </div>
-    </div>
     <div style="display:flex;align-items:center;justify-content:center;gap:.6rem;margin-top:-.2rem;">
       <span style="font-size:.78rem;color:var(--faint);">connection mode</span>
       <div id="conn-toggle" onclick="toggleConnMode()"
@@ -1458,7 +1411,6 @@ function escAttr(s) {
   return String(s).replace(/'/g,"&#39;").replace(/\"/g,'&quot;');
 }
 
-// ── Connection mode ───────────────────────────────────────────────────────────────────────────────
 let useWebSocket = true;
 let _ws = null;
 let _pollTimer = null;
@@ -1469,91 +1421,61 @@ function toggleConnMode() {
   $('conn-poll').classList.toggle('active', !useWebSocket);
 }
 
-// ── WebSocket client ──────────────────────────────────────────────────────────────────────────────
-
 function startWebSocket() {
   if (_ws) { try { _ws.close(); } catch(_) {} }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   _ws = new WebSocket(`${proto}://${location.host}/ws`);
-
   _ws.onopen = () => {
-    console.debug('[ws] connected');
     _ws._ping = setInterval(() => {
-      if (_ws.readyState === WebSocket.OPEN)
-        _ws.send(JSON.stringify({type:'ping'}));
+      if (_ws.readyState === WebSocket.OPEN) _ws.send(JSON.stringify({type:'ping'}));
     }, 20000);
   };
-
   _ws.onmessage = async (e) => {
-    let frame;
-    try { frame = JSON.parse(e.data); } catch(_) { return; }
-
+    let frame; try { frame = JSON.parse(e.data); } catch(_) { return; }
     if (frame.event === 'init') {
       const peers = frame.peers || [];
       knownPeers = {};
       peers.forEach(p => { if (p.user_id) knownPeers[p.user_id] = p; });
       renderPeers(peers);
-      allChats = frame.chats || [];
-      renderChatList(allChats);
+      allChats = frame.chats || []; renderChatList(allChats);
       const d = frame.identity || {};
       if (d.node_running !== undefined) {
         $('me-uid').textContent    = d.user_id ? d.user_id.slice(0,20)+'...' : (d.has_identity ? 'locked' : 'none');
         $('me-name').textContent   = d.username || 'you';
         $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
         const ns = $('node-status');
-        ns.textContent = d.node_running ? 'node online'  : 'node offline';
+        ns.textContent = d.node_running ? 'node online' : 'node offline';
         ns.className   = 'node-status ' + (d.node_running ? 'on' : 'off');
       }
       return;
     }
-
     if (frame.event === 'new_message') {
-      await loadChats();
-      if (currentChatId === frame.chat_id) await refreshMessages();
-      return;
+      await loadChats(); if (currentChatId === frame.chat_id) await refreshMessages(); return;
     }
-
     if (frame.event === 'peer_update') {
-      const p = frame.peer;
-      if (!p || !p.user_id) return;
-      knownPeers[p.user_id] = p;
-      renderPeers(Object.values(knownPeers));
-      return;
+      const p = frame.peer; if (!p || !p.user_id) return;
+      knownPeers[p.user_id] = p; renderPeers(Object.values(knownPeers)); return;
     }
   };
-
   _ws.onerror = () => {};
-
-  _ws.onclose = () => {
-    clearInterval(_ws._ping);
-    if (useWebSocket) setTimeout(startWebSocket, 3000);
-  };
+  _ws.onclose = () => { clearInterval(_ws._ping); if (useWebSocket) setTimeout(startWebSocket, 3000); };
 }
-
-// ── Polling fallback ──────────────────────────────────────────────────────────────────────────────
 
 function startPolling() {
   if (_pollTimer) clearInterval(_pollTimer);
   _pollTimer = setInterval(async () => {
-    await loadIdentity();
-    await loadPeers();
+    await loadIdentity(); await loadPeers();
     if (currentChatId) await refreshMessages();
   }, 5000);
 }
-
-// ── Start realtime after unlock ───────────────────────────────────────────────────────────────
 
 async function startRealtime() {
   if (useWebSocket) {
     startWebSocket();
     setInterval(async () => { await loadIdentity(); await loadChats(); }, 30000);
     setInterval(loadPeers, 30000);
-  } else {
-    startPolling();
-  }
+  } else { startPolling(); }
 }
-
-// ── Boot ─────────────────────────────────────────────────────────────────────────────────────
 
 (async () => {
   showSplash();
@@ -1615,11 +1537,9 @@ def node_start():
 
 
 def _patch_node_callbacks():
-    """Wrap the Node's inbound/peer callbacks to push WS events."""
     node = app_core.get_node()
     if node is None:
         return
-
     _orig_inbound = node._on_inbound
     def _ws_inbound(envelope: dict):
         _orig_inbound(envelope)
@@ -1780,55 +1700,12 @@ def sms_status(message_id):
 if _SOCK_AVAILABLE:
     @_sock.route("/ws")
     def ws_handler(ws):
-        """
-        Persistent WebSocket connection for real-time push.
-        Client sends {"type":"ping"} keepalives every 20 s.
-        Server pushes: init (snapshot on connect), new_message, peer_update.
-        """
         with _ws_lock:
             _ws_clients.append(ws)
         try:
-            raw_peers = app_core.get_peers()
             ws.send(_json.dumps({
                 "event":    "init",
-                "peers":    _stamp_online(raw_peers),
-                "chats":    app_core.get_chats(),
-                "identity": app_core.get_identity_status(),
-            }))
-            while True:
-                msg = ws.receive(timeout=30)
-                if msg is None:
-                    break
-                try:
-                    frame = _json.loads(msg)
-                    if frame.get("type") == "ping":
-                        ws.send(_json.dumps({"event": "pong"}))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        finally:
-            with _ws_lock:
-                try:
-                    _ws_clients.remove(ws)
-                except ValueError:
-                    pass
-
-
-# ---------------------------------------------------------------------------
-# WebSocket endpoint
-# ---------------------------------------------------------------------------
-
-if _SOCK_AVAILABLE:
-    @_sock.route("/ws")
-    def ws_handler(ws):
-        with _ws_lock:
-            _ws_clients.append(ws)
-        try:
-            raw_peers = app_core.get_peers()
-            ws.send(_json.dumps({
-                "event":    "init",
-                "peers":    _stamp_online(raw_peers),
+                "peers":    _stamp_online(app_core.get_peers()),
                 "chats":    app_core.get_chats(),
                 "identity": app_core.get_identity_status(),
             }))
