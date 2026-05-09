@@ -1228,7 +1228,8 @@ async function refreshMessages() {
     if (p && token && token !== '-- chat started --') {
       try {
         const dec = await api('/api/crypto/decrypt', {passphrase: p, token, chat_id: currentChatId});
-        if (dec.plaintext !== undefined) { text = dec.plaintext; decrypted = true; }
+        // dec.plaintext is null when server couldn't decrypt (e.g. peer key unavailable)
+        if (dec.plaintext !== undefined && dec.plaintext !== null) { text = dec.plaintext; decrypted = true; }
       } catch(_) {}
     }
     return {text, decrypted, mine, ts, system: false};
@@ -1444,7 +1445,10 @@ def crypto_decrypt():
         )
         return jsonify({"plaintext": pt})
     except Exception as e:
-        return err(str(e), 500, exc=e)
+        # Return 200 with null plaintext so the UI shows [enc] badge instead of
+        # crashing. JS checks `dec.plaintext !== undefined && dec.plaintext !== null`,
+        # so null correctly falls back to showing the raw token.
+        return jsonify({"plaintext": None, "error": str(e)})
 
 # -- Chats -------------------------------------------------------------------
 
