@@ -6,7 +6,6 @@ HARDCODED = {
     "passphrase": "test-passphrase",
     "chat_id": "chat123",
     "created_at": "1714120000",
-    "prekey": "secret",
     "message_type": "text",
     "body": {"text": "hello enclave"},
 }
@@ -21,10 +20,9 @@ def run_hardcoded():
         body=HARDCODED["body"],
         chat_id=HARDCODED["chat_id"],
         created_at=HARDCODED["created_at"],
-        prekey=HARDCODED["prekey"],
     )
 
-    result = c.decrypt_message(token, prekey=HARDCODED["prekey"])
+    result = c.decrypt_message(token)
 
     assert result["body"] == HARDCODED["body"], "body mismatch"
     assert result["chat_id"] == HARDCODED["chat_id"], "chat_id mismatch"
@@ -34,22 +32,15 @@ def run_hardcoded():
     print("\n=== wrong passphrase test ===")
     try:
         bad = CryptoManager("wrong-passphrase")
-        bad.decrypt_message(token, prekey=HARDCODED["prekey"])
+        bad.decrypt_message(token)
         print("  wrong passphrase: FAILED (should have raised)")
     except Exception:
         print("  wrong passphrase rejected: PASSED")
 
-    print("\n=== wrong prekey test ===")
-    try:
-        c.decrypt_message(token, prekey="wrongkey")
-        print("  wrong prekey: FAILED (should have raised)")
-    except Exception:
-        print("  wrong prekey rejected: PASSED")
-
     print("\n=== tampered token test ===")
     tampered = token[:-4] + "XXXX"
     try:
-        c.decrypt_message(tampered, prekey=HARDCODED["prekey"])
+        c.decrypt_message(tampered)
         print("  tamper detection: FAILED (should have raised)")
     except Exception:
         print("  tamper detected: PASSED")
@@ -61,7 +52,6 @@ def run_interactive():
     print("=== interactive test ===")
     passphrase = input("passphrase: ")
     chat_id = input("chat_id: ")
-    prekey = input("prekey: ")
     text = input("message text: ")
     created_at = str(int(time.time()))
 
@@ -72,12 +62,11 @@ def run_interactive():
         body={"text": text},
         chat_id=chat_id,
         created_at=created_at,
-        prekey=prekey,
     )
 
     print(f"\nencrypted token:\n{token}\n")
 
-    result = c.decrypt_message(token, prekey=prekey)
+    result = c.decrypt_message(token)
     print(f"decrypted: {result}")
 
 
