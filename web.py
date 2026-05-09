@@ -115,6 +115,8 @@ CHAT_HTML = r"""
     }
     .modal-input-wrap input.plain{padding-right:1rem;}
     .modal-input-wrap input:focus{border-color:var(--primary);}
+    .modal-input-wrap input.input-ok  {border-color:#6fcf97 !important;}
+    .modal-input-wrap input.input-err {border-color:var(--coral) !important;}
     .modal-eye{
       position:absolute;right:.75rem;top:50%;transform:translateY(-50%);
       background:none;border:none;cursor:pointer;
@@ -145,6 +147,13 @@ CHAT_HTML = r"""
     /* ── New-chat modal extras ────────────────────────────────── */
     .modal-field-group{display:flex;flex-direction:column;gap:.35rem;}
     .modal-field-label{font-size:.75rem;color:var(--faint);padding-left:.1rem;}
+    .field-hint{
+      font-size:.7rem;color:var(--faint);
+      min-height:1em;padding-left:.1rem;
+      transition:color .15s;
+    }
+    .field-hint.ok  {color:#6fcf97;}
+    .field-hint.err {color:var(--coral);}
     .modal-divider{display:flex;align-items:center;gap:.75rem;color:var(--faint);font-size:.75rem;}
     .modal-divider::before,.modal-divider::after{content:'';flex:1;height:1px;background:var(--border);}
 
@@ -247,14 +256,17 @@ CHAT_HTML = r"""
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="newchat-title">
     <div class="modal-lock-icon">&#128172;</div>
     <div class="modal-title" id="newchat-title">new chat</div>
-    <div class="modal-sub">start a conversation with an enclave peer, phone number, or any local contact</div>
+    <div class="modal-sub">start a conversation with an enclave peer, phone number, or direct IP</div>
 
     <div class="modal-field-group">
       <div class="modal-field-label">peer user_id <span style="color:var(--faint);font-weight:400;">(enclave network)</span></div>
       <div class="modal-input-wrap">
         <input id="nc-userid" class="plain" type="text" placeholder="e.g. enc_a1b2c3d4…"
-               autocomplete="off" spellcheck="false"/>
+               autocomplete="off" spellcheck="false"
+               oninput="validateField('userid')"
+               onkeydown="if(event.key==='Enter') submitNewChat()"/>
       </div>
+      <div class="field-hint" id="hint-userid"></div>
     </div>
 
     <div class="modal-divider">or</div>
@@ -263,8 +275,11 @@ CHAT_HTML = r"""
       <div class="modal-field-label">phone number <span style="color:var(--faint);font-weight:400;">(E.164 for SMS)</span></div>
       <div class="modal-input-wrap">
         <input id="nc-phone" class="plain" type="tel" placeholder="e.g. +919876543210"
-               autocomplete="off"/>
+               autocomplete="off"
+               oninput="validateField('phone')"
+               onkeydown="if(event.key==='Enter') submitNewChat()"/>
       </div>
+      <div class="field-hint" id="hint-phone"></div>
     </div>
 
     <div class="modal-divider">or</div>
@@ -273,8 +288,11 @@ CHAT_HTML = r"""
       <div class="modal-field-label">IP address &amp; port <span style="color:var(--faint);font-weight:400;">(direct peer)</span></div>
       <div class="modal-input-wrap">
         <input id="nc-ip" class="plain" type="text" placeholder="e.g. 192.168.1.42:5001"
-               autocomplete="off" spellcheck="false"/>
+               autocomplete="off" spellcheck="false"
+               oninput="validateField('ip')"
+               onkeydown="if(event.key==='Enter') submitNewChat()"/>
       </div>
+      <div class="field-hint" id="hint-ip"></div>
     </div>
 
     <div class="modal-error" id="newchat-error"></div>
@@ -417,15 +435,82 @@ async function modalUnlock() {
 
 // ── New chat modal ──────────────────────────────────────────────────────────
 
+// Validation rules
+const RE_PHONE  = /^\+[1-9]\d{6,14}$/;              // strict E.164
+const RE_IP     = /^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$/; // ipv4:port
+const RE_HOST   = /^[a-zA-Z0-9.-]+:\d{1,5}$/;        // hostname:port
+const RE_USERID = /^[\w\-.@+]{3,}$/;                  // any sane identifier ≥3 chars
+
+function setFieldState(field, inp, hint, state, msg) {
+  inp.classList.remove('input-ok','input-err');
+  hint.classList.remove('ok','err');
+  if (state === 'ok')  { inp.classList.add('input-ok');  hint.classList.add('ok');  hint.textContent = msg || ''; }
+  if (state === 'err') { inp.classList.add('input-err'); hint.classList.add('err'); hint.textContent = msg || ''; }
+  if (state === 'idle')                                 { hint.textContent = ''; }
+}
+
+function validateField(field) {
+  const uid   = $('nc-userid').value.trim();
+  const phone = $('nc-phone').value.trim();
+  const ip    = $('nc-ip').value.trim();
+
+  // Clear the global error whenever user types
+  $('newchat-error').textContent = '';
+
+  if (field === 'userid') {
+    const inp  = $('nc-userid');
+    const hint = $('hint-userid');
+    if (!uid) { setFieldState(field, inp, hint, 'idle'); return; }
+    if (RE_USERID.test(uid)) setFieldState(field, inp, hint, 'ok',  '\u2713 looks good');
+    else                     setFieldState(field, inp, hint, 'err', 'use only letters, numbers, _ - . @ + (min 3 chars)');
+  }
+
+  if (field === 'phone') {
+    const inp  = $('nc-phone');
+    const hint = $('hint-phone');
+    if (!phone) { setFieldState(field, inp, hint, 'idle'); return; }
+    if (RE_PHONE.test(phone))  setFieldState(field, inp, hint, 'ok',  '\u2713 valid E.164 number');
+    else if (/^[0-9+\s-]{7,}$/.test(phone)) setFieldState(field, inp, hint, 'err', 'use E.164 format: +[country][number] e.g. +919876543210');
+    else                                     setFieldState(field, inp, hint, 'err', 'not a valid phone number');
+  }
+
+  if (field === 'ip') {
+    const inp  = $('nc-ip');
+    const hint = $('hint-ip');
+    if (!ip) { setFieldState(field, inp, hint, 'idle'); return; }
+    if (RE_IP.test(ip)) {
+      // also validate each octet is 0-255 and port is 1-65535
+      const [addr, portStr] = ip.split(':');
+      const octets = addr.split('.').map(Number);
+      const port   = Number(portStr);
+      if (octets.every(o => o >= 0 && o <= 255) && port >= 1 && port <= 65535)
+        setFieldState(field, inp, hint, 'ok',  '\u2713 valid IP:port');
+      else
+        setFieldState(field, inp, hint, 'err', 'IP octet or port out of range (port: 1-65535)');
+    } else if (RE_HOST.test(ip)) {
+      const port = Number(ip.split(':')[1]);
+      if (port >= 1 && port <= 65535) setFieldState(field, inp, hint, 'ok',  '\u2713 valid host:port');
+      else                            setFieldState(field, inp, hint, 'err', 'port must be between 1 and 65535');
+    } else {
+      setFieldState(field, inp, hint, 'err', 'expected format: 192.168.1.42:5001 or hostname:port');
+    }
+  }
+}
+
 function newChat() {
-  // clear previous values
-  $('nc-userid').value = '';
-  $('nc-phone').value  = '';
-  $('nc-ip').value     = '';
+  ['nc-userid','nc-phone','nc-ip'].forEach(id => {
+    const el = $(id);
+    el.value = '';
+    el.classList.remove('input-ok','input-err');
+  });
+  ['hint-userid','hint-phone','hint-ip'].forEach(id => {
+    const el = $(id);
+    el.textContent = '';
+    el.classList.remove('ok','err');
+  });
   $('newchat-error').textContent = '';
   const bd = $('newchat-backdrop');
   bd.style.display = 'flex';
-  // tiny rAF so display:flex is painted before opacity transition kicks in
   requestAnimationFrame(() => bd.classList.remove('hidden'));
   setTimeout(() => $('nc-userid').focus(), 80);
 }
@@ -442,13 +527,28 @@ async function submitNewChat() {
   const ip    = $('nc-ip').value.trim();
   const errEl = $('newchat-error');
 
-  // pick whichever field was filled in (priority: user_id > phone > ip)
-  const id = uid || phone || ip;
-  if (!id) {
+  // Run all validators to surface any red borders before rejecting
+  if (uid)   validateField('userid');
+  if (phone) validateField('phone');
+  if (ip)    validateField('ip');
+
+  // Reject if nothing filled
+  if (!uid && !phone && !ip) {
     errEl.textContent = '\u26a0 fill in at least one field';
     return;
   }
 
+  // Reject if a filled field has a format error
+  const uidErr   = uid   && $('nc-userid').classList.contains('input-err');
+  const phoneErr = phone && $('nc-phone').classList.contains('input-err');
+  const ipErr    = ip    && $('nc-ip').classList.contains('input-err');
+  if (uidErr || phoneErr || ipErr) {
+    errEl.textContent = '\u26a0 fix the highlighted field(s) before continuing';
+    return;
+  }
+
+  // Priority: user_id > phone > ip
+  const id = uid || phone || ip;
   dismissNewChat();
   await api('/api/chats/' + encodeURIComponent(id) + '/append', {
     token: '-- chat started --', sender: 'system', ts: new Date().toISOString(),
