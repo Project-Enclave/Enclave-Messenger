@@ -61,7 +61,7 @@ CHAT_HTML = r"""
     html,body{height:100%;}
     body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;}
 
-    /* ── Unlock modal ─────────────────────────────────────────── */
+    /* ── Shared modal base ────────────────────────────────────── */
     .modal-backdrop{
       position:fixed;inset:0;
       background:rgba(0,0,0,.55);
@@ -76,7 +76,7 @@ CHAT_HTML = r"""
       border:1px solid var(--border);
       border-radius:16px;
       padding:2rem 2rem 1.75rem;
-      width:min(420px,90vw);
+      width:min(440px,90vw);
       box-shadow:0 24px 64px rgba(0,0,0,.35);
       display:flex;flex-direction:column;gap:1.1rem;
     }
@@ -111,9 +111,9 @@ CHAT_HTML = r"""
       color:var(--text);
       font-family:var(--font);
       outline:none;
-      letter-spacing:.08em;
       transition:border-color .15s;
     }
+    .modal-input-wrap input.plain{padding-right:1rem;}
     .modal-input-wrap input:focus{border-color:var(--primary);}
     .modal-eye{
       position:absolute;right:.75rem;top:50%;transform:translateY(-50%);
@@ -141,6 +141,12 @@ CHAT_HTML = r"""
       background:none;border:none;font-family:var(--font);
     }
     .modal-skip:hover{color:var(--muted);}
+
+    /* ── New-chat modal extras ────────────────────────────────── */
+    .modal-field-group{display:flex;flex-direction:column;gap:.35rem;}
+    .modal-field-label{font-size:.75rem;color:var(--faint);padding-left:.1rem;}
+    .modal-divider{display:flex;align-items:center;gap:.75rem;color:var(--faint);font-size:.75rem;}
+    .modal-divider::before,.modal-divider::after{content:'';flex:1;height:1px;background:var(--border);}
 
     /* ── Sidebar ──────────────────────────────────────────────── */
     .sidebar{width:300px;min-width:260px;display:flex;flex-direction:column;background:var(--surface);border-right:2px solid var(--border);height:100%;}
@@ -233,6 +239,47 @@ CHAT_HTML = r"""
     <div class="modal-error" id="modal-error"></div>
     <button class="modal-unlock-btn" id="modal-unlock-btn" onclick="modalUnlock()">unlock &amp; start node</button>
     <button class="modal-skip" onclick="dismissModal()">skip for now — browse without decryption</button>
+  </div>
+</div>
+
+<!-- ── New chat modal ───────────────────────────────────────────────────── -->
+<div class="modal-backdrop hidden" id="newchat-backdrop">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="newchat-title">
+    <div class="modal-lock-icon">&#128172;</div>
+    <div class="modal-title" id="newchat-title">new chat</div>
+    <div class="modal-sub">start a conversation with an enclave peer, phone number, or any local contact</div>
+
+    <div class="modal-field-group">
+      <div class="modal-field-label">peer user_id <span style="color:var(--faint);font-weight:400;">(enclave network)</span></div>
+      <div class="modal-input-wrap">
+        <input id="nc-userid" class="plain" type="text" placeholder="e.g. enc_a1b2c3d4…"
+               autocomplete="off" spellcheck="false"/>
+      </div>
+    </div>
+
+    <div class="modal-divider">or</div>
+
+    <div class="modal-field-group">
+      <div class="modal-field-label">phone number <span style="color:var(--faint);font-weight:400;">(E.164 for SMS)</span></div>
+      <div class="modal-input-wrap">
+        <input id="nc-phone" class="plain" type="tel" placeholder="e.g. +919876543210"
+               autocomplete="off"/>
+      </div>
+    </div>
+
+    <div class="modal-divider">or</div>
+
+    <div class="modal-field-group">
+      <div class="modal-field-label">IP address &amp; port <span style="color:var(--faint);font-weight:400;">(direct peer)</span></div>
+      <div class="modal-input-wrap">
+        <input id="nc-ip" class="plain" type="text" placeholder="e.g. 192.168.1.42:5001"
+               autocomplete="off" spellcheck="false"/>
+      </div>
+    </div>
+
+    <div class="modal-error" id="newchat-error"></div>
+    <button class="modal-unlock-btn" onclick="submitNewChat()">open chat &#8594;</button>
+    <button class="modal-skip" onclick="dismissNewChat()">cancel</button>
   </div>
 </div>
 
@@ -360,13 +407,54 @@ async function modalUnlock() {
     btn.textContent = 'unlock & start node';
     return;
   }
-  // Mirror passphrase into sidebar field so encrypt/decrypt works immediately
   $('cfg-pass').value = p;
   setStatus('\u2713 node started');
   dismissModal();
   await loadIdentity();
   await loadPeers();
   if (currentChatId) refreshMessages();
+}
+
+// ── New chat modal ──────────────────────────────────────────────────────────
+
+function newChat() {
+  // clear previous values
+  $('nc-userid').value = '';
+  $('nc-phone').value  = '';
+  $('nc-ip').value     = '';
+  $('newchat-error').textContent = '';
+  const bd = $('newchat-backdrop');
+  bd.style.display = 'flex';
+  // tiny rAF so display:flex is painted before opacity transition kicks in
+  requestAnimationFrame(() => bd.classList.remove('hidden'));
+  setTimeout(() => $('nc-userid').focus(), 80);
+}
+
+function dismissNewChat() {
+  const bd = $('newchat-backdrop');
+  bd.classList.add('hidden');
+  setTimeout(() => bd.style.display = 'none', 200);
+}
+
+async function submitNewChat() {
+  const uid   = $('nc-userid').value.trim();
+  const phone = $('nc-phone').value.trim();
+  const ip    = $('nc-ip').value.trim();
+  const errEl = $('newchat-error');
+
+  // pick whichever field was filled in (priority: user_id > phone > ip)
+  const id = uid || phone || ip;
+  if (!id) {
+    errEl.textContent = '\u26a0 fill in at least one field';
+    return;
+  }
+
+  dismissNewChat();
+  await api('/api/chats/' + encodeURIComponent(id) + '/append', {
+    token: '-- chat started --', sender: 'system', ts: new Date().toISOString(),
+  });
+  await loadChats();
+  openChat(id);
 }
 
 // ── Settings panel startNode (keeps working after modal dismissed) ──────────
@@ -611,17 +699,6 @@ function appendSysMsg(msg) {
   area.scrollTop = area.scrollHeight;
 }
 
-async function newChat() {
-  const id = prompt('peer user_id, phone number (E.164), or chat name:');
-  if (!id || !id.trim()) return;
-  const clean = id.trim();
-  await api('/api/chats/' + encodeURIComponent(clean) + '/append', {
-    token: '-- chat started --', sender: 'system', ts: new Date().toISOString(),
-  });
-  await loadChats();
-  openChat(clean);
-}
-
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -632,7 +709,6 @@ function escAttr(s) {
 (async () => {
   await loadIdentity();
   await loadChats();
-  // Auto-focus modal passphrase input
   setTimeout(() => $('modal-pass').focus(), 120);
   setInterval(async () => {
     await loadIdentity();
