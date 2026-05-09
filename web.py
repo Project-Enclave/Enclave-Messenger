@@ -61,6 +61,88 @@ CHAT_HTML = r"""
     html,body{height:100%;}
     body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;}
 
+    /* ── Unlock modal ─────────────────────────────────────────── */
+    .modal-backdrop{
+      position:fixed;inset:0;
+      background:rgba(0,0,0,.55);
+      backdrop-filter:blur(6px);
+      display:flex;align-items:center;justify-content:center;
+      z-index:1000;
+      transition:opacity .2s;
+    }
+    .modal-backdrop.hidden{opacity:0;pointer-events:none;}
+    .modal-card{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:16px;
+      padding:2rem 2rem 1.75rem;
+      width:min(420px,90vw);
+      box-shadow:0 24px 64px rgba(0,0,0,.35);
+      display:flex;flex-direction:column;gap:1.1rem;
+    }
+    .modal-lock-icon{
+      font-size:2.2rem;
+      text-align:center;
+      line-height:1;
+    }
+    .modal-title{
+      font-family:var(--display);
+      font-size:1.35rem;
+      font-weight:700;
+      color:var(--text);
+      text-align:center;
+      letter-spacing:-.01em;
+    }
+    .modal-sub{
+      font-size:.82rem;
+      color:var(--muted);
+      text-align:center;
+      line-height:1.5;
+      margin-top:-.4rem;
+    }
+    .modal-input-wrap{position:relative;}
+    .modal-input-wrap input{
+      width:100%;
+      background:var(--bg);
+      border:1.5px solid var(--border);
+      border-radius:10px;
+      padding:.65rem 2.6rem .65rem 1rem;
+      font-size:.95rem;
+      color:var(--text);
+      font-family:var(--font);
+      outline:none;
+      letter-spacing:.08em;
+      transition:border-color .15s;
+    }
+    .modal-input-wrap input:focus{border-color:var(--primary);}
+    .modal-eye{
+      position:absolute;right:.75rem;top:50%;transform:translateY(-50%);
+      background:none;border:none;cursor:pointer;
+      color:var(--faint);font-size:.9rem;padding:0;line-height:1;
+    }
+    .modal-unlock-btn{
+      width:100%;padding:.7rem;
+      background:var(--primary);color:#fff9f7;
+      border:none;border-radius:10px;
+      font-family:var(--font);font-size:.95rem;font-weight:700;
+      cursor:pointer;
+      transition:background .15s,transform .1s;
+    }
+    .modal-unlock-btn:hover{background:var(--coral);}
+    .modal-unlock-btn:active{transform:scale(.98);}
+    .modal-unlock-btn:disabled{opacity:.5;cursor:not-allowed;}
+    .modal-error{
+      font-size:.78rem;color:var(--coral);
+      text-align:center;min-height:1.1em;
+    }
+    .modal-skip{
+      font-size:.75rem;color:var(--faint);
+      text-align:center;cursor:pointer;
+      background:none;border:none;font-family:var(--font);
+    }
+    .modal-skip:hover{color:var(--muted);}
+
+    /* ── Sidebar ──────────────────────────────────────────────── */
     .sidebar{width:300px;min-width:260px;display:flex;flex-direction:column;background:var(--surface);border-right:2px solid var(--border);height:100%;}
     .brand{padding:1.1rem 1.2rem .9rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
     .logo{font-family:var(--display);font-size:1.25rem;font-weight:700;color:var(--primary);letter-spacing:-.01em;}
@@ -99,6 +181,7 @@ CHAT_HTML = r"""
     .node-status.on{background:rgba(80,200,120,.12);color:#6fcf97;}
     .node-status.off{background:rgba(242,114,128,.12);color:var(--coral);}
 
+    /* ── Chat panel ───────────────────────────────────────────── */
     .chat-panel{flex:1;display:flex;flex-direction:column;height:100%;min-width:0;}
     .chat-topbar{display:flex;align-items:center;gap:.85rem;padding:.9rem 1.4rem;border-bottom:2px solid var(--border);background:var(--surface);flex-shrink:0;}
     .chat-topbar .avatar{width:36px;height:36px;font-size:.8rem;}
@@ -135,27 +218,46 @@ CHAT_HTML = r"""
 </head>
 <body>
 
+<!-- ── Unlock modal ─────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="unlock-backdrop">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-lock-icon">&#128272;</div>
+    <div class="modal-title" id="modal-title">unlock enclave</div>
+    <div class="modal-sub">enter your passphrase to start the node and decrypt messages</div>
+    <div class="modal-input-wrap">
+      <input id="modal-pass" type="password" placeholder="passphrase"
+             autocomplete="current-password"
+             onkeydown="if(event.key==='Enter') modalUnlock()"/>
+      <button class="modal-eye" onclick="toggleModalEye()" id="modal-eye-btn" title="show/hide">&#128065;</button>
+    </div>
+    <div class="modal-error" id="modal-error"></div>
+    <button class="modal-unlock-btn" id="modal-unlock-btn" onclick="modalUnlock()">unlock &amp; start node</button>
+    <button class="modal-skip" onclick="dismissModal()">skip for now — browse without decryption</button>
+  </div>
+</div>
+
+<!-- ── Main layout ──────────────────────────────────────────────────────── -->
 <aside class="sidebar">
   <div class="brand">
     <div class="logo">project <span>enclave</span></div>
     <button class="theme-btn" onclick="toggleTheme()">&#9680;</button>
   </div>
   <div class="search-wrap">
-    <input id="search" placeholder="Search chats…" oninput="filterChats(this.value)"/>
+    <input id="search" placeholder="Search chats&hellip;" oninput="filterChats(this.value)"/>
   </div>
   <div class="chat-list" id="chat-list">
-    <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading…</div>
+    <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading&hellip;</div>
   </div>
-  <button class="new-chat-btn" onclick="newChat()">＋ new chat</button>
+  <button class="new-chat-btn" onclick="newChat()">&#xFF0B; new chat</button>
   <div class="sidebar-footer">
     <div class="profile-row">
       <div class="avatar" id="me-avatar">?</div>
       <div class="profile-info">
-        <div class="name" id="me-name">—</div>
+        <div class="name" id="me-name">&mdash;</div>
         <div class="uid" id="me-uid">no identity</div>
       </div>
     </div>
-    <div id="node-status" class="node-status off">● node offline</div>
+    <div id="node-status" class="node-status off">&#9679; node offline</div>
     <details class="settings-panel" id="settings-panel">
       <summary>&#9881;&#65039; settings &amp; config</summary>
       <div class="settings-body">
@@ -170,7 +272,7 @@ CHAT_HTML = r"""
         <label>device host (ip:port or cloud)</label>
         <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
         <button class="btn btn-ghost" onclick="saveConfig()">save sms config</button>
-        <div class="status-line" id="cfg-status">—</div>
+        <div class="status-line" id="cfg-status">&mdash;</div>
       </div>
     </details>
   </div>
@@ -186,8 +288,8 @@ CHAT_HTML = r"""
     <div class="chat-topbar">
       <div class="avatar" id="chat-avatar">?</div>
       <div class="topbar-info">
-        <div class="title" id="chat-title">—</div>
-        <div class="sub" id="chat-sub">—</div>
+        <div class="title" id="chat-title">&mdash;</div>
+        <div class="sub" id="chat-sub">&mdash;</div>
       </div>
       <div class="topbar-actions">
         <button onclick="refreshMessages()" title="refresh">&#8635;</button>
@@ -197,7 +299,7 @@ CHAT_HTML = r"""
     <div class="messages-area" id="messages-area"></div>
     <div class="composer-area">
       <input id="composer"
-             placeholder="write a secure message…"
+             placeholder="write a secure message&hellip;"
              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"/>
       <button class="send-btn" id="send-btn" onclick="sendMessage()">send &rarr;</button>
     </div>
@@ -227,6 +329,47 @@ function toggleTheme() {
   const h = document.documentElement;
   h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
 }
+
+// ── Unlock modal ────────────────────────────────────────────────────────────
+
+function toggleModalEye() {
+  const inp = $('modal-pass');
+  const btn = $('modal-eye-btn');
+  if (inp.type === 'password') { inp.type = 'text';     btn.innerHTML = '&#128064;'; }
+  else                         { inp.type = 'password'; btn.innerHTML = '&#128065;'; }
+}
+
+function dismissModal() {
+  const bd = $('unlock-backdrop');
+  bd.classList.add('hidden');
+  setTimeout(() => bd.style.display = 'none', 200);
+}
+
+async function modalUnlock() {
+  const p   = $('modal-pass').value;
+  const err = $('modal-error');
+  const btn = $('modal-unlock-btn');
+  if (!p) { err.textContent = 'passphrase cannot be empty'; return; }
+  btn.disabled = true;
+  btn.textContent = 'unlocking\u2026';
+  err.textContent = '';
+  const d = await api('/api/node/start', {passphrase: p});
+  if (d.error) {
+    err.textContent = '\u26a0 ' + d.error;
+    btn.disabled = false;
+    btn.textContent = 'unlock & start node';
+    return;
+  }
+  // Mirror passphrase into sidebar field so encrypt/decrypt works immediately
+  $('cfg-pass').value = p;
+  setStatus('\u2713 node started');
+  dismissModal();
+  await loadIdentity();
+  await loadPeers();
+  if (currentChatId) refreshMessages();
+}
+
+// ── Settings panel startNode (keeps working after modal dismissed) ──────────
 
 function onPassphraseChange() {
   clearTimeout(decryptDebounce);
@@ -398,7 +541,6 @@ async function sendMessage() {
   const ts   = new Date().toISOString();
   const peer = knownPeers[currentChatId];
 
-  // Try network delivery first if this is a known Enclave peer
   if (peer) {
     const r = await api('/api/message/send', {peer_id: currentChatId, plaintext: text});
     if (r.ok) {
@@ -411,7 +553,6 @@ async function sendMessage() {
     appendSysMsg('\u26a0 network delivery failed, saving locally only');
   }
 
-  // Fallback: encrypt locally and store (SMS if phone number)
   let token = text, encrypted = false;
   if (p) {
     try {
@@ -491,6 +632,8 @@ function escAttr(s) {
 (async () => {
   await loadIdentity();
   await loadChats();
+  // Auto-focus modal passphrase input
+  setTimeout(() => $('modal-pass').focus(), 120);
   setInterval(async () => {
     await loadIdentity();
     await loadPeers();
@@ -620,7 +763,7 @@ def delete_chat(chat_id):
 @app.route("/api/message/send", methods=["POST"])
 def message_send():
     data = request.get_json(force=True)
-    peer_id  = data.get("peer_id", "")
+    peer_id   = data.get("peer_id", "")
     plaintext = data.get("plaintext", "")
     if not peer_id or not plaintext:
         return err("peer_id and plaintext required", 400)
