@@ -69,7 +69,6 @@ def start_node(passphrase: str) -> Node:
             peer_store=peers,
             chat_store=chats,
         )
-        _node.set_passphrase(passphrase)
         _node.start()
         log.info("Node started")
         return _node
