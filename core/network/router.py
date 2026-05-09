@@ -7,7 +7,7 @@ Usage:
     node.send(peer_user_id, plaintext)  # encrypt + deliver
     node.stop()
 
-Inbound messages are automatically decrypted and written to ChatStore.
+Inbound messages are automatically stored; the UI decrypts on demand.
 """
 
 import logging
@@ -15,11 +15,11 @@ from datetime import datetime, timezone
 
 from .discovery import Discovery
 from .transport import Transport
-from core.crypto import CryptoManager
+from core.crypto import E2EManager
 
 log = logging.getLogger("network")
 
-TRANSPORT_PORT = 51821  # HTTP transport port (separate from Flask's 5000)
+TRANSPORT_PORT = 51821
 
 
 class Node:
@@ -30,11 +30,10 @@ class Node:
         peer_store:       PeerStore
         chat_store:       ChatStore
         """
-        self._im       = identity_manager
-        self._config   = config_store
-        self._peers    = peer_store
-        self._chats    = chat_store
-        self._passphrase = None  # set via node.set_passphrase() after unlock
+        self._im     = identity_manager
+        self._config = config_store
+        self._peers  = peer_store
+        self._chats  = chat_store
 
         self._identity = self._build_identity()
         port = config_store.get_setting("network_port") or TRANSPORT_PORT
@@ -66,21 +65,14 @@ class Node:
         log.info("[node] stopped")
 
     # ------------------------------------------------------------------
-    # Passphrase (needed for encrypt/decrypt)
-    # ------------------------------------------------------------------
-
-    def set_passphrase(self, passphrase: str):
-        self._passphrase = passphrase
-
-    # ------------------------------------------------------------------
     # Send
     # ------------------------------------------------------------------
 
     def send(self, peer_user_id: str, plaintext: str) -> bool:
         """
-        Encrypt plaintext and deliver to peer over HTTP transport.
+        Encrypt plaintext with E2E (X25519 ECDH) and deliver to peer.
         Returns True if delivered, False otherwise.
-        Raises RuntimeError if the node is locked (no passphrase set).
+        Raises RuntimeError if the peer's x25519_pub is unknown.
         """
         peer = self._peers.get(peer_user_id)
         if not peer:
@@ -90,12 +82,18 @@ class Node:
             log.warning("[node] send: no address for peer %s", peer_user_id[:12])
             return False
 
-        if not self._passphrase:
-            raise RuntimeError("Node is locked — call set_passphrase() before sending.")
+        peer_pub = peer.get("x25519_pub", "")
+        if not peer_pub:
+            raise RuntimeError(
+                f"No X25519 public key on record for peer {peer_user_id[:12]} — "
+                "cannot encrypt. Has the peer been discovered yet?"
+            )
 
         ts    = datetime.now(timezone.utc).isoformat()
-        token = CryptoManager(self._passphrase).encrypt(
+        e2e   = E2EManager(self._im.x25519_priv)
+        token = e2e.encrypt(
             plaintext=plaintext,
+            peer_x25519_pub_b64=peer_pub,
             chat_id=peer_user_id,
             created_at=ts,
         )
@@ -118,16 +116,16 @@ class Node:
     # ------------------------------------------------------------------
 
     def _on_inbound(self, envelope: dict):
-        sender_id = envelope.get("from", "")
-        chat_id   = envelope.get("chat_id", self._identity["user_id"])
-        token     = envelope.get("token", "")
-        ts        = envelope.get("ts", datetime.now(timezone.utc).isoformat())
+        sender_id  = envelope.get("from", "")
+        token      = envelope.get("token", "")
+        ts         = envelope.get("ts", datetime.now(timezone.utc).isoformat())
 
         if not sender_id or not token:
             log.warning("[node] inbound: malformed envelope")
             return
 
-        # Store raw token — web.py decrypts on demand (same as existing flow)
+        # Store the raw token. web.py decrypts on demand using E2EManager
+        # with the local x25519 private key + sender_pub embedded in the header.
         self._chats.append_message(sender_id, {
             "token":  token,
             "sender": sender_id,
@@ -161,8 +159,8 @@ class Node:
             return base64.urlsafe_b64encode(b).decode("utf-8")
 
         return {
-            "user_id":    self._im.get_user_id(),
-            "username":   self._config.username or "",
+            "user_id":     self._im.get_user_id(),
+            "username":    self._config.username or "",
             "ed25519_pub": raw_pub(self._im.ed25519_priv),
             "x25519_pub":  raw_pub(self._im.x25519_priv),
         }
