@@ -6,13 +6,113 @@ All business logic lives in main.py.
 This file only handles HTTP ↔ browser.
 """
 
+import ipaddress
+import socket
+import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from flask import Flask, request, jsonify, render_template_string
 
 import main as app_core
 
 app = Flask(__name__)
 
+# ---------------------------------------------------------------------------
+# LAN peer detection helpers
+# ---------------------------------------------------------------------------
+
+ENCLAVE_PORT = 5001   # default port the enclave Node listens on
+_SCAN_TIMEOUT = 0.35  # seconds per probe
+
+
+def _get_local_subnet() -> str | None:
+    """Return the /24 subnet of the machine's primary LAN interface."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        net = ipaddress.ip_network(local_ip + "/24", strict=False)
+        return str(net)
+    except Exception:
+        return None
+
+
+def _probe_host(ip: str, port: int, timeout: float) -> dict | None:
+    """
+    Try a TCP connect to ip:port.
+    Returns {ip, port, online:True} on success, None on failure.
+    """
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return {"ip": ip, "port": port, "online": True}
+    except (OSError, ConnectionRefusedError):
+        return None
+
+
+def scan_lan_peers(port: int = ENCLAVE_PORT, max_workers: int = 128) -> list:
+    """
+    TCP-scan the local /24 subnet for hosts listening on `port`.
+    Returns a list of {ip, port, online, user_id, username} dicts.
+    Merges results with already-known peers from PeerStore.
+    """
+    subnet = _get_local_subnet()
+    if not subnet:
+        return []
+
+    hosts = [str(h) for h in ipaddress.ip_network(subnet).hosts()]
+    # exclude self
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        self_ip = s.getsockname()[0]
+        s.close()
+        hosts = [h for h in hosts if h != self_ip]
+    except Exception:
+        pass
+
+    found = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_probe_host, ip, port, _SCAN_TIMEOUT): ip for ip in hosts}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result:
+                found.append(result)
+
+    # Merge with PeerStore so user_id / username are preserved
+    known = {p.get("ip"): p for p in app_core.peers.all() if p.get("ip")}
+    merged = []
+    for f in found:
+        existing = known.get(f["ip"], {})
+        merged.append({
+            "ip":       f["ip"],
+            "port":     f["port"],
+            "online":   True,
+            "user_id":  existing.get("user_id", f["ip"] + ":" + str(f["port"])),
+            "username": existing.get("username", ""),
+        })
+
+    # Also include already-known peers that weren't found in this scan
+    found_ips = {f["ip"] for f in found}
+    for p in app_core.peers.all():
+        if p.get("ip") and p["ip"] not in found_ips:
+            merged.append({**p, "online": False})
+
+    # Persist newly discovered peers
+    for peer in merged:
+        if peer["online"] and peer.get("user_id"):
+            try:
+                app_core.peers.upsert(peer)
+            except Exception:
+                pass
+
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Misc helpers
+# ---------------------------------------------------------------------------
 
 def err(msg, code=500, exc=None):
     p = {"error": msg}
@@ -215,7 +315,7 @@ CHAT_HTML = r"""
     .node-status.on{background:rgba(80,200,120,.12);color:#6fcf97;}
     .node-status.off{background:rgba(242,114,128,.12);color:var(--coral);}
 
-    /* ── Animated accordion (settings + peers) ───────────────────── */
+    /* ── Accordion ───────────────────────────────────────────────── */
     .accordion { margin-bottom:.2rem; }
     .accordion-trigger {
       width:100%;background:none;border:none;cursor:pointer;
@@ -228,7 +328,7 @@ CHAT_HTML = r"""
     .accordion-arrow {
       display:inline-block;
       font-size:.65rem;
-      transition:transform 0.3s cubic-bezier(0.16,1,0.3,1);
+      transition:transform 0.32s cubic-bezier(0.34,1.1,0.64,1);
       color:var(--faint);
     }
     .accordion-trigger[aria-expanded="true"] .accordion-arrow {
@@ -238,16 +338,15 @@ CHAT_HTML = r"""
       overflow:hidden;
       max-height:0;
       opacity:0;
-      transform:translateY(-6px);
+      transform:translateY(-8px);
       transition:
-        max-height 0.38s cubic-bezier(0.16,1,0.3,1),
-        opacity    0.28s cubic-bezier(0.16,1,0.3,1),
-        transform  0.28s cubic-bezier(0.16,1,0.3,1);
+        max-height 0.4s cubic-bezier(0.16,1,0.3,1),
+        opacity    0.3s cubic-bezier(0.16,1,0.3,1),
+        transform  0.3s cubic-bezier(0.16,1,0.3,1);
     }
     .accordion-body.open {
       opacity:1;
       transform:translateY(0);
-      /* max-height set by JS */
     }
 
     /* ── Settings body ────────────────────────────────────────── */
@@ -256,25 +355,60 @@ CHAT_HTML = r"""
     .settings-body input{
       background:var(--bg);border:1px solid var(--border);border-radius:7px;
       padding:.4rem .7rem;font-size:.82rem;color:var(--text);font-family:var(--font);
-      outline:none;width:100%;transition:border-color .15s;
+      outline:none;width:100%;transition:border-color .15s, box-shadow .15s;
     }
-    .settings-body input:focus{border-color:var(--primary);}
+    .settings-body input:focus{
+      border-color:var(--primary);
+      box-shadow:0 0 0 3px rgba(242,114,128,.12);
+    }
     .settings-body input[type=password]{letter-spacing:.1em;}
+
     /* staggered row reveal */
     .settings-row {
       opacity:0;
-      transform:translateY(6px);
-      transition: opacity 0.22s ease, transform 0.22s ease;
+      transform:translateY(8px) scale(0.98);
+      transition: opacity 0.24s ease, transform 0.24s cubic-bezier(0.16,1,0.3,1);
     }
-    .accordion-body.open .settings-row { opacity:1; transform:translateY(0); }
-    .accordion-body.open .settings-row:nth-child(1){transition-delay:.04s}
-    .accordion-body.open .settings-row:nth-child(2){transition-delay:.08s}
-    .accordion-body.open .settings-row:nth-child(3){transition-delay:.12s}
-    .accordion-body.open .settings-row:nth-child(4){transition-delay:.16s}
-    .accordion-body.open .settings-row:nth-child(5){transition-delay:.20s}
-    .accordion-body.open .settings-row:nth-child(6){transition-delay:.24s}
-    .accordion-body.open .settings-row:nth-child(7){transition-delay:.28s}
-    .accordion-body.open .settings-row:nth-child(8){transition-delay:.32s}
+    .accordion-body.open .settings-row { opacity:1; transform:translateY(0) scale(1); }
+    .accordion-body.open .settings-row:nth-child(1){transition-delay:.05s}
+    .accordion-body.open .settings-row:nth-child(2){transition-delay:.10s}
+    .accordion-body.open .settings-row:nth-child(3){transition-delay:.14s}
+    .accordion-body.open .settings-row:nth-child(4){transition-delay:.18s}
+    .accordion-body.open .settings-row:nth-child(5){transition-delay:.22s}
+    .accordion-body.open .settings-row:nth-child(6){transition-delay:.26s}
+    .accordion-body.open .settings-row:nth-child(7){transition-delay:.30s}
+    .accordion-body.open .settings-row:nth-child(8){transition-delay:.34s}
+
+    /* unlock button spin state */
+    .btn-unlock-spin::before {
+      content:'';
+      display:inline-block;
+      width:.7em;height:.7em;
+      border:2px solid rgba(255,255,255,.35);
+      border-top-color:#fff;
+      border-radius:50%;
+      animation: spin 0.6s linear infinite;
+      margin-right:.45rem;
+      vertical-align:middle;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* save config ripple */
+    .btn-ripple {
+      position:relative;overflow:hidden;
+    }
+    .btn-ripple::after {
+      content:'';
+      position:absolute;inset:0;
+      background:rgba(255,255,255,.18);
+      border-radius:inherit;
+      opacity:0;
+      transform:scale(0);
+      transition:opacity .4s, transform .4s;
+    }
+    .btn-ripple.rippling::after {
+      opacity:1;transform:scale(1);
+    }
 
     /* ── Peers panel ───────────────────────────────────────────── */
     .peers-body{padding:.5rem 0 .2rem;display:flex;flex-direction:column;gap:.4rem;}
@@ -282,14 +416,14 @@ CHAT_HTML = r"""
       display:flex;align-items:center;gap:.6rem;padding:.35rem .5rem;
       border-radius:8px;cursor:pointer;
       transition:background .12s, transform .1s;
-      opacity:0;transform:translateX(-8px);
+      opacity:0;transform:translateX(-10px);
     }
     .accordion-body.open .peer-row{opacity:1;transform:translateX(0);}
-    .accordion-body.open .peer-row:nth-child(1){transition-delay:.05s}
-    .accordion-body.open .peer-row:nth-child(2){transition-delay:.10s}
-    .accordion-body.open .peer-row:nth-child(3){transition-delay:.15s}
-    .accordion-body.open .peer-row:nth-child(4){transition-delay:.20s}
-    .accordion-body.open .peer-row:nth-child(5){transition-delay:.25s}
+    .accordion-body.open .peer-row:nth-child(1){transition-delay:.06s}
+    .accordion-body.open .peer-row:nth-child(2){transition-delay:.12s}
+    .accordion-body.open .peer-row:nth-child(3){transition-delay:.18s}
+    .accordion-body.open .peer-row:nth-child(4){transition-delay:.24s}
+    .accordion-body.open .peer-row:nth-child(5){transition-delay:.30s}
     .peer-row:hover{background:var(--border);transform:translateX(3px);}
     .peer-avatar{
       width:26px;height:26px;border-radius:6px;flex-shrink:0;
@@ -306,6 +440,21 @@ CHAT_HTML = r"""
     .peer-badge.online {background:rgba(80,200,120,.15);color:#6fcf97;}
     .peer-badge.offline{background:rgba(242,114,128,.1);color:var(--coral);}
     .peers-empty{font-size:.75rem;color:var(--faint);padding:.3rem .5rem;}
+
+    /* scan progress bar */
+    .scan-progress-wrap {
+      height:2px;border-radius:2px;background:var(--border);overflow:hidden;
+      margin-bottom:.35rem;
+      max-height:0;opacity:0;
+      transition:max-height .25s ease, opacity .25s ease;
+    }
+    .scan-progress-wrap.visible { max-height:4px; opacity:1; }
+    .scan-progress-bar {
+      height:100%;width:0%;border-radius:2px;
+      background:linear-gradient(90deg,var(--primary),var(--coral));
+      transition:width .4s cubic-bezier(0.16,1,0.3,1);
+    }
+
     .scan-btn{
       margin-top:.3rem;padding:.38rem .7rem;
       background:none;border:1px solid var(--border);border-radius:7px;
@@ -318,9 +467,25 @@ CHAT_HTML = r"""
     @keyframes scanPulse { from{opacity:.6} to{opacity:1} }
     .scan-dot{
       width:6px;height:6px;border-radius:50%;background:var(--primary);
-      transition:background .2s;
+      transition:background .2s, transform .3s;
     }
-    .scan-btn.scanning .scan-dot { background:var(--coral); }
+    .scan-btn.scanning .scan-dot {
+      background:var(--coral);
+      animation: dotPing 0.7s ease-in-out infinite alternate;
+    }
+    @keyframes dotPing { from{transform:scale(1)} to{transform:scale(1.6)} }
+
+    /* peer count badge on accordion label */
+    .peer-count-badge {
+      display:inline-flex;align-items:center;justify-content:center;
+      min-width:16px;height:16px;padding:0 4px;
+      background:rgba(242,114,128,.18);color:var(--primary);
+      border-radius:99px;font-size:.6rem;font-weight:700;
+      opacity:0;transform:scale(0.6);
+      transition:opacity .25s ease, transform .25s cubic-bezier(0.34,1.3,0.64,1);
+      margin-left:.3rem;
+    }
+    .peer-count-badge.visible { opacity:1; transform:scale(1); }
 
     /* ── Misc ───────────────────────────────────────────────────── */
     .btn{padding:.45rem .9rem;border-radius:7px;font-size:.82rem;font-weight:600;cursor:pointer;font-family:var(--font);border:none;transition:background .15s,transform .1s;}
@@ -329,7 +494,9 @@ CHAT_HTML = r"""
     .btn-primary:hover{background:var(--coral);}
     .btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);}
     .btn-ghost:hover{background:var(--border);color:var(--text);}
-    .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;min-height:1.2em;}
+    .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;min-height:1.2em;transition:color .2s;}
+    .status-line.ok  {color:#6fcf97;}
+    .status-line.err {color:var(--coral);}
 
     /* ── Chat panel ─────────────────────────────────────────────── */
     .chat-panel{flex:1;display:flex;flex-direction:column;height:100%;min-width:0;}
@@ -503,15 +670,20 @@ CHAT_HTML = r"""
     <!-- peers accordion -->
     <div class="accordion" id="peers-accordion">
       <button class="accordion-trigger" onclick="toggleAccordion('peers')" aria-expanded="false" id="peers-trigger">
-        <span>peers <span id="peers-count" style="color:var(--faint);font-size:.7rem;"></span></span>
+        <span>peers <span id="peers-count" class="peer-count-badge"></span></span>
         <span class="accordion-arrow">&#9660;</span>
       </button>
       <div class="accordion-body" id="peers-body">
         <div class="peers-body" id="peers-list">
           <div class="peers-empty">no peers detected yet</div>
         </div>
+        <!-- scan progress -->
+        <div class="scan-progress-wrap" id="scan-progress-wrap">
+          <div class="scan-progress-bar" id="scan-progress-bar"></div>
+        </div>
+        <div class="status-line" id="scan-status" style="margin-bottom:.25rem;"></div>
         <button class="scan-btn" id="scan-btn" onclick="scanPeers()">
-          <span class="scan-dot"></span> scan network
+          <span class="scan-dot"></span><span id="scan-btn-label">scan network</span>
         </button>
       </div>
     </div>
@@ -530,7 +702,7 @@ CHAT_HTML = r"""
                    oninput="onPassphraseChange()"/>
           </div>
           <div class="settings-row">
-            <button class="btn btn-primary" onclick="startNode()">unlock &amp; start node</button>
+            <button class="btn btn-primary btn-ripple" id="cfg-unlock-btn" onclick="startNode()">unlock &amp; start node</button>
           </div>
           <div class="settings-row">
             <label>sms gateway username</label>
@@ -545,7 +717,7 @@ CHAT_HTML = r"""
             <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
           </div>
           <div class="settings-row">
-            <button class="btn btn-ghost" onclick="saveConfig()">save sms config</button>
+            <button class="btn btn-ghost btn-ripple" id="cfg-save-btn" onclick="saveConfig()">save sms config</button>
           </div>
           <div class="settings-row">
             <div class="status-line" id="cfg-status">&mdash;</div>
@@ -602,7 +774,11 @@ async function api(url, body) {
   return r.json();
 }
 
-function setStatus(txt) { $('cfg-status').textContent = txt; }
+function setStatus(txt, type='') {
+  const el = $('cfg-status');
+  el.textContent = txt;
+  el.className = 'status-line' + (type ? ' '+type : '');
+}
 
 function toggleTheme() {
   const h = document.documentElement;
@@ -617,7 +793,7 @@ function toggleAccordion(name) {
   const isOpen  = trigger.getAttribute('aria-expanded') === 'true';
   if (isOpen) {
     trigger.setAttribute('aria-expanded', 'false');
-    body.style.maxHeight = body.scrollHeight + 'px'; // pin before collapsing
+    body.style.maxHeight = body.scrollHeight + 'px';
     requestAnimationFrame(() => {
       body.style.maxHeight = '0';
       body.classList.remove('open');
@@ -626,7 +802,6 @@ function toggleAccordion(name) {
     trigger.setAttribute('aria-expanded', 'true');
     body.classList.add('open');
     body.style.maxHeight = body.scrollHeight + 'px';
-    // after transition, remove fixed maxHeight so dynamic content can resize
     body.addEventListener('transitionend', function onEnd(e) {
       if (e.propertyName === 'max-height') {
         body.style.maxHeight = 'none';
@@ -634,6 +809,14 @@ function toggleAccordion(name) {
       }
     });
   }
+}
+
+function ripple(btnId) {
+  const btn = $(btnId);
+  btn.classList.remove('rippling');
+  void btn.offsetWidth; // reflow
+  btn.classList.add('rippling');
+  setTimeout(() => btn.classList.remove('rippling'), 420);
 }
 
 // ── Splash ────────────────────────────────────────────────────────────────
@@ -694,7 +877,7 @@ async function modalUnlock() {
     return;
   }
   $('cfg-pass').value = p;
-  setStatus('node started');
+  setStatus('node started', 'ok');
   dismissModal();
   await loadIdentity();
   await loadPeers();
@@ -822,11 +1005,19 @@ async function loadIdentity() {
 
 async function startNode() {
   const p = pass();
-  if (!p) { setStatus('enter passphrase first'); return; }
-  setStatus('starting node...');
+  if (!p) { setStatus('enter passphrase first', 'err'); return; }
+  const btn = $('cfg-unlock-btn');
+  btn.disabled = true;
+  btn.classList.add('btn-unlock-spin');
+  btn.textContent = 'unlocking\u2026';
+  setStatus('starting node\u2026');
   const d = await api('/api/node/start', {passphrase: p});
-  if (d.error) { setStatus('error: ' + d.error); return; }
-  setStatus('node started');
+  btn.disabled = false;
+  btn.classList.remove('btn-unlock-spin');
+  btn.textContent = 'unlock & start node';
+  if (d.error) { setStatus('error: ' + d.error, 'err'); return; }
+  ripple('cfg-unlock-btn');
+  setStatus('node started', 'ok');
   await loadIdentity();
   await loadPeers();
 }
@@ -839,48 +1030,94 @@ async function loadPeers() {
 }
 
 function renderPeers(peers) {
-  const list  = $('peers-list');
-  const count = $('peers-count');
+  const list   = $('peers-list');
+  const badge  = $('peers-count');
+  const online = peers.filter(p => p.online !== false);
   if (!peers.length) {
     list.innerHTML = '<div class="peers-empty">no peers detected yet</div>';
-    count.textContent = '';
+    badge.textContent = '';
+    badge.classList.remove('visible');
     return;
   }
-  count.textContent = '(' + peers.length + ')';
+  badge.textContent = online.length || peers.length;
+  badge.classList.add('visible');
   list.innerHTML = peers.map((p, i) => {
     const label  = p.username || p.user_id || 'unknown';
     const addr   = (p.ip && p.port) ? `${p.ip}:${p.port}` : (p.user_id || '');
-    const online = p.online !== false; // default to true if field absent
-    return `<div class="peer-row" style="transition-delay:${i*50}ms"
+    const isOnline = p.online !== false;
+    return `<div class="peer-row" style="transition-delay:${i*55}ms"
               onclick="openChat('${escAttr(p.user_id || addr)}')">
       <div class="peer-avatar">${label.slice(0,2).toUpperCase()}</div>
       <div class="peer-info">
         <div class="peer-name">${escHtml(label)}</div>
         <div class="peer-addr">${escHtml(addr)}</div>
       </div>
-      <span class="peer-badge ${online ? 'online' : 'offline'}">${online ? 'online' : 'offline'}</span>
+      <span class="peer-badge ${isOnline ? 'online' : 'offline'}">${isOnline ? 'online' : 'offline'}</span>
     </div>`;
   }).join('');
 
-  // re-open accordion if already open, to recalc height
   const body = $('peers-body');
   if (body.classList.contains('open')) {
     body.style.maxHeight = body.scrollHeight + 'px';
   }
 }
 
+// ── Peer scanning (LAN) ─────────────────────────────────────────────────────
+
 async function scanPeers() {
-  const btn = $('scan-btn');
+  const btn      = $('scan-btn');
+  const label    = $('scan-btn-label');
+  const progress = $('scan-progress-wrap');
+  const bar      = $('scan-progress-bar');
+  const status   = $('scan-status');
+
   btn.classList.add('scanning');
-  btn.querySelector('span:last-child').textContent = ' scanning...';
+  btn.disabled = true;
+  label.textContent = ' scanning LAN\u2026';
+  progress.classList.add('visible');
+  status.textContent = 'probing subnet\u2026';
+
+  // Animate the progress bar with fake increments while waiting
+  bar.style.width = '0%';
+  let fakeProgress = 0;
+  const ticker = setInterval(() => {
+    fakeProgress = Math.min(fakeProgress + Math.random() * 8, 88);
+    bar.style.width = fakeProgress + '%';
+  }, 320);
+
   try {
-    await loadPeers();
-    // open the peers accordion if closed
-    const trigger = $('peers-trigger');
-    if (trigger.getAttribute('aria-expanded') !== 'true') toggleAccordion('peers');
+    const d = await api('/api/peers/scan');
+    clearInterval(ticker);
+    bar.style.width = '100%';
+
+    const found = d.peers || [];
+    knownPeers = {};
+    found.forEach(p => { if (p.user_id) knownPeers[p.user_id] = p; });
+    renderPeers(found);
+
+    const onlineCount = found.filter(p => p.online !== false).length;
+    status.textContent = onlineCount
+      ? `\u2713 found ${onlineCount} peer${onlineCount > 1 ? 's' : ''}`
+      : 'no enclave peers found on LAN';
+    status.className = 'status-line' + (onlineCount ? ' ok' : '');
+
+    // open accordion if peers found and it's closed
+    if (onlineCount && $('peers-trigger').getAttribute('aria-expanded') !== 'true') {
+      toggleAccordion('peers');
+    }
+  } catch (e) {
+    clearInterval(ticker);
+    bar.style.width = '100%';
+    status.textContent = 'scan failed: ' + e.message;
+    status.className = 'status-line err';
   } finally {
+    setTimeout(() => {
+      progress.classList.remove('visible');
+      bar.style.width = '0%';
+    }, 1200);
     btn.classList.remove('scanning');
-    btn.querySelector('span:last-child').textContent = ' scan network';
+    btn.disabled = false;
+    label.textContent = ' scan network';
   }
 }
 
@@ -890,9 +1127,13 @@ async function saveConfig() {
   const u = $('cfg-sms-user').value.trim();
   const p = $('cfg-sms-pass').value;
   const h = $('cfg-sms-host').value.trim();
-  if (!u || !p) { setStatus('username + password required'); return; }
+  if (!u || !p) { setStatus('username + password required', 'err'); return; }
+  const btn = $('cfg-save-btn');
+  btn.disabled = true;
   const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
-  setStatus('sms config: ' + JSON.stringify(d));
+  ripple('cfg-save-btn');
+  btn.disabled = false;
+  setStatus(d.error ? 'error: '+d.error : '\u2713 sms config saved', d.error ? 'err' : 'ok');
 }
 
 // ── Chats ──────────────────────────────────────────────────────────────────
@@ -1147,6 +1388,16 @@ def node_start():
 @app.route("/api/peers")
 def list_peers():
     return jsonify({"peers": app_core.get_peers()})
+
+
+@app.route("/api/peers/scan")
+def scan_peers_route():
+    """Scan the local LAN subnet for Enclave peers on port 5001."""
+    try:
+        found = scan_lan_peers()
+        return jsonify({"peers": found, "count": len(found)})
+    except Exception as e:
+        return err(str(e), 500, exc=e)
 
 # -- Crypto ------------------------------------------------------------------
 
