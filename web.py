@@ -11,6 +11,7 @@ import socket
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify, render_template_string
 
@@ -24,6 +25,10 @@ app = Flask(__name__)
 
 ENCLAVE_PORT = 5001   # default port the enclave Node listens on
 _SCAN_TIMEOUT = 0.35  # seconds per probe
+
+# A peer is considered stale after this many seconds without a heartbeat.
+# discovery.py broadcasts every 30 s; we allow 3 missed intervals → 90 s.
+_PEER_STALE_SECONDS = 90
 
 
 def _get_local_subnet() -> str | None:
@@ -108,6 +113,31 @@ def scan_lan_peers(port: int = ENCLAVE_PORT, max_workers: int = 128) -> list:
                 pass
 
     return merged
+
+
+def _stamp_online(peers: list) -> list:
+    """
+    Annotate each peer dict with an ``online`` boolean.
+
+    A peer is considered online if its ``last_seen`` timestamp is within the
+    last _PEER_STALE_SECONDS seconds.  Peers that have never been seen (no
+    ``last_seen`` field) or whose timestamp cannot be parsed are marked offline.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_PEER_STALE_SECONDS)
+    result = []
+    for p in peers:
+        peer = dict(p)
+        last_seen_str = peer.get("last_seen", "")
+        try:
+            last_seen = datetime.fromisoformat(last_seen_str)
+            # Ensure timezone-aware for comparison
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            peer["online"] = last_seen >= cutoff
+        except (ValueError, TypeError):
+            peer["online"] = False
+        result.append(peer)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1401,7 +1431,8 @@ def node_start():
 
 @app.route("/api/peers")
 def list_peers():
-    return jsonify({"peers": app_core.get_peers()})
+    raw = app_core.get_peers()
+    return jsonify({"peers": _stamp_online(raw)})
 
 
 @app.route("/api/peers/scan")
