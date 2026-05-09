@@ -80,6 +80,7 @@ class Node:
         """
         Encrypt plaintext and deliver to peer over HTTP transport.
         Returns True if delivered, False otherwise.
+        Raises RuntimeError if the node is locked (no passphrase set).
         """
         peer = self._peers.get(peer_user_id)
         if not peer:
@@ -90,8 +91,7 @@ class Node:
             return False
 
         if not self._passphrase:
-            log.warning("[node] send: no passphrase set — message not encrypted")
-            return False
+            raise RuntimeError("Node is locked — call set_passphrase() before sending.")
 
         ts    = datetime.now(timezone.utc).isoformat()
         token = CryptoManager(self._passphrase).encrypt(
