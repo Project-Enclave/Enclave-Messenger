@@ -7,6 +7,10 @@ Inbound:  a tiny Flask-compatible WSGI app that receives messages POSTed
 
 Outbound: send_message() does a plain HTTP POST to the peer's address.
 
+Endpoints:
+  POST /inbound   receive an encrypted message envelope
+  GET  /health    liveness check — returns 200 {"ok": true}
+
 Message envelope POSTed over the wire:
   {
     "from":    str,   # sender user_id
@@ -26,6 +30,8 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 
 log = logging.getLogger("network")
+
+_HEALTH_RESP = b'{"ok": true}'
 
 
 class _SilentHandler(WSGIRequestHandler):
@@ -70,6 +76,13 @@ class Transport:
         path   = environ.get("PATH_INFO", "")
         method = environ.get("REQUEST_METHOD", "")
 
+        if method == "GET" and path == "/health":
+            start_response("200 OK", [
+                ("Content-Type", "application/json"),
+                ("Content-Length", str(len(_HEALTH_RESP))),
+            ])
+            return [_HEALTH_RESP]
+
         if method == "POST" and path == "/inbound":
             try:
                 # CONTENT_LENGTH may be an empty string — coerce safely
@@ -78,7 +91,7 @@ class Transport:
                 envelope = json.loads(body.decode("utf-8"))
                 self._on_message(envelope)
                 status = "200 OK"
-                resp   = b"{\"ok\": true}"
+                resp   = b'{"ok": true}'
             except Exception as e:
                 log.warning("[transport] inbound error: %s", e)
                 status = "400 Bad Request"
@@ -111,4 +124,17 @@ class Transport:
                 return resp.status == 200
         except URLError as e:
             log.warning("[transport] send failed to %s: %s", url, e)
+            return False
+
+    def is_alive(self, peer_address: str) -> bool:
+        """
+        Quick liveness check against peer_address/health.
+        Returns True if the peer's transport server responds 200.
+        """
+        url = f"{peer_address}/health"
+        req = Request(url)
+        try:
+            with urlopen(req, timeout=3) as resp:
+                return resp.status == 200
+        except URLError:
             return False

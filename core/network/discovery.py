@@ -60,6 +60,9 @@ class Discovery:
 
     def stop(self):
         self._stop.set()
+        # Wait for both threads to finish so sockets close cleanly.
+        self._announce_thread.join(timeout=2)
+        self._listen_thread.join(timeout=2)
 
     # ------------------------------------------------------------------
     # Announce
