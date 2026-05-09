@@ -4,18 +4,19 @@ e2e.py — End-to-end encryption using X25519 ECDH + AES-256-GCM.
 How it works
 ------------
 Sender:
-  1. Load recipient's X25519 public key from PeerStore.
+  1. Load recipient’s X25519 public key from PeerStore.
   2. Perform ECDH: shared_secret = sender_x25519_priv * recipient_x25519_pub
   3. Derive message key: HKDF-SHA256(shared_secret, salt, info="enclave-e2e")
-  4. Encrypt with AES-256-GCM; include sender's x25519_pub in the header
+  4. Encrypt with AES-256-GCM; include sender’s x25519_pub in the header
      so the recipient can derive the same shared secret.
 
-Recipient (and sender re-reading their own sent messages):
-  1. Extract sender_pub from the envelope header.
-  2. Perform ECDH: shared_secret = local_x25519_priv * sender_x25519_pub
-     (For the *sender* re-reading: derive using their own priv * recipient_pub
-      — same scalar math, same result.)
-  3. Derive the same message key, decrypt.
+Recipient decrypting:
+  shared_secret = local_priv * sender_pub   (from header)
+
+Sender re-reading their own sent message:
+  sender_pub == local_pub, so the above would give local_priv * local_pub
+  which is wrong.  Instead: shared_secret = local_priv * recipient_pub
+  (same scalar multiplication, same result as the original encrypt step).
 
 The passphrase / CryptoManager is still used for *local storage* (identity
 PEM files). It is no longer involved in messages sent over the wire.
@@ -120,12 +121,18 @@ class E2EManager:
     # Decrypt (recipient side, or sender re-reading)
     # ------------------------------------------------------------------
 
-    def decrypt(self, token: str) -> str:
+    def decrypt(self, token: str, peer_x25519_pub_b64: str | None = None) -> str:
         """
         Decrypt a token produced by E2EManager.encrypt().
 
-        The local private key is used with the sender_pub in the header
-        to re-derive the shared secret.
+        Normal (recipient) path:
+            shared = local_priv × sender_pub   (sender_pub is in the header)
+
+        Sender re-reading their own message:
+            sender_pub == local_pub, so the normal path would give the wrong
+            shared secret.  In this case the caller MUST supply
+            *peer_x25519_pub_b64* (the recipient’s pub key from PeerStore)
+            so we can compute local_priv × recipient_pub instead.
         """
         envelope = json.loads(_b64d(token).decode("utf-8"))
 
@@ -141,9 +148,23 @@ class E2EManager:
         if header.get("purpose") != "message":
             raise ValueError("Invalid envelope purpose")
 
-        sender_pub = X25519PublicKey.from_public_bytes(_b64d(header["sender_pub"]))
-        shared     = self._priv.exchange(sender_pub)
+        sender_pub_bytes = _b64d(header["sender_pub"])
+        local_pub_bytes  = _pub_raw(self._priv)
 
+        if sender_pub_bytes == local_pub_bytes:
+            # We are the original sender re-reading our own message.
+            # Use local_priv × recipient_pub to recover the same shared secret.
+            if not peer_x25519_pub_b64:
+                raise ValueError(
+                    "Cannot decrypt own message: peer_x25519_pub_b64 is required "
+                    "when the local node is the sender."
+                )
+            other_pub = X25519PublicKey.from_public_bytes(_b64d(peer_x25519_pub_b64))
+        else:
+            # Normal recipient path.
+            other_pub = X25519PublicKey.from_public_bytes(sender_pub_bytes)
+
+        shared     = self._priv.exchange(other_pub)
         salt       = _b64d(header["salt"])
         nonce      = _b64d(header["nonce"])
         ciphertext = _b64d(envelope["ciphertext"])
