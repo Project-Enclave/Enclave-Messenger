@@ -72,7 +72,8 @@ class Transport:
 
         if method == "POST" and path == "/inbound":
             try:
-                length = int(environ.get("CONTENT_LENGTH", 0))
+                # CONTENT_LENGTH may be an empty string — coerce safely
+                length = int(environ.get("CONTENT_LENGTH") or 0)
                 body   = environ["wsgi.input"].read(length)
                 envelope = json.loads(body.decode("utf-8"))
                 self._on_message(envelope)
