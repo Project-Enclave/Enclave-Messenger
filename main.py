@@ -23,6 +23,7 @@ import threading
 
 from core.identity import IdentityManager
 from core.crypto import CryptoManager
+from core.crypto.e2e import E2EManager
 from core.storage import ConfigStore, ChatStore, PeerStore, LogStore
 from core.plugins import SMSGateway
 from core.network import Node
@@ -134,7 +135,26 @@ def get_identity_status() -> dict:
 
 
 def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: str) -> str:
-    """Encrypt a message token. Used by web.py for the passphrase flow."""
+    """
+    Encrypt a message token for display/storage.
+
+    If the identity is unlocked and the peer has an X25519 public key in
+    PeerStore, use E2EManager (X25519-AES-256-GCM).  Otherwise fall back
+    to the legacy CryptoManager (passphrase + AES-256-GCM).
+    """
+    # Try E2E path: identity unlocked + peer pub key available
+    if identity.x25519_priv is not None:
+        peer_info = peers.get(chat_id)
+        peer_pub  = peer_info.get("x25519_pub") if peer_info else None
+        if peer_pub:
+            return E2EManager(identity.x25519_priv).encrypt(
+                plaintext=plaintext,
+                peer_x25519_pub_b64=peer_pub,
+                chat_id=chat_id,
+                created_at=created_at,
+            )
+
+    # Legacy path — passphrase-based
     return CryptoManager(passphrase).encrypt(
         plaintext=plaintext,
         chat_id=chat_id,
@@ -143,7 +163,23 @@ def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: s
 
 
 def decrypt_message(token: str, passphrase: str) -> str:
-    """Decrypt a message token. Used by web.py for the passphrase flow."""
+    """
+    Decrypt a message token.
+
+    E2E tokens (alg == "X25519-AES-256-GCM") are decrypted with
+    E2EManager using the local X25519 private key — the passphrase is
+    not needed for these.  Legacy passphrase tokens fall back to
+    CryptoManager.
+    """
+    if E2EManager.is_e2e_token(token):
+        if identity.x25519_priv is None:
+            raise RuntimeError(
+                "Identity not unlocked — cannot decrypt E2E token. "
+                "Start the node with your passphrase first."
+            )
+        return E2EManager(identity.x25519_priv).decrypt(token)
+
+    # Legacy path
     return CryptoManager(passphrase).decrypt(token)
 
 
