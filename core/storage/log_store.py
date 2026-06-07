@@ -51,7 +51,7 @@ def get_logger(name: str = "enclave", base_dir: str = "storage") -> logging.Logg
 
 
 class LogStore:
-    """Thin wrapper around get_logger for consistent usage across the app."""
+    """Thin wrapper around get_logger for consistent usage across the project."""
 
     def __init__(self, name: str = "enclave", base_dir: str = "storage"):
         self.logger = get_logger(name=name, base_dir=base_dir)

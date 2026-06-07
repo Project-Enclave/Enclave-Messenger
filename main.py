@@ -8,11 +8,13 @@ Running directly:
     python main.py run              # start node (discovery + transport)
     python main.py run --passphrase secret
 
-CLI utilities (still work as before):
+CLI utilities :
     python main.py init
     python main.py encrypt ...
     python main.py decrypt ...
     python main.py sms send ...
+
+Note: This is the same as the ~/core.py from the first couple of versions.
 """
 
 import argparse
