@@ -2,8 +2,8 @@
 web.py — Enclave Messenger browser UI.
 Run with: python web.py  →  http://localhost:5000
 
-All business logic lives in main.py.
 This file only handles HTTP ↔ browser.
+The actual logic for crypto and comms is NOT handled by this file.
 """
 
 import ipaddress
@@ -59,11 +59,11 @@ def _ws_broadcast(event: str, data: dict):
 # ---------------------------------------------------------------------------
 
 ENCLAVE_PORT = 5001   # default port the enclave Node listens on
-_SCAN_TIMEOUT = 0.35  # seconds per probe
+_SCAN_TIMEOUT = 0.5  # seconds per probe
 
 # A peer is considered stale after this many seconds without a heartbeat.
 # discovery.py broadcasts every 30 s; we allow 3 missed intervals → 90 s.
-_PEER_STALE_SECONDS = 90
+_PEER_STALE_SECONDS = 40
 
 
 def _get_local_subnet() -> str | None:
@@ -655,10 +655,10 @@ CHAT_HTML = r"""
 <!-- splash -->
 <div id="splash">
   <div class="splash-logo">
-    <span class="splash-word-project">project</span>
-    <span class="splash-word-enclave">enclave</span>
+    <span class="splash-word-project">project enclave |</span>
+    <span class="splash-word-enclave">| enclave messenger</span>
   </div>
-  <div class="splash-sub">secure &middot; private &middot; encrypted</div>
+  <div class="splash-sub">secure &middot; private &middot; encrypted4u</div>
   <div class="splash-bar"><div class="splash-bar-fill"></div></div>
 </div>
 
@@ -678,12 +678,12 @@ CHAT_HTML = r"""
       <span style="font-size:.78rem;color:var(--faint);">connection mode</span>
       <div id="conn-toggle" onclick="toggleConnMode()"
            style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:9999px;padding:3px;gap:3px;cursor:pointer;user-select:none;">
-        <span id="conn-ws"   class="conn-chip active">⚡ real-time</span>
-        <span id="conn-poll" class="conn-chip">↺ polling</span>
+        <span id="conn-ws"   class="conn-chip active">/|\real-time</span>
+        <span id="conn-poll" class="conn-chip">\|/polling</span>
       </div>
     </div>
     <button class="modal-unlock-btn" id="modal-unlock-btn" onclick="modalUnlock()">unlock &amp; start node</button>
-    <button class="modal-skip" onclick="dismissModal()">skip for now &mdash; browse without decryption</button>
+    <button class="modal-skip" onclick="dismissModal()">skip for now &mdash; browse without decryption (not recomended)</button>
   </div>
 </div>
 
@@ -1167,8 +1167,8 @@ async function scanPeers() {
   status.textContent = 'probing subnet\u2026';
 
   // Animate the progress bar with fake increments while waiting
-  bar.style.width = '0%';
-  let fakeProgress = 0;
+  bar.style.width = '100%';
+  let fakeProgress = 100;
   const ticker = setInterval(() => {
     fakeProgress = Math.min(fakeProgress + Math.random() * 8, 88);
     bar.style.width = fakeProgress + '%';
@@ -1290,7 +1290,7 @@ async function refreshMessages() {
   const msgs = d.messages || [];
   const p    = pass();
   if (!msgs.length) {
-    area.innerHTML = '<div class="empty-state"><div class="big">enclave</div><div>no messages yet</div></div>';
+    area.innerHTML = '<div class="empty-state"><div class="big">enclave</div><div>no messages yet<br>you must be a tester, or a loner<br>sad -dev</div></div>';
     return;
   }
   const rows = await Promise.all(msgs.map(async (entry) => {
@@ -1737,5 +1737,8 @@ if _SOCK_AVAILABLE:
 
 if __name__ == "__main__":
     port  = app_core.config.get_setting("port", 5000)
+    input0=input("Debug? (yes/no/y/n/True/False): ")
     debug = app_core.config.get_setting("debug", False)
+    if input0=="Yes" or input0=="y" or input0=="True":
+        debug = app_core.config.get_setting("debug", True)
     app.run(host="127.0.0.1", port=port, debug=debug)

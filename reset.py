@@ -8,7 +8,7 @@ Undoes everything setup.py did:
   4. Removes .venv          (if created by setup.py uv fallback)
   5. Restores setup.py      (so you can run setup again)
 
-Run with: python3 reset.py
+Run with: `python3 reset.py`
 """
 
 import os
