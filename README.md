@@ -48,15 +48,13 @@ no accounts. no servers. your identity is a keypair that lives on your device. y
 
 - [x] identity system (keypairs, device bundles, contact trust)
 - [ ] DHT node (peer discovery over internet)
-- [ ] LAN discovery
-- [ ] message format + delivery
+- [x] LAN discovery
+- [x] message format + delivery
 - [ ] double ratchet sessions
 - [ ] flutter ui
 - [ ] bluetooth transport
 - [ ] lora transport
 - [ ] plugin system
-
-a functional version exists and has been tested with a small number of people. this branch (`Start-from-Scratch`) is a full rewrite with a cleaner architecture.
 
 ***
 
@@ -70,14 +68,8 @@ when there is something:
 git clone https://github.com/Project-Enclave/Enclave-Messenger
 cd Enclave-Messenger
 pip install -r requirements.txt
-python main.py
+python web.py
 ```
-
-***
-
-## why from scratch
-
-the previous version did not work **at all** but the code was a _mess_. i learned a lot building it and now i want to do it properly — clean layers, modular design, plugin support from the start instead of bolted on later.
 
 ***
 
