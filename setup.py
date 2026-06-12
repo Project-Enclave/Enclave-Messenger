@@ -18,6 +18,16 @@ import shutil
 
 VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv")
 
+# ── setup verify vars ───────────────────────────────────────────────────────
+
+step_python_version_pass=False
+step_install_requirements_pass=False
+step_config_pass=False
+step_identity_pass=False
+step_self_destruct_pass=False
+step_failed=0
+step_failed_total=0
+fatal=False
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -60,21 +70,47 @@ def venv_active():
 
 # ── steps ─────────────────────────────────────────────────────────────────
 
+def step_dump(err):
+    banner("Exiting. Dumping all vars for debuging")
+    print(f"Am i running in the correct version of snake?: {step_python_version_pass}")
+    print(f"Did i install all the stuff that i need?: {step_install_requirements_pass}")
+    print(f"Did the configure myself?: {step_config_pass}")
+    print(f"Do i have an identity: {step_identity_pass}")
+    print(f"did i kms?: {step_self_destruct_pass}")
+    print(f"step failed last round: {step_failed}")
+    print(f"Total steps failed: {step_failed_total}")
+    print(f"kms due to something not working?: {err}")
+    print("kms due to dump?: True")
+    if err:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
 def step_python_version():
+    global step_python_version_pass, step_failed, step_failed_total
     banner("Step 1 — Python version check")
     major, minor = sys.version_info[:2]
     if major < 3 or (major == 3 and minor < 10):
         err(f"Python 3.10+ required. You have {major}.{minor}")
-        sys.exit(1)
+        step_python_version_pass=False
+        step_failed+=1
+        step_failed_total+=1
+        step_dump(True)
+    step_python_version_pass=True
+    step_failed=0
     ok(f"Python {major}.{minor} — OK")
 
 
 def step_install_requirements():
+    global step_install_requirements_pass, step_failed, step_failed_total
     banner("Step 2 — Installing requirements")
     req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
     if not os.path.exists(req_file):
         err("requirements.txt not found!")
-        sys.exit(1)
+        step_install_requirements_pass=False
+        step_failed+=1
+        step_failed_total+=1
+        step_dump(True)
 
     # ─ try pip first ────────────────────────────────────────────────────
     pip_check = run([sys.executable, "-m", "pip", "--version"], capture_output=True)
@@ -84,16 +120,21 @@ def step_install_requirements():
             ok("All requirements installed via pip.")
             return
         err("pip install failed.")
-        sys.exit(1)
+        step_install_requirements_pass=False
+        step_failed+=1
+        step_failed_total+=1
 
     # ─ pip not available: fall back to uv ──────────────────────────────
-    info("pip not found — falling back to uv")
+    info("something went wrong with pip — falling back to uv")
 
     uv = shutil.which("uv")
     if not uv:
         err("uv not found either. Install uv first: https://github.com/astral-sh/uv")
         err("  curl -Ls https://astral.sh/uv/install.sh | sh")
-        sys.exit(1)
+        step_install_requirements_pass=False
+        step_failed+=1
+        step_failed_total+=1
+        step_dump(True)
 
     # create venv if not already inside one
     if not venv_active():
@@ -102,7 +143,10 @@ def step_install_requirements():
             result = run([uv, "venv", VENV_DIR])
             if result.returncode != 0:
                 err("uv venv creation failed.")
-                sys.exit(1)
+                step_install_requirements_pass=False     
+                step_failed+=1                      
+                step_failed_total+=1
+                step_dump(True)
             ok(f"Venv created at {VENV_DIR}")
         else:
             ok(f"Venv already exists at {VENV_DIR}")
@@ -118,12 +162,17 @@ def step_install_requirements():
     result = run([uv, "pip", "install", "-r", req_file])
     if result.returncode != 0:
         err("uv pip install failed.")
-        sys.exit(1)
+        step_failed+=1
+        step_failed_total+=1
+        step_dump(True)
+    step_failed=0
+    step_install_requirements_pass=True
     ok("All requirements installed via uv.")
     ok(f"Activate venv with: source {VENV_DIR}/bin/activate")
 
 
 def step_config():
+    global step_config_pass, step_failed, step_failed_total
     banner("Step 3 — App configuration")
     from core.storage import ConfigStore
     config = ConfigStore()
@@ -153,12 +202,17 @@ def step_config():
     port_str = ask("  Web UI port", default="5000")
     try:
         config.set_setting("port", int(port_str))
+        step_config_pass=True
         ok(f"Port set to: {port_str}")
     except (ValueError, TypeError):
         ok("Invalid port, keeping default 5000.")
+        step_failed_total+=1
+        step_config_pass=True
+        step_failed=0
 
 
 def step_identity():
+    global step_identity_pass, step_failed, step_failed_total
     banner("Step 4 — Identity")
     from core.identity import IdentityManager
     ident = IdentityManager()
@@ -174,28 +228,48 @@ def step_identity():
     confirm = getpass.getpass("  Confirm passphrase: ").strip()
     if passphrase != confirm:
         err("Passphrases do not match.")
-        sys.exit(1)
+        step_identity_pass=False     
+        step_failed+=1                      
+        step_failed_total+=1
+        if step_failed > 2:
+            step_dump(True)
     ident.generate_new_identity()
     ident.save_identity(passphrase=passphrase)
+    step_identity_pass=True
+    step_failed=0
     ok(f"Identity created. User ID: {ident.get_user_id()}")
 
 
 def step_self_destruct():
+    global step_self_destruct_pass, step_failed, step_failed_total
     banner("Step 5 — Cleanup")
     try:
         os.remove(os.path.abspath(__file__))
+        step_self_destruct_pass=True
         ok("setup.py deleted — setup complete!")
     except OSError as e:
         err(f"Could not delete setup.py: {e}")
-
+        step_self_destruct_pass=False     
+        step_failed+=1                      
+        step_failed_total+=1
+        step_dump(True)
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("\n\033[95m  Enclave Messenger — Setup\033[0m")
-    step_python_version()
-    step_install_requirements()
-    step_config()
-    step_identity()
-    step_self_destruct()
+    step_python_version() #no need to re-run if it fails
+    step_install_requirements() #should try again
+    while not step_install_requirements_pass:
+        step_install_requirements()
+
+    step_config() #should try again
+    if not step_config_pass:
+        step_config()
+
+    step_identity() #should try again
+    while not step_identity_pass:
+        step_identity()
+
+    #step_self_destruct()  #DO NOT UN-COMMENT FOR DEV
     print("\n\033[92m  All done! Run with: python web.py\033[0m\n")
