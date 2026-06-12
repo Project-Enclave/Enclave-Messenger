@@ -658,7 +658,7 @@ CHAT_HTML = r"""
     <span class="splash-word-project">project enclave |</span>
     <span class="splash-word-enclave">| enclave messenger</span>
   </div>
-  <div class="splash-sub">secure &middot; private &middot; encrypted4u</div>
+  <div class="splash-sub">secure &middot; private &middot; encrypted</div>
   <div class="splash-bar"><div class="splash-bar-fill"></div></div>
 </div>
 
@@ -1738,4 +1738,11 @@ if _SOCK_AVAILABLE:
 if __name__ == "__main__":
     port  = app_core.config.get_setting("port", 5000)
     debug = app_core.config.get_setting("debug", False)
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    host_ip=str(input("Where do you want to run this? (host/lan?): "))
+    if host_ip=="host" or host_ip=="localhost" or host_ip=="127.0.0.1":
+        app.run(host="127.0.0.1", port=port, debug=debug)
+    elif host_ip=="lan" or host_ip=="0.0.0.0":
+        app.run(host="0.0.0.0", port=port, debug=debug)
+    else:
+        print("Error: Invalid option! falling back to host")
+        app.run(host="0.0.0.0", port=port, debug=debug)
