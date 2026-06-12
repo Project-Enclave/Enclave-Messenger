@@ -30,12 +30,11 @@ identity layer
   └── x25519 prekeys  → how sessions start (key exchange)
 
 crypto layer
-  ├── --custom cipher   → pre-encryption layer--
   └── noise protocol + double ratchet → e2e encryption per conversation
 
 ui
-  ├── flutter → desktop + android (first targets)
-  └── python bridge → web ui later
+  ├── flutter → desktop + android (main targets)
+  └── python bridge → web ui first
 ```
 
 no accounts. no servers. your identity is a keypair that lives on your device. your user id is derived from your public key. nobody can take it from you.
@@ -70,6 +69,13 @@ cd Enclave-Messenger
 pip install -r requirements.txt
 python web.py
 ```
+
+or
+
+```bash
+git clone https://github.com/Project-Enclave/Enclave-Messenger
+cd Enclave-Messenger
+uv
 
 ***
 

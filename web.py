@@ -1,6 +1,6 @@
 """
 web.py — Enclave Messenger browser UI.
-Run with: python web.py  →  http://localhost:5000
+Run with: python web.py
 
 This file only handles HTTP ↔ browser.
 The actual logic for crypto and comms is NOT handled by this file.
@@ -62,7 +62,7 @@ ENCLAVE_PORT = 5001   # default port the enclave Node listens on
 _SCAN_TIMEOUT = 0.5  # seconds per probe
 
 # A peer is considered stale after this many seconds without a heartbeat.
-# discovery.py broadcasts every 30 s; we allow 3 missed intervals → 90 s.
+# discovery.py broadcasts every 30 s; we allow 1 missed intervals and a 10 s delay→ 40 .
 _PEER_STALE_SECONDS = 40
 
 
@@ -605,7 +605,7 @@ CHAT_HTML = r"""
       from { opacity:0; transform:scale(0.85) translateY(8px); } to { opacity:1; transform:scale(1) translateY(0); }
     }
     .bubble{
-      padding:.7rem 1rem;border-radius:16px 16px 16px 5px;
+      padding:.1rem 1rem;border-radius:16px 16px 16px 5px;
       background:var(--surface);border:1px solid var(--border);
       font-size:.9rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;
       transition:box-shadow .15s;
@@ -836,7 +836,7 @@ CHAT_HTML = r"""
     <div class="messages-area" id="messages-area"></div>
     <div class="composer-area">
       <input id="composer"
-             placeholder="write a secure message&hellip;"
+             placeholder="send a message&hellip;"
              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"/>
       <button class="send-btn" id="send-btn" onclick="sendMessage()">send &rarr;</button>
     </div>
@@ -1168,7 +1168,7 @@ async function scanPeers() {
 
   // Animate the progress bar with fake increments while waiting
   bar.style.width = '100%';
-  let fakeProgress = 100;
+  let fakeProgress = -100;
   const ticker = setInterval(() => {
     fakeProgress = Math.min(fakeProgress + Math.random() * 8, 88);
     bar.style.width = fakeProgress + '%';
@@ -1737,8 +1737,5 @@ if _SOCK_AVAILABLE:
 
 if __name__ == "__main__":
     port  = app_core.config.get_setting("port", 5000)
-    input0=input("Debug? (yes/no/y/n/True/False): ")
     debug = app_core.config.get_setting("debug", False)
-    if input0=="Yes" or input0=="y" or input0=="True":
-        debug = app_core.config.get_setting("debug", True)
-    app.run(host="127.0.0.1", port=port, debug=debug)
+    app.run(host="0.0.0.0", port=port, debug=debug)
