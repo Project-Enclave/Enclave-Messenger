@@ -28,7 +28,7 @@ step_self_destruct_pass=False
 step_failed=0
 step_failed_total=0
 fatal=False
-
+venv=""
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 def banner(text):
@@ -233,6 +233,7 @@ def step_identity():
         step_failed_total+=1
         if step_failed > 2:
             step_dump(True)
+        return
     ident.generate_new_identity()
     ident.save_identity(passphrase=passphrase)
     step_identity_pass=True
@@ -271,5 +272,5 @@ if __name__ == "__main__":
     while not step_identity_pass:
         step_identity()
 
-    #step_self_destruct()  #DO NOT UN-COMMENT FOR DEV
+    step_self_destruct()  #DO NOT UN-COMMENT FOR DEV
     print("\n\033[92m  All done! Run with: python web.py\033[0m\n")
