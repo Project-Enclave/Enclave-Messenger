@@ -99,23 +99,23 @@ def step_venv():
 
 def step_restore_setup():
     banner("Step 5 — Restore setup.py")
-    setup_path = os.path.join(HERE, "setup.py")
+    setup_path = os.path.join(HERE, "set.py")
     if os.path.exists(setup_path):
-        skip("setup.py already exists")
+        skip("set.py already exists")
         return
 
-    info("setup.py was deleted by the self-destruct — restoring from git...")
+    info("set.py was deleted by the self-destruct — restoring from git...")
     # try git checkout first
     try:
         import subprocess
         result = subprocess.run(
-            ["git", "checkout", "HEAD", "--", "setup.py"],
+            ["git", "checkout", "HEAD", "--", "setu.py"],
             cwd=HERE,
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            ok("setup.py restored via git checkout.")
+            ok("set.py restored via git checkout.")
             return
         else:
             info(f"git checkout failed: {result.stderr.strip()}")
@@ -155,7 +155,7 @@ def main():
     step_venv()
     step_restore_setup()
 
-    print("\n\033[92m  Reset complete. Run python3 setup.py to start fresh.\033[0m\n")
+    print("\n\033[92m  Reset complete. Run python3 set.py to start fresh.\033[0m\n")
 
 
 if __name__ == "__main__":
