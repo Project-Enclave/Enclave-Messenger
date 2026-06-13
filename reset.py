@@ -128,7 +128,7 @@ def step_restore_setup():
         import urllib.request
         url = (
             "https://raw.githubusercontent.com/"
-            "Project-Enclave/Enclave-Messenger/main/setup.py"
+            "Project-Enclave/Enclave-Messenger/main/set.py"
         )
         urllib.request.urlretrieve(url, setup_path)
         ok(f"setup.py downloaded from GitHub.")

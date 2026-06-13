@@ -1,5 +1,5 @@
 """
-setup.py — Enclave Messenger first-run setup.
+set.py — Enclave Messenger first-run setup.
 
 Does:
   1. Checks Python version (3.10+)
@@ -36,8 +36,8 @@ def banner(text):
     print(f"\033[96m  {text}\033[0m")
     print(f"\033[96m{'=' * 50}\033[0m")
 
-def ok(text):  print(f"  \033[92m✓\033[0m  {text}")
-def err(text): print(f"  \033[91m✗\033[0m  {text}")
+def ok(text):  print(f"  \033[92m>:D\033[0m  {text}")
+def err(text): print(f"  \033[91mx\033[0m  {text}")
 def info(text): print(f"  \033[93m→\033[0m  {text}")
 
 def ask(prompt, default=None, secret=False):
@@ -72,19 +72,21 @@ def venv_active():
 
 def step_dump(err):
     banner("Exiting. Dumping all vars for debuging")
-    print(f"Am i running in the correct version of snake?: {step_python_version_pass}")
-    print(f"Did i install all the stuff that i need?: {step_install_requirements_pass}")
-    print(f"Did the configure myself?: {step_config_pass}")
-    print(f"Do i have an identity: {step_identity_pass}")
-    print(f"did i kms?: {step_self_destruct_pass}")
-    print(f"step failed last round: {step_failed}")
-    print(f"Total steps failed: {step_failed_total}")
-    print(f"kms due to something not working?: {err}")
-    print("kms due to dump?: True")
-    if err:
+    print(f"     Am i running in the correct version of snake?: {step_python_version_pass}")
+    print(f"     Did i install all the stuff that i need?: {step_install_requirements_pass}")
+    print(f"     Did the configure myself?: {step_config_pass}")
+    print(f"     Do i have an identity: {step_identity_pass}")
+    print(f"     did i kms?: {step_self_destruct_pass}")
+    print(f"     step failed last round: {step_failed}")
+    print(f"     Total steps failed: {step_failed_total}")
+    print(f"     kms due to something not working?: {err}")
+    if err==True:
         sys.exit(1)
-    else:
+    elif err==False:
+        print("\n\033[92m  All done! Run with: python web.py\033[0m\n")
         sys.exit(0)
+    else:
+        print("actually im not exiting")
 
 def step_python_version():
     global step_python_version_pass, step_failed, step_failed_total
@@ -218,6 +220,8 @@ def step_identity():
     ident = IdentityManager()
     if ident.has_identity():
         ok("Identity already exists — skipping.")
+        step_identity_pass=True
+        step_failed=0
         return
     print("  No identity found. Creating one now...")
     import getpass
@@ -259,7 +263,9 @@ def step_self_destruct():
 
 if __name__ == "__main__":
     print("\n\033[95m  Enclave Messenger — Setup\033[0m")
+
     step_python_version() #no need to re-run if it fails
+
     step_install_requirements() #should try again
     while not step_install_requirements_pass:
         step_install_requirements()
@@ -273,4 +279,7 @@ if __name__ == "__main__":
         step_identity()
 
     step_self_destruct()  #DO NOT UN-COMMENT FOR DEV
+
+    step_dump(False)
+
     print("\n\033[92m  All done! Run with: python web.py\033[0m\n")
