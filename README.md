@@ -75,7 +75,7 @@ or
 ```bash
 git clone https://github.com/Project-Enclave/Enclave-Messenger
 cd Enclave-Messenger
-python3 setup.py
+python3 set.py
 ```
 
 ***
