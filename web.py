@@ -146,11 +146,16 @@ def node_start():
     if not p:
         return err("passphrase required", 400)
 
-    # If the node is already running, reject the request outright.
-    # Do NOT call start_node() again — it returns early without validating
-    # the passphrase, which would allow any passphrase to appear to succeed.
     if app_core.get_node() is not None:
-        return err("node already running", 409)
+        # Node is already running. Verify the passphrase by attempting to
+        # decrypt the identity keys — load_identity() raises on wrong pass.
+        # This allows refresh and cross-device access without a restart,
+        # while still blocking any passphrase other than the correct one.
+        try:
+            app_core.identity.load_identity(passphrase=p)
+        except Exception:
+            return err("invalid passphrase", 403)
+        return jsonify({"ok": True, "user_id": app_core.identity.get_user_id()})
 
     try:
         app_core.start_node(passphrase=p)
