@@ -135,12 +135,23 @@ def identity_generate():
 
 # -- Node --------------------------------------------------------------------
 
+# Guard: callbacks must only be registered once.
+_callbacks_registered = False
+
+
 @app.route("/api/node/start", methods=["POST"])
 def node_start():
     data = request.get_json(force=True)
     p = data.get("passphrase", "")
     if not p:
         return err("passphrase required", 400)
+
+    # If the node is already running, reject the request outright.
+    # Do NOT call start_node() again — it returns early without validating
+    # the passphrase, which would allow any passphrase to appear to succeed.
+    if app_core.get_node() is not None:
+        return err("node already running", 409)
+
     try:
         app_core.start_node(passphrase=p)
         _register_node_callbacks()
@@ -150,6 +161,9 @@ def node_start():
 
 
 def _register_node_callbacks():
+    global _callbacks_registered
+    if _callbacks_registered:
+        return
     node = app_core.get_node()
     if node is None:
         return
@@ -169,6 +183,7 @@ def _register_node_callbacks():
 
     node.on_inbound_callbacks.append(_ws_inbound)
     node.on_peer_found_callbacks.append(_ws_peer)
+    _callbacks_registered = True
 
 # -- Peers -------------------------------------------------------------------
 
