@@ -1,11 +1,18 @@
 """
 web.py — Enclave Messenger browser UI.
-Run with: python web.py
+Run with: python web.py [--host host|lan]
+
+  --host host   Bind to 127.0.0.1 only (default)
+  --host lan    Bind to 0.0.0.0 (all interfaces)
+
+Alternatively set the ENCLAVE_HOST env var to 'host' or 'lan'.
 
 This file only handles HTTP ↔ browser.
 The actual logic for crypto and comms is NOT handled by this file.
 """
 
+import argparse
+import os
 import threading
 import traceback
 from datetime import datetime, timezone, timedelta
@@ -334,13 +341,21 @@ if _SOCK_AVAILABLE:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Enclave Messenger web UI")
+    parser.add_argument(
+        "--host",
+        choices=["host", "lan"],
+        default=None,
+        help="Bind target: 'host' (127.0.0.1) or 'lan' (0.0.0.0). "
+             "Falls back to ENCLAVE_HOST env var, then defaults to 'host'.",
+    )
+    args = parser.parse_args()
+
+    bind_mode = args.host or os.environ.get("ENCLAVE_HOST", "host")
+    bind_ip = "0.0.0.0" if bind_mode == "lan" else "127.0.0.1"
+
     port  = app_core.config.get_setting("port", 5000)
     debug = app_core.config.get_setting("debug", False)
-    host_ip=str(input("Where do you want to run this? (host/lan?): "))
-    if host_ip=="host" or host_ip=="localhost" or host_ip=="127.0.0.1":
-        app.run(host="127.0.0.1", port=port, debug=debug)
-    elif host_ip=="lan" or host_ip=="0.0.0.0":
-        app.run(host="0.0.0.0", port=port, debug=debug)
-    else:
-        print("Error: Invalid option! falling back to host")
-        app.run(host="0.0.0.0", port=port, debug=debug)
+
+    print(f" * Binding to {bind_ip}:{port}")
+    app.run(host=bind_ip, port=port, debug=debug)
