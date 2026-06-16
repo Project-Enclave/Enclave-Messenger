@@ -27,7 +27,7 @@ from core.identity import IdentityManager
 from core.crypto import CryptoManager
 from core.crypto.e2e import E2EManager
 from core.storage import ConfigStore, ChatStore, PeerStore, LogStore
-from core.plugins import SMSGateway
+from core.plugins import SMSGateway, PluginManager
 from core.network import Node
 
 # ---------------------------------------------------------------------------
@@ -39,6 +39,16 @@ chats    = ChatStore()
 peers    = PeerStore()
 identity = IdentityManager()
 log      = LogStore(name="enclave")
+
+# Plugin manager — discovered on import, enabled after node starts.
+plugin_manager = PluginManager(
+    config=config,
+    peers=peers,
+    chats=chats,
+    identity=identity,
+    log=log,
+)
+plugin_manager.discover()
 
 # The Node is None until start_node() is called.
 _node: Node | None = None
@@ -73,6 +83,11 @@ def start_node(passphrase: str) -> Node:
         )
         _node.start()
         log.info("Node started")
+
+        # Wire node into plugin manager and enable saved plugins.
+        plugin_manager.set_node(_node)
+        plugin_manager.enable_all_saved()
+
         return _node
 
 
@@ -168,7 +183,7 @@ def decrypt_message(token: str, passphrase: str, chat_id: str | None = None) -> 
 
     E2E tokens are decrypted with E2EManager using the local X25519 private
     key.  When the local node is the original sender (sender_pub == local_pub),
-    E2EManager needs the recipient’s pub key to re-derive the shared secret;
+    E2EManager needs the recipient's pub key to re-derive the shared secret;
     this is looked up from PeerStore via *chat_id*.
 
     Legacy passphrase tokens fall back to CryptoManager.
@@ -202,6 +217,11 @@ def configure_sms(username: str, password: str, host: str | None):
 
 
 def send_sms(to: str, message: str) -> dict:
+    # Prefer plugin instance if available and configured
+    plugin = plugin_manager.get("sms_gateway")
+    if plugin and plugin._enabled:
+        return plugin.get_sms_instance().send(to, message)
+    # Fallback to legacy ConfigStore-based approach
     sms = SMSGateway.from_config(config)
     return sms.send(to, message)
 

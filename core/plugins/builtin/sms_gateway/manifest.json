@@ -1,0 +1,9 @@
+{
+    "id": "sms_gateway",
+    "display_name": "SMS Gateway",
+    "description": "Send SMS messages via android-sms-gateway (local device or cloud).",
+    "version": "1.0.0",
+    "author": "Enclave",
+    "min_enclave_version": "1.0.0",
+    "permissions": ["config"]
+}

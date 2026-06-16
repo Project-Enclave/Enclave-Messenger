@@ -18,6 +18,7 @@ DEFAULTS = {
         "debug": False,
         "theme": "dark",
     },
+    "plugins": {},
 }
 
 
@@ -35,6 +36,7 @@ class ConfigStore:
             merged = {**DEFAULTS, **saved}
             merged["sms_gateway"] = {**DEFAULTS["sms_gateway"], **saved.get("sms_gateway", {})}
             merged["settings"] = {**DEFAULTS["settings"], **saved.get("settings", {})}
+            merged["plugins"] = saved.get("plugins", {})
             return merged
         return dict(DEFAULTS)
 
