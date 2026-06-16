@@ -6,11 +6,8 @@ This file only handles HTTP ↔ browser.
 The actual logic for crypto and comms is NOT handled by this file.
 """
 
-import ipaddress
-import socket
 import threading
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify, render_template
@@ -21,6 +18,7 @@ except ImportError:
     _SOCK_AVAILABLE = False
 
 import main as app_core
+from core.network.scanner import scan_lan_peers, ENCLAVE_PORT
 
 app = Flask(__name__)
 
@@ -55,99 +53,12 @@ def _ws_broadcast(event: str, data: dict):
                     pass
 
 # ---------------------------------------------------------------------------
-# LAN peer detection helpers
+# Peer staleness helper
 # ---------------------------------------------------------------------------
 
-ENCLAVE_PORT = 5001   # default port the enclave Node listens on
-_SCAN_TIMEOUT = 0.5  # seconds per probe
-
 # A peer is considered stale after this many seconds without a heartbeat.
-# discovery.py broadcasts every 30 s; we allow 1 missed intervals and a 10 s delay→ 40 .
+# discovery.py broadcasts every 30 s; we allow 1 missed interval and a 10 s delay → 40.
 _PEER_STALE_SECONDS = 40
-
-
-def _get_local_subnet() -> str | None:
-    """Return the /24 subnet of the machine's primary LAN interface."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        net = ipaddress.ip_network(local_ip + "/24", strict=False)
-        return str(net)
-    except Exception:
-        return None
-
-
-def _probe_host(ip: str, port: int, timeout: float) -> dict | None:
-    """
-    Try a TCP connect to ip:port.
-    Returns {ip, port, online:True} on success, None on failure.
-    """
-    try:
-        with socket.create_connection((ip, port), timeout=timeout):
-            return {"ip": ip, "port": port, "online": True}
-    except (OSError, ConnectionRefusedError):
-        return None
-
-
-def scan_lan_peers(port: int = ENCLAVE_PORT, max_workers: int = 128) -> list:
-    """
-    TCP-scan the local /24 subnet for hosts listening on `port`.
-    Returns a list of {ip, port, online, user_id, username} dicts.
-    Merges results with already-known peers from PeerStore.
-    """
-    subnet = _get_local_subnet()
-    if not subnet:
-        return []
-
-    hosts = [str(h) for h in ipaddress.ip_network(subnet).hosts()]
-    # exclude self
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        self_ip = s.getsockname()[0]
-        s.close()
-        hosts = [h for h in hosts if h != self_ip]
-    except Exception:
-        pass
-
-    found = []
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_probe_host, ip, port, _SCAN_TIMEOUT): ip for ip in hosts}
-        for fut in as_completed(futures):
-            result = fut.result()
-            if result:
-                found.append(result)
-
-    # Merge with PeerStore so user_id / username are preserved
-    known = {p.get("ip"): p for p in app_core.peers.all() if p.get("ip")}
-    merged = []
-    for f in found:
-        existing = known.get(f["ip"], {})
-        merged.append({
-            "ip":       f["ip"],
-            "port":     f["port"],
-            "online":   True,
-            "user_id":  existing.get("user_id", f["ip"] + ":" + str(f["port"])),
-            "username": existing.get("username", ""),
-        })
-
-    # Also include already-known peers that weren't found in this scan
-    found_ips = {f["ip"] for f in found}
-    for p in app_core.peers.all():
-        if p.get("ip") and p["ip"] not in found_ips:
-            merged.append({**p, "online": False})
-
-    # Persist newly discovered peers
-    for peer in merged:
-        if peer["online"] and peer.get("user_id"):
-            try:
-                app_core.peers.upsert(peer)
-            except Exception:
-                pass
-
-    return merged
 
 
 def _stamp_online(peers: list) -> list:
@@ -165,7 +76,6 @@ def _stamp_online(peers: list) -> list:
         last_seen_str = peer.get("last_seen", "")
         try:
             last_seen = datetime.fromisoformat(last_seen_str)
-            # Ensure timezone-aware for comparison
             if last_seen.tzinfo is None:
                 last_seen = last_seen.replace(tzinfo=timezone.utc)
             peer["online"] = last_seen >= cutoff
@@ -268,7 +178,7 @@ def list_peers():
 def scan_peers_route():
     """Scan the local LAN subnet for Enclave peers on port 5001."""
     try:
-        found = scan_lan_peers()
+        found = scan_lan_peers(app_core.peers)
         return jsonify({"peers": found, "count": len(found)})
     except Exception as e:
         return err(str(e), 500, exc=e)
@@ -305,9 +215,6 @@ def crypto_decrypt():
         )
         return jsonify({"plaintext": pt})
     except Exception as e:
-        # Return 200 with null plaintext so the UI shows [enc] badge instead of
-        # crashing. JS checks `dec.plaintext !== undefined && dec.plaintext !== null`,
-        # so null correctly falls back to showing the raw token.
         return jsonify({"plaintext": None, "error": str(e)})
 
 # -- Chats -------------------------------------------------------------------
