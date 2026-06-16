@@ -136,35 +136,32 @@ def node_start():
         return err("passphrase required", 400)
     try:
         app_core.start_node(passphrase=p)
-        _patch_node_callbacks()
+        _register_node_callbacks()
         return jsonify({"ok": True, "user_id": app_core.identity.get_user_id()})
     except Exception as e:
         return err(str(e), 500, exc=e)
 
 
-def _patch_node_callbacks():
+def _register_node_callbacks():
     node = app_core.get_node()
     if node is None:
         return
-    _orig_inbound = node._on_inbound
+
     def _ws_inbound(envelope: dict):
-        _orig_inbound(envelope)
         _ws_broadcast("new_message", {
             "chat_id":   envelope.get("from", ""),
             "sender_id": envelope.get("from", ""),
             "ts":        envelope.get("ts", ""),
         })
-    node._on_inbound = _ws_inbound
 
-    _orig_peer = node._on_peer_found
     def _ws_peer(peer: dict):
-        _orig_peer(peer)
-        from datetime import datetime, timezone
         peer_data = dict(peer)
         peer_data["online"] = True
         peer_data["last_seen"] = datetime.now(timezone.utc).isoformat()
         _ws_broadcast("peer_update", {"peer": peer_data})
-    node._on_peer_found = _ws_peer
+
+    node.on_inbound_callbacks.append(_ws_inbound)
+    node.on_peer_found_callbacks.append(_ws_peer)
 
 # -- Peers -------------------------------------------------------------------
 

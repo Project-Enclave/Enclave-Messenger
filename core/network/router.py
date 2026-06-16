@@ -35,6 +35,11 @@ class Node:
         self._peers  = peer_store
         self._chats  = chat_store
 
+        # Public callback lists — append callables to hook into node events.
+        # Each callback receives the same argument as the internal handler.
+        self.on_inbound_callbacks: list = []
+        self.on_peer_found_callbacks: list = []
+
         self._identity = self._build_identity()
         port = config_store.get_setting("network_port") or TRANSPORT_PORT
 
@@ -124,14 +129,18 @@ class Node:
             log.warning("[node] inbound: malformed envelope")
             return
 
-        # Store the raw token. web.py decrypts on demand using E2EManager
-        # with the local x25519 private key + sender_pub embedded in the header.
         self._chats.append_message(sender_id, {
             "token":  token,
             "sender": sender_id,
             "ts":     ts,
         })
         log.info("[node] inbound message from %s", sender_id[:12])
+
+        for cb in self.on_inbound_callbacks:
+            try:
+                cb(envelope)
+            except Exception:
+                log.exception("[node] on_inbound callback error")
 
     # ------------------------------------------------------------------
     # Peer events
@@ -142,6 +151,12 @@ class Node:
                  peer.get("username", "?"),
                  peer.get("user_id", "")[:12],
                  peer.get("ip", "?"))
+
+        for cb in self.on_peer_found_callbacks:
+            try:
+                cb(peer)
+            except Exception:
+                log.exception("[node] on_peer_found callback error")
 
     # ------------------------------------------------------------------
     # Internal helpers
