@@ -26,6 +26,7 @@ except ImportError:
 
 import main as app_core
 from core.network.scanner import scan_lan_peers, ENCLAVE_PORT
+from core.plugins.bluetooth import BluetoothUnavailableError
 
 app = Flask(__name__)
 
@@ -316,6 +317,27 @@ def sms_status(message_id):
     try:
         from core.plugins import SMSGateway
         return jsonify(SMSGateway.from_config(app_core.config).get_status(message_id))
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+# -- Bluetooth ---------------------------------------------------------------
+
+@app.route("/api/bt/scan")
+def bt_scan():
+    """
+    Trigger a Bluetooth device discovery scan.
+    Optional query param: ?duration=8 (seconds, default 8).
+    Returns: { "devices": [ { "name": str, "mac": str }, ... ] }
+    """
+    try:
+        duration = int(request.args.get("duration", 8))
+    except (ValueError, TypeError):
+        duration = 8
+    try:
+        devices = app_core.scan_bluetooth(duration=duration)
+        return jsonify({"devices": devices, "count": len(devices)})
+    except BluetoothUnavailableError as e:
+        return err(str(e), 503)
     except Exception as e:
         return err(str(e), 500, exc=e)
 
