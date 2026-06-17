@@ -1,7 +1,7 @@
 """
 bluetooth.py — Bluetooth transport plugin for Enclave Messenger
 
-Handles device discovery and RFCOMM message exchange using PyBluez.
+Handles device discovery and RFCOMM message exchange.
 Bluetooth chat IDs use the prefix 'BT:' followed by the device MAC address,
 e.g. 'BT:AA:BB:CC:DD:EE:FF'.
 
@@ -11,9 +11,9 @@ Usage:
     devices = bt.scan()          # -> [{'name': 'Phone', 'mac': 'AA:BB:CC:DD:EE:FF'}, ...]
     bt.send('AA:BB:CC:DD:EE:FF', 'Hello from Enclave!')
 
-Requires:
-    pip install PyBluez
-    On Linux: sudo apt install libbluetooth-dev
+Scan strategy:
+    1. Uses PyBluez if installed (pip install pybluez2 on Linux, PyBluez-win10 on Windows)
+    2. Falls back to shelling out to bluetoothctl (Linux/BlueZ, no extra packages needed)
 
 Note: Bluetooth hardware must be present and powered on.
 If unavailable, all methods raise BluetoothUnavailableError with a clear message.
@@ -23,17 +23,20 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import subprocess
 import threading
+import time
 from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-RFCOMM_PORT  = 3        # RFCOMM channel used by Enclave
-SOCKET_UUID  = "94f39d29-7d6d-437d-973b-fba39e49d4ee"  # Enclave SDP service UUID
-CONNECT_TIMEOUT = 10   # seconds
+RFCOMM_PORT     = 3
+SOCKET_UUID     = "94f39d29-7d6d-437d-973b-fba39e49d4ee"
+CONNECT_TIMEOUT = 10
 RECV_BUFSIZE    = 4096
 
-# ── Sentinel for graceful import failure ─────────────────────────────────────
+# ── Optional PyBluez import ───────────────────────────────────────────────────
 
 try:
     import bluetooth as _bt
@@ -50,29 +53,27 @@ class BluetoothUnavailableError(RuntimeError):
 def _require_bt():
     if not _BT_AVAILABLE:
         raise BluetoothUnavailableError(
-            "PyBluez is not installed. Run: pip install PyBluez"
+            "PyBluez is not installed. "
+            "On Linux: sudo apt install libbluetooth-dev && pip install pybluez2"
         )
 
 
 # ── MAC helpers ───────────────────────────────────────────────────────────────
 
-MAC_RE = __import__('re').compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 
 
 def is_bt_chat_id(chat_id: str) -> bool:
-    """Return True if chat_id looks like a Bluetooth chat (BT:MAC or raw MAC)."""
     if chat_id.upper().startswith('BT:'):
         return MAC_RE.match(chat_id[3:]) is not None
     return MAC_RE.match(chat_id) is not None
 
 
 def mac_from_chat_id(chat_id: str) -> str:
-    """Extract the raw MAC address from a chat ID."""
     return chat_id[3:].upper() if chat_id.upper().startswith('BT:') else chat_id.upper()
 
 
 def chat_id_from_mac(mac: str) -> str:
-    """Build the canonical chat_id from a MAC address."""
     return 'BT:' + mac.upper()
 
 
@@ -87,15 +88,10 @@ class BluetoothPlugin:
     """
 
     def __init__(self, on_message: Callable[[str, str], None] | None = None):
-        """
-        Args:
-            on_message: Optional callback called when a message arrives.
-                        Signature: on_message(chat_id: str, plaintext: str)
-        """
-        self._on_message   = on_message
-        self._server_sock  = None
-        self._listener     = None
-        self._stop_event   = threading.Event()
+        self._on_message  = on_message
+        self._server_sock = None
+        self._listener    = None
+        self._stop_event  = threading.Event()
 
     # ── Discovery ─────────────────────────────────────────────────────────────
 
@@ -103,35 +99,69 @@ class BluetoothPlugin:
         """
         Perform a Bluetooth device discovery.
 
-        Args:
-            duration:    Inquiry duration in seconds (multiples of ~1.28 s).
-            flush_cache: Whether to flush the device cache before scanning.
+        Strategy:
+          1. PyBluez  — used if installed
+          2. bluetoothctl — shell fallback (Linux/BlueZ, no extra packages)
 
         Returns:
             List of dicts: [{'name': str, 'mac': str}, ...]
-            Returns empty list if no devices found.
 
         Raises:
-            BluetoothUnavailableError: If PyBluez is not installed.
+            BluetoothUnavailableError: if neither method is available or HW error.
         """
-        _require_bt()
-        logger.info("[bluetooth] starting scan (duration=%ds)", duration)
-        try:
-            nearby = _bt.discover_devices(
-                duration=duration,
-                flush_cache=flush_cache,
-                lookup_names=True,
-            )
-        except OSError as e:
-            raise BluetoothUnavailableError(
-                f"Bluetooth hardware error during scan: {e}"
-            ) from e
+        # ── Strategy 1: PyBluez ───────────────────────────────────────────────
+        if _BT_AVAILABLE:
+            logger.info("[bluetooth] scanning via PyBluez (duration=%ds)", duration)
+            try:
+                nearby = _bt.discover_devices(
+                    duration=duration,
+                    flush_cache=flush_cache,
+                    lookup_names=True,
+                )
+            except OSError as e:
+                raise BluetoothUnavailableError(
+                    f"Bluetooth hardware error during scan: {e}"
+                ) from e
+            devices = [
+                {'name': name or 'Unknown', 'mac': mac.upper()}
+                for mac, name in nearby
+            ]
+            logger.info("[bluetooth] PyBluez scan done — %d device(s)", len(devices))
+            return devices
 
-        devices = [
-            {'name': name or 'Unknown', 'mac': mac.upper()}
-            for mac, name in nearby
-        ]
-        logger.info("[bluetooth] scan complete — %d device(s) found", len(devices))
+        # ── Strategy 2: bluetoothctl (Linux fallback) ─────────────────────────
+        logger.info("[bluetooth] PyBluez unavailable — falling back to bluetoothctl")
+        try:
+            subprocess.run(
+                ["bluetoothctl", "scan", "on"],
+                capture_output=True, timeout=2,
+            )
+            time.sleep(duration)
+            subprocess.run(
+                ["bluetoothctl", "scan", "off"],
+                capture_output=True, timeout=2,
+            )
+            result = subprocess.run(
+                ["bluetoothctl", "devices"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except FileNotFoundError:
+            raise BluetoothUnavailableError(
+                "Neither PyBluez nor bluetoothctl is available on this system."
+            )
+        except subprocess.TimeoutExpired:
+            raise BluetoothUnavailableError("bluetoothctl timed out during scan.")
+
+        devices = []
+        for line in result.stdout.splitlines():
+            # Format: "Device AA:BB:CC:DD:EE:FF Device Name"
+            m = re.match(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line)
+            if m:
+                devices.append({
+                    'mac':  m.group(1).upper(),
+                    'name': m.group(2).strip() or 'Unknown',
+                })
+        logger.info("[bluetooth] bluetoothctl scan done — %d device(s)", len(devices))
         return devices
 
     # ── Send ──────────────────────────────────────────────────────────────────
@@ -139,10 +169,7 @@ class BluetoothPlugin:
     def send(self, mac_or_chat_id: str, plaintext: str) -> None:
         """
         Send a plaintext message to a Bluetooth peer over RFCOMM.
-
-        Args:
-            mac_or_chat_id: Raw MAC ('AA:BB:...') or Enclave chat ID ('BT:AA:BB:...').
-            plaintext:      The message text to send.
+        Requires PyBluez.
 
         Raises:
             BluetoothUnavailableError: Hardware or stack not available.
@@ -164,9 +191,7 @@ class BluetoothPlugin:
     def start_listener(self) -> None:
         """
         Start a background RFCOMM server that accepts inbound messages.
-        The on_message callback will be fired for each received message.
-
-        Safe to call multiple times — no-op if already running.
+        Requires PyBluez. Safe to call multiple times.
         """
         _require_bt()
         if self._listener and self._listener.is_alive():
@@ -193,7 +218,6 @@ class BluetoothPlugin:
         logger.info("[bluetooth] listener stopped")
 
     def _listen_loop(self) -> None:
-        """Internal RFCOMM accept loop (runs in daemon thread)."""
         try:
             self._server_sock = _bt.BluetoothSocket(_bt.RFCOMM)
             self._server_sock.bind(('', RFCOMM_PORT))
@@ -233,13 +257,6 @@ class BluetoothPlugin:
                 if not self._stop_event.is_set():
                     logger.error("[bluetooth] listener loop error: %s", e)
 
-    # ── from_config factory ───────────────────────────────────────────────────
-
     @classmethod
     def from_config(cls, config, on_message=None) -> "BluetoothPlugin":
-        """
-        Build a BluetoothPlugin instance from a ConfigStore object.
-        Config is currently not required for Bluetooth, but the factory
-        method keeps the pattern consistent with other plugins.
-        """
         return cls(on_message=on_message)
