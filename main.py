@@ -13,6 +13,8 @@ CLI utilities :
     python main.py encrypt ...
     python main.py decrypt ...
     python main.py sms send ...
+    python main.py bt scan
+    python main.py bt send --to AA:BB:CC:DD:EE:FF --message "Hello"
 
 Note: This is the same as the ~/core.py from the first couple of versions.
 """
@@ -28,6 +30,12 @@ from core.crypto import CryptoManager
 from core.crypto.e2e import E2EManager
 from core.storage import ConfigStore, ChatStore, PeerStore, LogStore
 from core.plugins import SMSGateway, PluginManager
+from core.plugins.bluetooth import (
+    BluetoothPlugin,
+    BluetoothUnavailableError,
+    is_bt_chat_id,
+    chat_id_from_mac,
+)
 from core.network import Node
 
 # ---------------------------------------------------------------------------
@@ -53,6 +61,79 @@ plugin_manager.discover()
 # The Node is None until start_node() is called.
 _node: Node | None = None
 _node_lock = threading.Lock()
+
+# Bluetooth plugin instance — created once, listener started in start_node().
+_bt: BluetoothPlugin | None = None
+_bt_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Bluetooth helpers
+# ---------------------------------------------------------------------------
+
+def _bt_on_message(chat_id: str, plaintext: str) -> None:
+    """
+    Callback fired by the Bluetooth listener thread when a message arrives.
+    Stores the message in ChatStore so the UI picks it up on the next poll
+    or WebSocket push.
+    """
+    import datetime
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    chats.append_message(chat_id, {"token": plaintext, "sender": "peer", "ts": ts})
+    log.info(f"[bluetooth] received message from {chat_id}")
+
+
+def get_bluetooth() -> BluetoothPlugin:
+    """
+    Return the shared BluetoothPlugin instance, creating it on first call.
+    """
+    global _bt
+    with _bt_lock:
+        if _bt is None:
+            _bt = BluetoothPlugin(on_message=_bt_on_message)
+        return _bt
+
+
+def scan_bluetooth(duration: int = 8) -> list[dict]:
+    """
+    Scan for nearby Bluetooth devices.
+    Returns [{'name': str, 'mac': str}, ...]
+    Raises BluetoothUnavailableError if hardware is not present.
+    """
+    return get_bluetooth().scan(duration=duration)
+
+
+def send_bt(mac_or_chat_id: str, plaintext: str) -> None:
+    """
+    Send a plaintext message to a Bluetooth peer over RFCOMM.
+    Also appends to ChatStore so the message appears in the UI.
+    """
+    import datetime
+    bt = get_bluetooth()
+    bt.send(mac_or_chat_id, plaintext)
+    chat_id = mac_or_chat_id if mac_or_chat_id.upper().startswith('BT:') \
+              else chat_id_from_mac(mac_or_chat_id)
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    chats.append_message(chat_id, {"token": plaintext, "sender": "me", "ts": ts})
+    log.info(f"[bluetooth] sent message to {chat_id}")
+
+
+def start_bt_listener() -> None:
+    """
+    Start the background RFCOMM listener.
+    No-op if already running or if PyBluez is unavailable.
+    """
+    try:
+        get_bluetooth().start_listener()
+    except BluetoothUnavailableError as e:
+        log.warning(f"[bluetooth] listener not started: {e}")
+
+
+def stop_bt_listener() -> None:
+    """Stop the background RFCOMM listener if running."""
+    with _bt_lock:
+        if _bt is not None:
+            _bt.stop_listener()
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +169,9 @@ def start_node(passphrase: str) -> Node:
         plugin_manager.set_node(_node)
         plugin_manager.enable_all_saved()
 
+        # Start Bluetooth listener (silently skipped if PyBluez unavailable).
+        start_bt_listener()
+
         return _node
 
 
@@ -98,6 +182,7 @@ def stop_node():
             _node.stop()
             _node = None
             log.info("Node stopped")
+    stop_bt_listener()
 
 
 def get_node() -> Node | None:
@@ -109,7 +194,14 @@ def get_node() -> Node | None:
 # ---------------------------------------------------------------------------
 
 def send_message(peer_user_id: str, plaintext: str) -> bool:
-    """Send a plaintext message to a peer. Returns True on delivery."""
+    """
+    Send a plaintext message to a peer.
+    Automatically routes over Bluetooth if the chat ID starts with 'BT:'.
+    Returns True on delivery.
+    """
+    if is_bt_chat_id(peer_user_id):
+        send_bt(peer_user_id, plaintext)
+        return True
     if _node is None:
         raise RuntimeError("Node not started. Call start_node() first.")
     return _node.send(peer_user_id, plaintext)
@@ -315,6 +407,34 @@ def cmd_sms_send(args):
         return 1
 
 
+def cmd_bt_scan(args):
+    print("Scanning for Bluetooth devices...")
+    try:
+        devices = scan_bluetooth(duration=args.duration)
+        if not devices:
+            print("No devices found.")
+            return 0
+        for d in devices:
+            print(f"  {d['mac']}  {d['name']}")
+        return 0
+    except BluetoothUnavailableError as e:
+        print(f"Bluetooth unavailable: {e}")
+        return 1
+
+
+def cmd_bt_send(args):
+    try:
+        send_bt(args.to, args.message)
+        print(f"Sent to {args.to}")
+        return 0
+    except BluetoothUnavailableError as e:
+        print(f"Bluetooth unavailable: {e}")
+        return 1
+    except Exception as e:
+        print(f"Bluetooth send failed: {e}")
+        return 1
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -362,6 +482,21 @@ def build_parser():
     p_sms_send.add_argument("--to",      required=True)
     p_sms_send.add_argument("--message", required=True)
     p_sms_send.set_defaults(func=cmd_sms_send)
+
+    # bt
+    p_bt = sub.add_parser("bt", help="Bluetooth commands")
+    bt_sub = p_bt.add_subparsers(dest="bt_cmd", required=True)
+
+    p_bt_scan = bt_sub.add_parser("scan", help="Scan for nearby Bluetooth devices")
+    p_bt_scan.add_argument("--duration", type=int, default=8,
+                           help="Scan duration in seconds (default: 8)")
+    p_bt_scan.set_defaults(func=cmd_bt_scan)
+
+    p_bt_send = bt_sub.add_parser("send", help="Send a message over Bluetooth")
+    p_bt_send.add_argument("--to",      required=True,
+                           help="Target MAC address (AA:BB:CC:DD:EE:FF) or BT: chat ID")
+    p_bt_send.add_argument("--message", required=True)
+    p_bt_send.set_defaults(func=cmd_bt_send)
 
     return parser
 
