@@ -1,25 +1,31 @@
 """
-e2e.py — End-to-end encryption using X25519 ECDH + AES-256-GCM.
+e2e.py — End-to-end encryption using X25519 ECDH + AES-256-GCM
+         with ephemeral sender keys for forward secrecy.
 
 How it works
 ------------
 Sender:
-  1. Load recipient’s X25519 public key from PeerStore.
-  2. Perform ECDH: shared_secret = sender_x25519_priv * recipient_x25519_pub
-  3. Derive message key: HKDF-SHA256(shared_secret, salt, info="enclave-e2e")
-  4. Encrypt with AES-256-GCM; include sender’s x25519_pub in the header
-     so the recipient can derive the same shared secret.
+  1. Generate a THROWAWAY ephemeral X25519 key pair (never stored).
+  2. Load recipient's static X25519 public key from PeerStore.
+  3. ECDH: shared_secret = ephemeral_priv × recipient_identity_pub
+  4. Derive message key: HKDF-SHA256(shared_secret, salt, info="enclave-e2e")
+  5. Encrypt with AES-256-GCM; include ephemeral_pub in the header.
+  6. ephemeral_priv goes out of scope and is destroyed.
 
 Recipient decrypting:
-  shared_secret = local_priv * sender_pub   (from header)
+  shared_secret = recipient_identity_priv × ephemeral_pub  (from header)
+  → same scalar multiplication, same shared_secret.
 
-Sender re-reading their own sent message:
-  sender_pub == local_pub, so the above would give local_priv * local_pub
-  which is wrong.  Instead: shared_secret = local_priv * recipient_pub
-  (same scalar multiplication, same result as the original encrypt step).
+Forward secrecy guarantee:
+  ephemeral_priv is never stored. Even if the recipient's identity key
+  leaks later, past messages cannot be decrypted without ephemeral_priv.
 
-The passphrase / CryptoManager is still used for *local storage* (identity
-PEM files). It is no longer involved in messages sent over the wire.
+Sender re-reading sent messages:
+  NOT possible by re-deriving — ephemeral_priv is gone by design.
+  Store the plaintext locally after sending instead.
+
+The identity X25519 key (from IdentityManager) is only used for
+receiving (recipient side). It is NOT used to encrypt outgoing messages.
 """
 
 import os
@@ -32,7 +38,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _b64e(data: bytes) -> str:
@@ -57,8 +63,8 @@ def _derive_key(shared_secret: bytes, salt: bytes) -> bytes:
     return hkdf.derive(shared_secret)
 
 
-def _pub_raw(priv: X25519PrivateKey) -> bytes:
-    return priv.public_key().public_bytes(
+def _pub_bytes_raw(key: X25519PrivateKey) -> bytes:
+    return key.public_key().public_bytes(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
@@ -66,14 +72,16 @@ def _pub_raw(priv: X25519PrivateKey) -> bytes:
 
 class E2EManager:
     """
-    Stateless helper — pass the local X25519 private key on construction.
+    Stateless helper — pass the local X25519 identity private key on
+    construction. Used ONLY for decrypting incoming messages.
+    Outgoing messages use a fresh ephemeral key every time.
     """
 
     def __init__(self, local_x25519_priv: X25519PrivateKey):
         self._priv = local_x25519_priv
 
     # ------------------------------------------------------------------
-    # Encrypt (sender side)
+    # Encrypt (sender side) — ephemeral key, forward secrecy
     # ------------------------------------------------------------------
 
     def encrypt(
@@ -87,25 +95,35 @@ class E2EManager:
         Encrypt *plaintext* for the peer identified by *peer_x25519_pub_b64*
         (base64url-encoded raw X25519 public key bytes from PeerStore).
 
-        Returns a base64url-encoded JSON envelope (same shape as CryptoManager
-        so the rest of the codebase stays compatible).
+        A fresh ephemeral X25519 key pair is generated per call and is
+        never stored — forward secrecy is guaranteed.
+
+        Returns a base64url-encoded JSON envelope.
+
+        NOTE: The sender cannot re-decrypt this message later.
+              Store the plaintext locally after calling this method.
         """
+        # Generate throwaway ephemeral key pair
+        ephemeral_priv = X25519PrivateKey.generate()
+        ephemeral_pub_raw = _pub_bytes_raw(ephemeral_priv)
+
         peer_pub = X25519PublicKey.from_public_bytes(_b64d(peer_x25519_pub_b64))
-        shared   = self._priv.exchange(peer_pub)
+        shared = ephemeral_priv.exchange(peer_pub)
+        # ephemeral_priv is no longer referenced after this point
 
         salt  = os.urandom(16)
         nonce = os.urandom(12)
         key   = _derive_key(shared, salt)
 
         header = {
-            "v":          SCHEMA_VERSION,
-            "alg":        "X25519-AES-256-GCM",
-            "purpose":    "message",
-            "chat_id":    chat_id,
-            "created_at": created_at,
-            "salt":       _b64e(salt),
-            "nonce":      _b64e(nonce),
-            "sender_pub": _b64e(_pub_raw(self._priv)),
+            "v":           SCHEMA_VERSION,
+            "alg":         "X25519-AES-256-GCM",
+            "purpose":     "message",
+            "chat_id":     chat_id,
+            "created_at":  created_at,
+            "salt":        _b64e(salt),
+            "nonce":       _b64e(nonce),
+            "ephemeral_pub": _b64e(ephemeral_pub_raw),  # throwaway, not identity
         }
 
         aad        = _canonical_json(header)
@@ -118,21 +136,17 @@ class E2EManager:
         return _b64e(_canonical_json(envelope))
 
     # ------------------------------------------------------------------
-    # Decrypt (recipient side, or sender re-reading)
+    # Decrypt (recipient side only)
     # ------------------------------------------------------------------
 
-    def decrypt(self, token: str, peer_x25519_pub_b64: str | None = None) -> str:
+    def decrypt(self, token: str) -> str:
         """
         Decrypt a token produced by E2EManager.encrypt().
 
-        Normal (recipient) path:
-            shared = local_priv × sender_pub   (sender_pub is in the header)
+        The shared secret is recovered as:
+            local_identity_priv × ephemeral_pub  (ephemeral_pub is in header)
 
-        Sender re-reading their own message:
-            sender_pub == local_pub, so the normal path would give the wrong
-            shared secret.  In this case the caller MUST supply
-            *peer_x25519_pub_b64* (the recipient’s pub key from PeerStore)
-            so we can compute local_priv × recipient_pub instead.
+        The sender cannot decrypt their own messages — ephemeral_priv is gone.
         """
         envelope = json.loads(_b64d(token).decode("utf-8"))
 
@@ -142,29 +156,23 @@ class E2EManager:
         header = envelope["header"]
 
         if header.get("v") != SCHEMA_VERSION:
-            raise ValueError("Unsupported schema version")
+            raise ValueError(
+                f"Unsupported schema version: {header.get('v')} "
+                f"(expected {SCHEMA_VERSION})"
+            )
         if header.get("alg") != "X25519-AES-256-GCM":
             raise ValueError("Not an E2E envelope (wrong alg)")
         if header.get("purpose") != "message":
             raise ValueError("Invalid envelope purpose")
 
-        sender_pub_bytes = _b64d(header["sender_pub"])
-        local_pub_bytes  = _pub_raw(self._priv)
+        if "ephemeral_pub" not in header:
+            raise ValueError("Missing ephemeral_pub in header")
 
-        if sender_pub_bytes == local_pub_bytes:
-            # We are the original sender re-reading our own message.
-            # Use local_priv × recipient_pub to recover the same shared secret.
-            if not peer_x25519_pub_b64:
-                raise ValueError(
-                    "Cannot decrypt own message: peer_x25519_pub_b64 is required "
-                    "when the local node is the sender."
-                )
-            other_pub = X25519PublicKey.from_public_bytes(_b64d(peer_x25519_pub_b64))
-        else:
-            # Normal recipient path.
-            other_pub = X25519PublicKey.from_public_bytes(sender_pub_bytes)
+        ephemeral_pub = X25519PublicKey.from_public_bytes(
+            _b64d(header["ephemeral_pub"])
+        )
 
-        shared     = self._priv.exchange(other_pub)
+        shared     = self._priv.exchange(ephemeral_pub)
         salt       = _b64d(header["salt"])
         nonce      = _b64d(header["nonce"])
         ciphertext = _b64d(envelope["ciphertext"])
@@ -174,7 +182,7 @@ class E2EManager:
         return AESGCM(key).decrypt(nonce, ciphertext, aad).decode("utf-8")
 
     # ------------------------------------------------------------------
-    # Convenience: detect whether a token is E2E or legacy passphrase
+    # Token detection helper
     # ------------------------------------------------------------------
 
     @staticmethod
