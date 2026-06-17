@@ -80,6 +80,15 @@
       display:flex;flex-direction:column;gap:1.1rem;
       animation: modalPop 0.4s cubic-bezier(0.16,1,0.3,1) both;
     }
+    /* Settings modal is wider and scrollable */
+    .settings-modal-card {
+      width:min(520px,93vw);
+      max-height:90vh;
+      overflow-y:auto;
+      gap:.85rem;
+    }
+    .settings-modal-card::-webkit-scrollbar{width:3px;}
+    .settings-modal-card::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
     @keyframes modalPop {
       from { opacity:0; transform:scale(0.93) translateY(12px); }
       to   { opacity:1; transform:scale(1) translateY(0); }
@@ -126,6 +135,57 @@
     .field-hint.err {color:var(--coral);}
     .modal-divider{display:flex;align-items:center;gap:.75rem;color:var(--faint);font-size:.75rem;}
     .modal-divider::before,.modal-divider::after{content:'';flex:1;height:1px;background:var(--border);}
+
+    /* ── Settings modal internals ────────────────────────────────── */
+    .smodal-section{display:flex;flex-direction:column;gap:.55rem;}
+    .smodal-section-title{
+      font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+      color:var(--faint);padding-bottom:.3rem;border-bottom:1px solid var(--border);
+    }
+    .smodal-field{display:flex;flex-direction:column;gap:.25rem;}
+    .smodal-label{font-size:.75rem;color:var(--faint);}
+    .smodal-input{
+      background:var(--bg);border:1.5px solid var(--border);border-radius:10px;
+      padding:.6rem 1rem;font-size:.88rem;color:var(--text);font-family:var(--font);
+      outline:none;width:100%;transition:border-color .15s, box-shadow .15s;
+    }
+    .smodal-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.12);}
+    .smodal-input[type=password]{letter-spacing:.1em;}
+    .smodal-btn-row{display:flex;gap:.6rem;align-items:center;}
+    .smodal-status{font-size:.72rem;color:var(--faint);min-height:1.1em;transition:color .2s;}
+    .smodal-status.ok {color:#6fcf97;}
+    .smodal-status.err{color:var(--coral);}
+
+    /* unlock button spin state */
+    .btn-unlock-spin::before {
+      content:'';
+      display:inline-block;
+      width:.7em;height:.7em;
+      border:2px solid rgba(255,255,255,.35);
+      border-top-color:#fff;
+      border-radius:50%;
+      animation: spin 0.6s linear infinite;
+      margin-right:.45rem;
+      vertical-align:middle;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* save config ripple */
+    .btn-ripple {
+      position:relative;overflow:hidden;
+    }
+    .btn-ripple::after {
+      content:'';
+      position:absolute;inset:0;
+      background:rgba(255,255,255,.18);
+      border-radius:inherit;
+      opacity:0;
+      transform:scale(0);
+      transition:opacity .4s, transform .4s;
+    }
+    .btn-ripple.rippling::after {
+      opacity:1;transform:scale(1);
+    }
 
     /* ── Sidebar ────────────────────────────────────────────────── */
     .sidebar{
@@ -191,7 +251,6 @@
       padding:.85rem 1rem;
       overflow-y:auto;
       flex-shrink:0;
-      /* removed fixed max-height — now grows up to available space and scrolls */
       max-height:calc(100vh - 180px);
     }
     .sidebar-footer::-webkit-scrollbar{width:3px;}
@@ -238,66 +297,16 @@
       transform:translateY(0);
     }
 
-    /* ── Settings body ────────────────────────────────────────── */
-    .settings-body{padding:.6rem 0 .4rem;display:flex;flex-direction:column;gap:.5rem;}
-    .settings-body label{font-size:.75rem;color:var(--faint);margin-bottom:-2px;}
-    .settings-body input{
-      background:var(--bg);border:1px solid var(--border);border-radius:7px;
-      padding:.4rem .7rem;font-size:.82rem;color:var(--text);font-family:var(--font);
-      outline:none;width:100%;transition:border-color .15s, box-shadow .15s;
+    /* ── Settings open btn ─────────────────────────────────────── */
+    .settings-open-btn {
+      width:100%;background:none;border:none;cursor:pointer;
+      color:var(--muted);font-size:.82rem;font-family:var(--font);
+      display:flex;align-items:center;justify-content:space-between;
+      padding:.35rem 0;transition:color .15s;
+      user-select:none;
     }
-    .settings-body input:focus{
-      border-color:var(--primary);
-      box-shadow:0 0 0 3px rgba(242,114,128,.12);
-    }
-    .settings-body input[type=password]{letter-spacing:.1em;}
-
-    /* staggered row reveal */
-    .settings-row {
-      opacity:0;
-      transform:translateY(8px) scale(0.98);
-      transition: opacity 0.24s ease, transform 0.24s cubic-bezier(0.16,1,0.3,1);
-    }
-    .accordion-body.open .settings-row { opacity:1; transform:translateY(0) scale(1); }
-    .accordion-body.open .settings-row:nth-child(1){transition-delay:.05s}
-    .accordion-body.open .settings-row:nth-child(2){transition-delay:.10s}
-    .accordion-body.open .settings-row:nth-child(3){transition-delay:.14s}
-    .accordion-body.open .settings-row:nth-child(4){transition-delay:.18s}
-    .accordion-body.open .settings-row:nth-child(5){transition-delay:.22s}
-    .accordion-body.open .settings-row:nth-child(6){transition-delay:.26s}
-    .accordion-body.open .settings-row:nth-child(7){transition-delay:.30s}
-    .accordion-body.open .settings-row:nth-child(8){transition-delay:.34s}
-
-    /* unlock button spin state */
-    .btn-unlock-spin::before {
-      content:'';
-      display:inline-block;
-      width:.7em;height:.7em;
-      border:2px solid rgba(255,255,255,.35);
-      border-top-color:#fff;
-      border-radius:50%;
-      animation: spin 0.6s linear infinite;
-      margin-right:.45rem;
-      vertical-align:middle;
-    }
-    @keyframes spin { to { transform:rotate(360deg); } }
-
-    /* save config ripple */
-    .btn-ripple {
-      position:relative;overflow:hidden;
-    }
-    .btn-ripple::after {
-      content:'';
-      position:absolute;inset:0;
-      background:rgba(255,255,255,.18);
-      border-radius:inherit;
-      opacity:0;
-      transform:scale(0);
-      transition:opacity .4s, transform .4s;
-    }
-    .btn-ripple.rippling::after {
-      opacity:1;transform:scale(1);
-    }
+    .settings-open-btn:hover { color:var(--text); }
+    .settings-open-btn-arrow { font-size:.65rem; color:var(--faint); }
 
     /* ── Peers panel ───────────────────────────────────────────── */
     .peers-body{padding:.5rem 0 .2rem;display:flex;flex-direction:column;gap:.4rem;}
@@ -541,6 +550,60 @@
   </div>
 </div>
 
+<!-- settings modal -->
+<div class="modal-backdrop hidden" id="settings-backdrop">
+  <div class="modal-card settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+
+    <!-- header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div class="modal-title" id="settings-modal-title" style="text-align:left;">settings &amp; config</div>
+      <button onclick="closeSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:1.1rem;line-height:1;padding:.2rem .4rem;border-radius:6px;transition:color .15s;" title="close">&times;</button>
+    </div>
+
+    <!-- section: node -->
+    <div class="smodal-section">
+      <div class="smodal-section-title">node</div>
+      <div class="smodal-field">
+        <div class="smodal-label">session passphrase</div>
+        <div style="position:relative;">
+          <input id="cfg-pass" class="smodal-input" type="password"
+                 placeholder="unlock identity + encrypt/decrypt"
+                 style="padding-right:2.6rem;"
+                 oninput="onPassphraseChange()"/>
+          <button class="modal-eye" onclick="toggleCfgEye()" id="cfg-eye-btn" title="show/hide">show</button>
+        </div>
+      </div>
+      <div class="smodal-btn-row">
+        <button class="btn btn-primary btn-ripple" id="cfg-unlock-btn" onclick="startNode()" style="flex:1;">unlock &amp; start node</button>
+      </div>
+      <div class="smodal-status" id="cfg-status">&mdash;</div>
+    </div>
+
+    <!-- section: sms gateway -->
+    <div class="smodal-section">
+      <div class="smodal-section-title">sms gateway</div>
+      <div class="smodal-field">
+        <div class="smodal-label">username</div>
+        <input id="cfg-sms-user" class="smodal-input" type="text" autocomplete="off"/>
+      </div>
+      <div class="smodal-field">
+        <div class="smodal-label">password</div>
+        <input id="cfg-sms-pass" class="smodal-input" type="password"/>
+      </div>
+      <div class="smodal-field">
+        <div class="smodal-label">device host (ip:port or cloud)</div>
+        <input id="cfg-sms-host" class="smodal-input" type="text" placeholder="192.168.1.x:8080"/>
+      </div>
+      <div class="smodal-btn-row">
+        <button class="btn btn-ghost btn-ripple" id="cfg-save-btn" onclick="saveConfig()" style="flex:1;">save sms config</button>
+      </div>
+    </div>
+
+    <!-- close -->
+    <button class="modal-skip" onclick="closeSettingsModal()">close</button>
+  </div>
+</div>
+
 <!-- main layout -->
 <aside class="sidebar">
   <div class="brand">
@@ -585,43 +648,11 @@
       </div>
     </div>
 
-    <!-- settings accordion -->
-    <div class="accordion" id="settings-accordion">
-      <button class="accordion-trigger" onclick="toggleAccordion('settings')" aria-expanded="false" id="settings-trigger">
-        <span>settings &amp; config</span>
-        <span class="accordion-arrow">&#9660;</span>
-      </button>
-      <div class="accordion-body" id="settings-body">
-        <div class="settings-body">
-          <div class="settings-row">
-            <label>session passphrase</label>
-            <input id="cfg-pass" type="password" placeholder="unlock identity + encrypt/decrypt"
-                   oninput="onPassphraseChange()"/>
-          </div>
-          <div class="settings-row">
-            <button class="btn btn-primary btn-ripple" id="cfg-unlock-btn" onclick="startNode()">unlock &amp; start node</button>
-          </div>
-          <div class="settings-row">
-            <label>sms gateway username</label>
-            <input id="cfg-sms-user"/>
-          </div>
-          <div class="settings-row">
-            <label>sms gateway password</label>
-            <input id="cfg-sms-pass" type="password"/>
-          </div>
-          <div class="settings-row">
-            <label>device host (ip:port or cloud)</label>
-            <input id="cfg-sms-host" placeholder="192.168.1.x:8080"/>
-          </div>
-          <div class="settings-row">
-            <button class="btn btn-ghost btn-ripple" id="cfg-save-btn" onclick="saveConfig()">save sms config</button>
-          </div>
-          <div class="settings-row">
-            <div class="status-line" id="cfg-status">&mdash;</div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- settings button (opens modal) -->
+    <button class="settings-open-btn" onclick="openSettingsModal()">
+      <span>settings &amp; config</span>
+      <span class="settings-open-btn-arrow">&#8599;</span>
+    </button>
 
   </div>
 </aside>
@@ -674,7 +705,7 @@ async function api(url, body) {
 function setStatus(txt, type='') {
   const el = $('cfg-status');
   el.textContent = txt;
-  el.className = 'status-line' + (type ? ' '+type : '');
+  el.className = 'smodal-status' + (type ? ' '+type : '');
 }
 
 function toggleTheme() {
@@ -703,7 +734,6 @@ function toggleAccordion(name) {
       if (e.propertyName === 'max-height') {
         body.style.maxHeight = 'none';
         body.removeEventListener('transitionend', onEnd);
-        // scroll the footer so newly revealed content is visible
         body.closest('.sidebar-footer').scrollTo({top: 99999, behavior: 'smooth'});
       }
     });
@@ -713,7 +743,7 @@ function toggleAccordion(name) {
 function ripple(btnId) {
   const btn = $(btnId);
   btn.classList.remove('rippling');
-  void btn.offsetWidth; // reflow
+  void btn.offsetWidth;
   btn.classList.add('rippling');
   setTimeout(() => btn.classList.remove('rippling'), 420);
 }
@@ -743,6 +773,13 @@ function showUnlockModal() {
 function toggleModalEye() {
   const inp = $('modal-pass');
   const btn = $('modal-eye-btn');
+  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'hide'; }
+  else                         { inp.type = 'password'; btn.textContent = 'show'; }
+}
+
+function toggleCfgEye() {
+  const inp = $('cfg-pass');
+  const btn = $('cfg-eye-btn');
   if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'hide'; }
   else                         { inp.type = 'password'; btn.textContent = 'show'; }
 }
@@ -783,6 +820,27 @@ async function modalUnlock() {
   if (currentChatId) refreshMessages();
   await startRealtime();
 }
+
+// ── Settings modal ─────────────────────────────────────────────────────────
+
+function openSettingsModal() {
+  const bd = $('settings-backdrop');
+  bd.style.display = 'flex';
+  requestAnimationFrame(() => bd.classList.remove('hidden'));
+}
+
+function closeSettingsModal() {
+  const bd = $('settings-backdrop');
+  bd.classList.add('hidden');
+  setTimeout(() => bd.style.display = 'none', 200);
+}
+
+// close on backdrop click
+document.addEventListener('DOMContentLoaded', () => {
+  $('settings-backdrop').addEventListener('click', e => {
+    if (e.target === $('settings-backdrop')) closeSettingsModal();
+  });
+});
 
 // ── New chat modal ──────────────────────────────────────────────────────────
 
@@ -977,7 +1035,6 @@ async function scanPeers() {
   progress.classList.add('visible');
   status.textContent = 'probing subnet\u2026';
 
-  // Animate the progress bar with fake increments while waiting
   bar.style.width = '100%';
   let fakeProgress = -100;
   const ticker = setInterval(() => {
@@ -1001,7 +1058,6 @@ async function scanPeers() {
       : 'no enclave peers found on LAN';
     status.className = 'status-line' + (onlineCount ? ' ok' : '');
 
-    // open accordion if peers found and it's closed
     if (onlineCount && $('peers-trigger').getAttribute('aria-expanded') !== 'true') {
       toggleAccordion('peers');
     }
@@ -1115,7 +1171,6 @@ async function refreshMessages() {
     if (p && token && token !== '-- chat started --') {
       try {
         const dec = await api('/api/crypto/decrypt', {passphrase: p, token, chat_id: currentChatId});
-        // dec.plaintext is null when server couldn't decrypt (e.g. peer key unavailable)
         if (dec.plaintext !== undefined && dec.plaintext !== null) { text = dec.plaintext; decrypted = true; }
       } catch(_) {}
     }
