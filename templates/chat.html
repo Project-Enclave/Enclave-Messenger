@@ -67,7 +67,7 @@
     .splash-bar-fill { height:100%;width:0%;background:linear-gradient(90deg,var(--primary),var(--coral));border-radius:2px;animation: barFill 1s ease 1.3s forwards; }
     @keyframes barFill { to { width:100%; } }
 
-    /* ── Modals ─────────────────────────────────────────────────── */
+    /* ── Generic modal backdrop ─────────────────────────────────── */
     .modal-backdrop{
       position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
       display:flex;align-items:center;justify-content:center;z-index:1000;transition:opacity .2s;
@@ -80,15 +80,6 @@
       display:flex;flex-direction:column;gap:1.1rem;
       animation: modalPop 0.4s cubic-bezier(0.16,1,0.3,1) both;
     }
-    /* Settings modal is wider and scrollable */
-    .settings-modal-card {
-      width:min(520px,93vw);
-      max-height:90vh;
-      overflow-y:auto;
-      gap:.85rem;
-    }
-    .settings-modal-card::-webkit-scrollbar{width:3px;}
-    .settings-modal-card::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
     @keyframes modalPop {
       from { opacity:0; transform:scale(0.93) translateY(12px); }
       to   { opacity:1; transform:scale(1) translateY(0); }
@@ -136,56 +127,129 @@
     .modal-divider{display:flex;align-items:center;gap:.75rem;color:var(--faint);font-size:.75rem;}
     .modal-divider::before,.modal-divider::after{content:'';flex:1;height:1px;background:var(--border);}
 
-    /* ── Settings modal internals ────────────────────────────────── */
-    .smodal-section{display:flex;flex-direction:column;gap:.55rem;}
-    .smodal-section-title{
-      font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
-      color:var(--faint);padding-bottom:.3rem;border-bottom:1px solid var(--border);
+    /* ── Settings modal — Claude-style two-pane ──────────────────── */
+    #settings-backdrop .settings-shell {
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:16px;
+      width:min(720px,95vw);
+      height:min(520px,90vh);
+      display:flex;
+      overflow:hidden;
+      box-shadow:0 24px 64px rgba(0,0,0,.4);
+      animation: modalPop 0.35s cubic-bezier(0.16,1,0.3,1) both;
+      position:relative;
     }
-    .smodal-field{display:flex;flex-direction:column;gap:.25rem;}
-    .smodal-label{font-size:.75rem;color:var(--faint);}
-    .smodal-input{
+
+    /* left nav */
+    .stab-nav {
+      width:200px;
+      min-width:160px;
+      background:var(--bg);
+      border-right:1px solid var(--border);
+      display:flex;
+      flex-direction:column;
+      padding:.75rem .5rem;
+      gap:.1rem;
+      overflow-y:auto;
+      flex-shrink:0;
+    }
+    .stab-nav::-webkit-scrollbar{width:3px;}
+    .stab-nav::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+
+    .stab-section-label {
+      font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+      color:var(--faint);padding:.55rem .65rem .25rem;
+    }
+
+    .stab-item {
+      display:flex;align-items:center;gap:.55rem;
+      padding:.42rem .65rem;
+      border-radius:8px;
+      cursor:pointer;
+      background:none;border:none;
+      font-family:var(--font);font-size:.82rem;font-weight:500;
+      color:var(--muted);
+      width:100%;text-align:left;
+      transition:background .12s,color .12s;
+      white-space:nowrap;
+    }
+    .stab-item:hover { background:var(--border); color:var(--text); }
+    .stab-item.active {
+      background:rgba(242,114,128,.13);
+      color:var(--primary);
+      font-weight:700;
+    }
+    .stab-icon { font-size:.85rem; flex-shrink:0; }
+
+    /* right content pane */
+    .stab-content {
+      flex:1;
+      overflow-y:auto;
+      padding:1.6rem 1.8rem;
+      display:flex;
+      flex-direction:column;
+      gap:1.25rem;
+      min-width:0;
+    }
+    .stab-content::-webkit-scrollbar{width:4px;}
+    .stab-content::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
+
+    .stab-panel { display:none; flex-direction:column; gap:1rem; }
+    .stab-panel.active { display:flex; }
+
+    .stab-panel-title {
+      font-family:var(--display);font-size:1.15rem;font-weight:700;
+      color:var(--text);letter-spacing:-.01em;
+      border-bottom:1px solid var(--border);
+      padding-bottom:.65rem;
+    }
+
+    /* close btn */
+    .settings-close-btn {
+      position:absolute;top:.75rem;right:.9rem;
+      background:none;border:none;cursor:pointer;
+      color:var(--faint);font-size:1.1rem;line-height:1;
+      padding:.25rem .4rem;border-radius:6px;
+      transition:color .15s,background .15s;
+      z-index:10;
+    }
+    .settings-close-btn:hover{color:var(--text);background:var(--border);}
+
+    /* shared form elements inside panels */
+    .smod-field { display:flex;flex-direction:column;gap:.28rem; }
+    .smod-label { font-size:.75rem;color:var(--faint); }
+    .smod-input {
       background:var(--bg);border:1.5px solid var(--border);border-radius:10px;
       padding:.6rem 1rem;font-size:.88rem;color:var(--text);font-family:var(--font);
-      outline:none;width:100%;transition:border-color .15s, box-shadow .15s;
+      outline:none;width:100%;transition:border-color .15s,box-shadow .15s;
     }
-    .smodal-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.12);}
-    .smodal-input[type=password]{letter-spacing:.1em;}
-    .smodal-btn-row{display:flex;gap:.6rem;align-items:center;}
-    .smodal-status{font-size:.72rem;color:var(--faint);min-height:1.1em;transition:color .2s;}
-    .smodal-status.ok {color:#6fcf97;}
-    .smodal-status.err{color:var(--coral);}
+    .smod-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.12);}
+    .smod-input[type=password]{letter-spacing:.1em;}
+    .smod-pass-wrap{position:relative;}
+    .smod-pass-wrap .smod-input{padding-right:2.6rem;}
+    .smod-btn-row{display:flex;gap:.6rem;align-items:center;margin-top:.1rem;}
+    .smod-status{font-size:.72rem;color:var(--faint);min-height:1.1em;transition:color .2s;}
+    .smod-status.ok {color:#6fcf97;}
+    .smod-status.err{color:var(--coral);}
 
-    /* unlock button spin state */
+    /* unlock spin */
     .btn-unlock-spin::before {
-      content:'';
-      display:inline-block;
+      content:'';display:inline-block;
       width:.7em;height:.7em;
-      border:2px solid rgba(255,255,255,.35);
-      border-top-color:#fff;
-      border-radius:50%;
-      animation: spin 0.6s linear infinite;
-      margin-right:.45rem;
-      vertical-align:middle;
+      border:2px solid rgba(255,255,255,.35);border-top-color:#fff;
+      border-radius:50%;animation: spin 0.6s linear infinite;
+      margin-right:.45rem;vertical-align:middle;
     }
     @keyframes spin { to { transform:rotate(360deg); } }
 
-    /* save config ripple */
-    .btn-ripple {
-      position:relative;overflow:hidden;
+    .btn-ripple{position:relative;overflow:hidden;}
+    .btn-ripple::after{
+      content:'';position:absolute;inset:0;
+      background:rgba(255,255,255,.18);border-radius:inherit;
+      opacity:0;transform:scale(0);transition:opacity .4s,transform .4s;
     }
-    .btn-ripple::after {
-      content:'';
-      position:absolute;inset:0;
-      background:rgba(255,255,255,.18);
-      border-radius:inherit;
-      opacity:0;
-      transform:scale(0);
-      transition:opacity .4s, transform .4s;
-    }
-    .btn-ripple.rippling::after {
-      opacity:1;transform:scale(1);
-    }
+    .btn-ripple.rippling::after{opacity:1;transform:scale(1);}
 
     /* ── Sidebar ────────────────────────────────────────────────── */
     .sidebar{
@@ -206,21 +270,21 @@
     .theme-btn{
       position:absolute;right:1rem;background:none;border:1px solid var(--border);border-radius:6px;
       padding:.3rem .55rem;cursor:pointer;color:var(--muted);font-size:.7rem;
-      font-family:var(--font);font-weight:600;transition:background .15s, color .15s, transform .15s;
+      font-family:var(--font);font-weight:600;transition:background .15s,color .15s,transform .15s;
     }
     .theme-btn:hover{background:var(--border);color:var(--text);transform:rotate(18deg);}
     .search-wrap{padding:.75rem 1rem;flex-shrink:0;}
     .search-wrap input{
       width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
       padding:.5rem .85rem;font-size:.875rem;color:var(--text);font-family:var(--font);
-      outline:none;transition:border-color .15s, box-shadow .15s;
+      outline:none;transition:border-color .15s,box-shadow .15s;
     }
     .search-wrap input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.1);}
     .search-wrap input::placeholder{color:var(--faint);}
     .chat-list{flex:1;overflow-y:auto;padding:.25rem .5rem;min-height:0;}
     .chat-item{
       display:flex;align-items:center;gap:.75rem;padding:.7rem .8rem;border-radius:10px;cursor:pointer;
-      transition:background .12s, transform .12s;
+      transition:background .12s,transform .12s;
       animation: chatItemIn 0.3s cubic-bezier(0.16,1,0.3,1) both;
     }
     .chat-item:hover{background:var(--border);transform:translateX(3px);}
@@ -240,8 +304,7 @@
     .new-chat-btn{
       margin:.75rem;padding:.6rem;border:1px dashed var(--border);border-radius:10px;
       background:none;cursor:pointer;color:var(--muted);font-family:var(--font);font-size:.85rem;
-      transition:background .12s, color .12s, transform .12s;
-      flex-shrink:0;
+      transition:background .12s,color .12s,transform .12s;flex-shrink:0;
     }
     .new-chat-btn:hover{background:var(--border);color:var(--text);transform:scale(1.02);}
 
@@ -249,8 +312,7 @@
     .sidebar-footer{
       border-top:2px solid var(--border);
       padding:.85rem 1rem;
-      overflow-y:auto;
-      flex-shrink:0;
+      overflow-y:auto;flex-shrink:0;
       max-height:calc(100vh - 180px);
     }
     .sidebar-footer::-webkit-scrollbar{width:3px;}
@@ -269,51 +331,40 @@
       width:100%;background:none;border:none;cursor:pointer;
       color:var(--muted);font-size:.82rem;font-family:var(--font);
       display:flex;align-items:center;justify-content:space-between;
-      padding:.35rem 0;transition:color .15s;
-      user-select:none;
+      padding:.35rem 0;transition:color .15s;user-select:none;
     }
     .accordion-trigger:hover { color:var(--text); }
     .accordion-arrow {
-      display:inline-block;
-      font-size:.65rem;
+      display:inline-block;font-size:.65rem;
       transition:transform 0.32s cubic-bezier(0.34,1.1,0.64,1);
       color:var(--faint);
     }
-    .accordion-trigger[aria-expanded="true"] .accordion-arrow {
-      transform: rotate(180deg);
-    }
+    .accordion-trigger[aria-expanded="true"] .accordion-arrow { transform:rotate(180deg); }
     .accordion-body {
-      overflow:hidden;
-      max-height:0;
-      opacity:0;
-      transform:translateY(-8px);
+      overflow:hidden;max-height:0;opacity:0;transform:translateY(-8px);
       transition:
         max-height 0.4s cubic-bezier(0.16,1,0.3,1),
         opacity    0.3s cubic-bezier(0.16,1,0.3,1),
         transform  0.3s cubic-bezier(0.16,1,0.3,1);
     }
-    .accordion-body.open {
-      opacity:1;
-      transform:translateY(0);
-    }
+    .accordion-body.open { opacity:1;transform:translateY(0); }
 
     /* ── Settings open btn ─────────────────────────────────────── */
     .settings-open-btn {
       width:100%;background:none;border:none;cursor:pointer;
       color:var(--muted);font-size:.82rem;font-family:var(--font);
       display:flex;align-items:center;justify-content:space-between;
-      padding:.35rem 0;transition:color .15s;
-      user-select:none;
+      padding:.35rem 0;transition:color .15s;user-select:none;
     }
     .settings-open-btn:hover { color:var(--text); }
-    .settings-open-btn-arrow { font-size:.65rem; color:var(--faint); }
+    .settings-open-btn-arrow { font-size:.65rem;color:var(--faint); }
 
     /* ── Peers panel ───────────────────────────────────────────── */
     .peers-body{padding:.5rem 0 .2rem;display:flex;flex-direction:column;gap:.4rem;}
     .peer-row{
       display:flex;align-items:center;gap:.6rem;padding:.35rem .5rem;
       border-radius:8px;cursor:pointer;
-      transition:background .12s, transform .1s;
+      transition:background .12s,transform .1s;
       opacity:0;transform:translateX(-10px);
     }
     .accordion-body.open .peer-row{opacity:1;transform:translateX(0);}
@@ -338,21 +389,17 @@
     .peer-badge.online {background:rgba(80,200,120,.15);color:#6fcf97;}
     .peer-badge.offline{background:rgba(242,114,128,.1);color:var(--coral);}
     .peers-empty{font-size:.75rem;color:var(--faint);padding:.3rem .5rem;}
-
-    /* scan progress bar */
     .scan-progress-wrap {
       height:2px;border-radius:2px;background:var(--border);overflow:hidden;
-      margin-bottom:.35rem;
-      max-height:0;opacity:0;
-      transition:max-height .25s ease, opacity .25s ease;
+      margin-bottom:.35rem;max-height:0;opacity:0;
+      transition:max-height .25s ease,opacity .25s ease;
     }
-    .scan-progress-wrap.visible { max-height:4px; opacity:1; }
+    .scan-progress-wrap.visible { max-height:4px;opacity:1; }
     .scan-progress-bar {
       height:100%;width:0%;border-radius:2px;
       background:linear-gradient(90deg,var(--primary),var(--coral));
       transition:width .4s cubic-bezier(0.16,1,0.3,1);
     }
-
     .scan-btn{
       margin-top:.3rem;padding:.38rem .7rem;
       background:none;border:1px solid var(--border);border-radius:7px;
@@ -363,27 +410,19 @@
     .scan-btn:hover{background:var(--border);color:var(--text);transform:scale(1.02);}
     .scan-btn.scanning { animation: scanPulse 0.9s ease-in-out infinite alternate; }
     @keyframes scanPulse { from{opacity:.6} to{opacity:1} }
-    .scan-dot{
-      width:6px;height:6px;border-radius:50%;background:var(--primary);
-      transition:background .2s, transform .3s;
-    }
-    .scan-btn.scanning .scan-dot {
-      background:var(--coral);
-      animation: dotPing 0.7s ease-in-out infinite alternate;
-    }
+    .scan-dot{width:6px;height:6px;border-radius:50%;background:var(--primary);transition:background .2s,transform .3s;}
+    .scan-btn.scanning .scan-dot{background:var(--coral);animation:dotPing 0.7s ease-in-out infinite alternate;}
     @keyframes dotPing { from{transform:scale(1)} to{transform:scale(1.6)} }
-
-    /* peer count badge on accordion label */
     .peer-count-badge {
       display:inline-flex;align-items:center;justify-content:center;
       min-width:16px;height:16px;padding:0 4px;
       background:rgba(242,114,128,.18);color:var(--primary);
       border-radius:99px;font-size:.6rem;font-weight:700;
       opacity:0;transform:scale(0.6);
-      transition:opacity .25s ease, transform .25s cubic-bezier(0.34,1.3,0.64,1);
+      transition:opacity .25s ease,transform .25s cubic-bezier(0.34,1.3,0.64,1);
       margin-left:.3rem;
     }
-    .peer-count-badge.visible { opacity:1; transform:scale(1); }
+    .peer-count-badge.visible { opacity:1;transform:scale(1); }
 
     /* ── Misc ───────────────────────────────────────────────────── */
     .btn{padding:.45rem .9rem;border-radius:7px;font-size:.82rem;font-weight:600;cursor:pointer;font-family:var(--font);border:none;transition:background .15s,transform .1s;}
@@ -403,7 +442,7 @@
       border-bottom:2px solid var(--border);background:var(--surface);flex-shrink:0;
       animation: topbarIn 0.4s cubic-bezier(0.16,1,0.3,1) both;
     }
-    @keyframes topbarIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes topbarIn { from { opacity:0;transform:translateY(-8px); } to { opacity:1;transform:translateY(0); } }
     .chat-topbar .avatar{width:36px;height:36px;font-size:.8rem;}
     .topbar-info .title{font-weight:700;font-size:1rem;}
     .topbar-info .sub{font-size:.75rem;color:var(--faint);}
@@ -422,7 +461,7 @@
     }
     .msg-row.me{margin-left:auto;flex-direction:row-reverse;}
     @keyframes bubbleIn {
-      from { opacity:0; transform:scale(0.85) translateY(8px); } to { opacity:1; transform:scale(1) translateY(0); }
+      from { opacity:0;transform:scale(0.85) translateY(8px); } to { opacity:1;transform:scale(1) translateY(0); }
     }
     .bubble{
       padding:.1rem 1rem;border-radius:16px 16px 16px 5px;
@@ -449,7 +488,7 @@
     .composer-area input{
       flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;
       padding:.6rem 1rem;font-size:.9rem;color:var(--text);font-family:var(--font);
-      outline:none;transition:border-color .15s, box-shadow .2s;
+      outline:none;transition:border-color .15s,box-shadow .2s;
     }
     .composer-area input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.15);}
     .composer-area input::placeholder{color:var(--faint);}
@@ -466,7 +505,7 @@
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+      *,*::before,*::after { animation-duration:0.01ms !important;transition-duration:0.01ms !important; }
     }
   </style>
 </head>
@@ -550,58 +589,77 @@
   </div>
 </div>
 
-<!-- settings modal -->
+<!-- ═══════════════════════════════════════════════════════════════
+     SETTINGS MODAL — Claude-style two-pane
+     Plugin tabs are injected dynamically via EnclavePlugins.registerSettingsTab()
+═══════════════════════════════════════════════════════════════ -->
 <div class="modal-backdrop hidden" id="settings-backdrop">
-  <div class="modal-card settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+  <div class="settings-shell" role="dialog" aria-modal="true" aria-label="Settings">
 
-    <!-- header -->
-    <div style="display:flex;align-items:center;justify-content:space-between;">
-      <div class="modal-title" id="settings-modal-title" style="text-align:left;">settings &amp; config</div>
-      <button onclick="closeSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:1.1rem;line-height:1;padding:.2rem .4rem;border-radius:6px;transition:color .15s;" title="close">&times;</button>
-    </div>
+    <button class="settings-close-btn" onclick="closeSettingsModal()" title="close">&times;</button>
 
-    <!-- section: node -->
-    <div class="smodal-section">
-      <div class="smodal-section-title">node</div>
-      <div class="smodal-field">
-        <div class="smodal-label">session passphrase</div>
-        <div style="position:relative;">
-          <input id="cfg-pass" class="smodal-input" type="password"
-                 placeholder="unlock identity + encrypt/decrypt"
-                 style="padding-right:2.6rem;"
-                 oninput="onPassphraseChange()"/>
-          <button class="modal-eye" onclick="toggleCfgEye()" id="cfg-eye-btn" title="show/hide">show</button>
+    <!-- left nav -->
+    <nav class="stab-nav" id="stab-nav">
+      <div class="stab-section-label">core</div>
+      <button class="stab-item active" data-tab="node"    onclick="switchSettingsTab('node')">
+        <span class="stab-icon">🔐</span> Node
+      </button>
+      <button class="stab-item"        data-tab="sms"     onclick="switchSettingsTab('sms')">
+        <span class="stab-icon">📱</span> SMS Gateway
+      </button>
+      <div class="stab-section-label" id="stab-plugins-label" style="display:none;">plugins</div>
+    </nav>
+
+    <!-- right content -->
+    <div class="stab-content" id="stab-content">
+
+      <!-- Node panel -->
+      <div class="stab-panel active" id="stab-panel-node">
+        <div class="stab-panel-title">Node</div>
+        <div class="smod-field">
+          <div class="smod-label">session passphrase</div>
+          <div class="smod-pass-wrap">
+            <input id="cfg-pass" class="smod-input" type="password"
+                   placeholder="unlock identity + encrypt/decrypt"
+                   oninput="onPassphraseChange()"/>
+            <button class="modal-eye" onclick="toggleCfgEye()" id="cfg-eye-btn" title="show/hide">show</button>
+          </div>
         </div>
+        <div class="smod-btn-row">
+          <button class="btn btn-primary btn-ripple" id="cfg-unlock-btn" onclick="startNode()" style="flex:1;">
+            unlock &amp; start node
+          </button>
+        </div>
+        <div class="smod-status" id="cfg-status">&mdash;</div>
       </div>
-      <div class="smodal-btn-row">
-        <button class="btn btn-primary btn-ripple" id="cfg-unlock-btn" onclick="startNode()" style="flex:1;">unlock &amp; start node</button>
-      </div>
-      <div class="smodal-status" id="cfg-status">&mdash;</div>
-    </div>
 
-    <!-- section: sms gateway -->
-    <div class="smodal-section">
-      <div class="smodal-section-title">sms gateway</div>
-      <div class="smodal-field">
-        <div class="smodal-label">username</div>
-        <input id="cfg-sms-user" class="smodal-input" type="text" autocomplete="off"/>
+      <!-- SMS Gateway panel -->
+      <div class="stab-panel" id="stab-panel-sms">
+        <div class="stab-panel-title">SMS Gateway</div>
+        <div class="smod-field">
+          <div class="smod-label">username</div>
+          <input id="cfg-sms-user" class="smod-input" type="text" autocomplete="off"/>
+        </div>
+        <div class="smod-field">
+          <div class="smod-label">password</div>
+          <input id="cfg-sms-pass" class="smod-input" type="password"/>
+        </div>
+        <div class="smod-field">
+          <div class="smod-label">device host (ip:port or cloud)</div>
+          <input id="cfg-sms-host" class="smod-input" type="text" placeholder="192.168.1.x:8080"/>
+        </div>
+        <div class="smod-btn-row">
+          <button class="btn btn-ghost btn-ripple" id="cfg-save-btn" onclick="saveConfig()" style="flex:1;">
+            save sms config
+          </button>
+        </div>
+        <div class="smod-status" id="cfg-sms-status"></div>
       </div>
-      <div class="smodal-field">
-        <div class="smodal-label">password</div>
-        <input id="cfg-sms-pass" class="smodal-input" type="password"/>
-      </div>
-      <div class="smodal-field">
-        <div class="smodal-label">device host (ip:port or cloud)</div>
-        <input id="cfg-sms-host" class="smodal-input" type="text" placeholder="192.168.1.x:8080"/>
-      </div>
-      <div class="smodal-btn-row">
-        <button class="btn btn-ghost btn-ripple" id="cfg-save-btn" onclick="saveConfig()" style="flex:1;">save sms config</button>
-      </div>
-    </div>
 
-    <!-- close -->
-    <button class="modal-skip" onclick="closeSettingsModal()">close</button>
-  </div>
+      <!-- Plugin panels are injected here by EnclavePlugins.registerSettingsTab() -->
+
+    </div><!-- /stab-content -->
+  </div><!-- /settings-shell -->
 </div>
 
 <!-- main layout -->
@@ -637,7 +695,6 @@
         <div class="peers-body" id="peers-list">
           <div class="peers-empty">no peers detected yet</div>
         </div>
-        <!-- scan progress -->
         <div class="scan-progress-wrap" id="scan-progress-wrap">
           <div class="scan-progress-bar" id="scan-progress-bar"></div>
         </div>
@@ -705,7 +762,7 @@ async function api(url, body) {
 function setStatus(txt, type='') {
   const el = $('cfg-status');
   el.textContent = txt;
-  el.className = 'smodal-status' + (type ? ' '+type : '');
+  el.className = 'smod-status' + (type ? ' '+type : '');
 }
 
 function toggleTheme() {
@@ -821,9 +878,19 @@ async function modalUnlock() {
   await startRealtime();
 }
 
-// ── Settings modal ─────────────────────────────────────────────────────────
+// ── Settings modal — tab switching ──────────────────────────────────────────
 
-function openSettingsModal() {
+function switchSettingsTab(tabId) {
+  document.querySelectorAll('.stab-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tabId);
+  });
+  document.querySelectorAll('.stab-panel').forEach(el => {
+    el.classList.toggle('active', el.id === 'stab-panel-' + tabId);
+  });
+}
+
+function openSettingsModal(tabId) {
+  switchSettingsTab(tabId || 'node');
   const bd = $('settings-backdrop');
   bd.style.display = 'flex';
   requestAnimationFrame(() => bd.classList.remove('hidden'));
@@ -835,12 +902,57 @@ function closeSettingsModal() {
   setTimeout(() => bd.style.display = 'none', 200);
 }
 
-// close on backdrop click
 document.addEventListener('DOMContentLoaded', () => {
   $('settings-backdrop').addEventListener('click', e => {
     if (e.target === $('settings-backdrop')) closeSettingsModal();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+//  EnclavePlugins — public plugin API
+//  Usage:
+//    EnclavePlugins.registerSettingsTab({
+//      id:    'my-plugin',          // unique slug
+//      label: 'My Plugin',          // nav label
+//      icon:  '🔌',                 // emoji / HTML
+//      html:  '<div>...</div>',     // panel inner HTML
+//      init:  (panelEl) => {},      // optional — called once after insertion
+//    });
+// ══════════════════════════════════════════════════════════════════════════
+window.EnclavePlugins = (() => {
+  const _tabs = [];
+
+  function registerSettingsTab({ id, label, icon = '🔌', html = '', init }) {
+    if (!id || !label) { console.warn('[EnclavePlugins] registerSettingsTab requires id + label'); return; }
+    if (_tabs.find(t => t.id === id)) { console.warn('[EnclavePlugins] tab already registered:', id); return; }
+    _tabs.push({ id, label, icon, html, init });
+
+    // nav item
+    const nav = $('stab-nav');
+    const pluginsLabel = $('stab-plugins-label');
+    pluginsLabel.style.display = '';
+    const btn = document.createElement('button');
+    btn.className = 'stab-item';
+    btn.dataset.tab = id;
+    btn.onclick = () => switchSettingsTab(id);
+    btn.innerHTML = `<span class="stab-icon">${icon}</span> ${escHtml(label)}`;
+    nav.appendChild(btn);
+
+    // panel
+    const content = $('stab-content');
+    const panel = document.createElement('div');
+    panel.className = 'stab-panel';
+    panel.id = 'stab-panel-' + id;
+    panel.innerHTML = `<div class="stab-panel-title">${escHtml(label)}</div>` + html;
+    content.appendChild(panel);
+
+    if (typeof init === 'function') {
+      try { init(panel); } catch(e) { console.error('[EnclavePlugins] init error for', id, e); }
+    }
+  }
+
+  return { registerSettingsTab, _tabs };
+})();
 
 // ── New chat modal ──────────────────────────────────────────────────────────
 
@@ -1083,13 +1195,19 @@ async function saveConfig() {
   const u = $('cfg-sms-user').value.trim();
   const p = $('cfg-sms-pass').value;
   const h = $('cfg-sms-host').value.trim();
-  if (!u || !p) { setStatus('username + password required', 'err'); return; }
+  const statusEl = $('cfg-sms-status');
+  if (!u || !p) {
+    statusEl.textContent = 'username + password required';
+    statusEl.className = 'smod-status err';
+    return;
+  }
   const btn = $('cfg-save-btn');
   btn.disabled = true;
   const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
   ripple('cfg-save-btn');
   btn.disabled = false;
-  setStatus(d.error ? 'error: '+d.error : '\u2713 sms config saved', d.error ? 'err' : 'ok');
+  statusEl.textContent = d.error ? 'error: '+d.error : '\u2713 sms config saved';
+  statusEl.className = 'smod-status ' + (d.error ? 'err' : 'ok');
 }
 
 // ── Chats ──────────────────────────────────────────────────────────────────
