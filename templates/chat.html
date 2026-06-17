@@ -1433,11 +1433,14 @@ async function startRealtime() {
     localStorage.setItem(BT_STORE_KEY, JSON.stringify(arr));
   }
 
+  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escAttr(s) { return String(s).replace(/'/g,"&#39;"); }
+
   function renderBTList(panel) {
     const listEl = panel.querySelector('#bt-device-list');
     const devices = loadStored();
     if (!devices.length) {
-      listEl.innerHTML = '<div class="bt-unavail">no paired devices yet — click scan to find one</div>';
+      listEl.innerHTML = '<div class="bt-unavail">no devices yet — click scan to find one</div>';
       return;
     }
     listEl.innerHTML = devices.map(d => `
@@ -1452,16 +1455,13 @@ async function startRealtime() {
       </div>`).join('');
   }
 
-  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-  function escAttr(s) { return String(s).replace(/'/g,"&#39;"); }
-
   const panelHTML = `
     <div class="smod-field">
-      <div class="smod-label">paired bluetooth devices</div>
+      <div class="smod-label">nearby bluetooth devices</div>
       <div class="bt-device-list" id="bt-device-list"></div>
     </div>
     <div class="smod-btn-row">
-      <button class="btn btn-primary" id="bt-scan-btn" style="flex:1;">scan for device</button>
+      <button class="btn btn-primary" id="bt-scan-btn" style="flex:1;">scan for devices</button>
       <button class="btn btn-ghost"   id="bt-clear-btn">clear all</button>
     </div>
     <div class="smod-status" id="bt-status"></div>
@@ -1487,46 +1487,44 @@ async function startRealtime() {
         const btn = panel.querySelector('#bt-scan-btn');
         const st  = panel.querySelector('#bt-status');
 
-        if (!navigator.bluetooth) {
-          st.textContent = 'Web Bluetooth not supported in this browser';
-          st.className = 'smod-status err';
-          return;
-        }
-
         btn.disabled = true;
         btn.textContent = 'scanning\u2026';
-        st.textContent = 'waiting for device selection\u2026';
+        st.textContent = 'scanning for nearby devices (this may take ~8 s)\u2026';
         st.className = 'smod-status';
 
         try {
-          const device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
-            optionalServices: ['generic_access'],
-          });
+          const r = await fetch('/api/bt/scan?duration=8');
+          const data = await r.json();
 
-          const name = device.name || 'unknown device';
-          // Web Bluetooth does not expose MAC directly; use device.id as proxy
-          const mac  = device.id || ('BT-' + Math.random().toString(36).slice(2,10).toUpperCase());
-
-          const stored = loadStored();
-          if (!stored.find(d => d.mac === mac)) {
-            stored.push({ name, mac });
-            saveStored(stored);
+          if (!r.ok) {
+            st.textContent = 'error: ' + (data.error || r.statusText);
+            st.className = 'smod-status err';
+            return;
           }
 
+          const found = data.devices || [];
+          if (!found.length) {
+            st.textContent = 'no devices found nearby';
+            st.className = 'smod-status';
+            return;
+          }
+
+          // Merge with stored — avoid duplicates by MAC
+          const stored = loadStored();
+          found.forEach(d => {
+            if (!stored.find(s => s.mac === d.mac)) stored.push(d);
+          });
+          saveStored(stored);
           renderBTList(panel);
-          st.textContent = '\u2713 paired: ' + name;
+
+          st.textContent = '\u2713 found ' + found.length + ' device' + (found.length > 1 ? 's' : '');
           st.className = 'smod-status ok';
         } catch(e) {
-          if (e.name === 'NotFoundError') {
-            st.textContent = 'no device selected';
-          } else {
-            st.textContent = 'error: ' + e.message;
-            st.className = 'smod-status err';
-          }
+          st.textContent = 'scan failed: ' + e.message;
+          st.className = 'smod-status err';
         } finally {
           btn.disabled = false;
-          btn.textContent = 'scan for device';
+          btn.textContent = 'scan for devices';
         }
       });
     }
