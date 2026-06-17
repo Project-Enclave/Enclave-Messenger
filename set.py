@@ -3,7 +3,6 @@ set.py — Enclave Messenger first-run setup.
 
 Does:
   1. Checks Python version (3.10+)
-  1b. Detects OS and installs correct Bluetooth package
   2. Installs dependencies (pip first, falls back to uv venv)
   3. Walks through config (username, SMS gateway creds)
   4. Creates the identity if none exists
@@ -102,50 +101,6 @@ def step_python_version():
     step_python_version_pass=True
     step_failed=0
     ok(f"Python {major}.{minor} — OK")
-
-
-def step_bluetooth():
-    banner("Step 1b — Bluetooth setup")
-
-    plat = sys.platform
-    req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
-
-    with open(req_file, "r") as f:
-        reqs = f.read()
-
-    # Already has a bt package — nothing to do
-    if "pybluez" in reqs.lower() or "lightblue" in reqs.lower():
-        ok("Bluetooth package already in requirements.txt — skipping.")
-        return
-
-    if plat == "linux":
-        info("Linux detected — installing libbluetooth-dev...")
-        result = run(
-            ["sudo", "apt-get", "install", "-y", "libbluetooth-dev"],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            err("Could not install libbluetooth-dev (no sudo / not Debian-based?).")
-            err("Bluetooth will be unavailable — continuing anyway.")
-            return
-        ok("libbluetooth-dev installed.")
-        bt_pkg = "pybluez2"
-
-    elif plat == "win32":
-        info("Windows detected.")
-        bt_pkg = "PyBluez-win10"
-
-    elif plat == "darwin":
-        info("macOS detected — Bluetooth support is limited.")
-        bt_pkg = "LightBlue"
-
-    else:
-        info(f"Unknown platform ({plat}) — skipping Bluetooth.")
-        return
-
-    with open(req_file, "a") as f:
-        f.write(f"{bt_pkg}\n")
-    ok(f"Added {bt_pkg} to requirements.txt")
 
 
 def step_install_requirements():
@@ -310,8 +265,6 @@ if __name__ == "__main__":
     print("\n\033[95m  Enclave Messenger — Setup\033[0m")
 
     step_python_version()       # no need to re-run if it fails
-
-    step_bluetooth()            # detect OS, patch requirements.txt with correct BT package
 
     step_install_requirements() # should try again
     while not step_install_requirements_pass:
