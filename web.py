@@ -26,7 +26,7 @@ except ImportError:
 
 import main as app_core
 from core.network.scanner import scan_lan_peers, ENCLAVE_PORT
-from core.plugins.bluetooth import BluetoothUnavailableError
+from core.plugins.builtin.bluetooth.main import BluetoothUnavailableError
 
 app = Flask(__name__)
 
@@ -64,19 +64,10 @@ def _ws_broadcast(event: str, data: dict):
 # Peer staleness helper
 # ---------------------------------------------------------------------------
 
-# A peer is considered stale after this many seconds without a heartbeat.
-# discovery.py broadcasts every 30 s; we allow 1 missed interval and a 10 s delay → 40.
 _PEER_STALE_SECONDS = 40
 
 
 def _stamp_online(peers: list) -> list:
-    """
-    Annotate each peer dict with an ``online`` boolean.
-
-    A peer is considered online if its ``last_seen`` timestamp is within the
-    last _PEER_STALE_SECONDS seconds.  Peers that have never been seen (no
-    ``last_seen`` field) or whose timestamp cannot be parsed are marked offline.
-    """
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=_PEER_STALE_SECONDS)
     result = []
     for p in peers:
@@ -136,7 +127,6 @@ def identity_generate():
 
 # -- Node --------------------------------------------------------------------
 
-# Guard: callbacks must only be registered once.
 _callbacks_registered = False
 
 
@@ -148,10 +138,6 @@ def node_start():
         return err("passphrase required", 400)
 
     if app_core.get_node() is not None:
-        # Node is already running. Verify the passphrase by attempting to
-        # decrypt the identity keys — load_identity() raises on wrong pass.
-        # This allows refresh and cross-device access without a restart,
-        # while still blocking any passphrase other than the correct one.
         try:
             app_core.identity.load_identity(passphrase=p)
         except Exception:
@@ -201,7 +187,6 @@ def list_peers():
 
 @app.route("/api/peers/scan")
 def scan_peers_route():
-    """Scan the local LAN subnet for Enclave peers on port 5001."""
     try:
         found = scan_lan_peers(app_core.peers)
         return jsonify({"peers": found, "count": len(found)})
@@ -324,11 +309,6 @@ def sms_status(message_id):
 
 @app.route("/api/bt/scan")
 def bt_scan():
-    """
-    Trigger a Bluetooth device discovery scan.
-    Optional query param: ?duration=8 (seconds, default 8).
-    Returns: { "devices": [ { "name": str, "mac": str }, ... ] }
-    """
     try:
         duration = int(request.args.get("duration", 8))
     except (ValueError, TypeError):
