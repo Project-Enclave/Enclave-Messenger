@@ -30,7 +30,7 @@ from core.crypto import CryptoManager
 from core.crypto.e2e import E2EManager
 from core.storage import ConfigStore, ChatStore, PeerStore, LogStore
 from core.plugins import SMSGateway, PluginManager
-from core.plugins.bluetooth import (
+from core.plugins.builtin.bluetooth.main import (
     BluetoothPlugin,
     BluetoothUnavailableError,
     is_bt_chat_id,
