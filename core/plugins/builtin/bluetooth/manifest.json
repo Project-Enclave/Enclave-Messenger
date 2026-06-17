@@ -1,0 +1,9 @@
+{
+    "id": "bluetooth",
+    "display_name": "Bluetooth",
+    "description": "Bluetooth device discovery and RFCOMM messaging. Uses bluetoothctl as fallback (no extra packages needed on Linux).",
+    "version": "1.0.0",
+    "author": "Enclave",
+    "min_enclave_version": "1.0.0",
+    "permissions": []
+}
