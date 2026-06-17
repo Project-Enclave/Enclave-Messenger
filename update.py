@@ -32,7 +32,7 @@ def verify_and_apply(update_dir):
     if "Verified OK" not in result.stdout:
         raise PermissionError("Invalid signature — update rejected. Do not apply.")
 
-    print("Signature verified ✅")
+    print("Signature verified ")
 
     # 2. Verify file hashes
     manifest = json.load(open(manifest_path))
@@ -45,7 +45,7 @@ def verify_and_apply(update_dir):
             raise ValueError(f"Hash mismatch for {fname} — update rejected.")
         print(f"  Verified: {fname}")
 
-    print("All hashes verified ✅")
+    print("All hashes verified ")
 
     # 3. Apply update
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -56,7 +56,7 @@ def verify_and_apply(update_dir):
         shutil.copy2(src, dst)
         print(f"  Applied: {fname}")
 
-    print("\nUpdate applied ✅ — restart Enclave to take effect.")
+    print("\nUpdate applied — restart Enclave to take effect.")
 
 
 if __name__ == "__main__":
