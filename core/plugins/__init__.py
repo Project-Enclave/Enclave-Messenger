@@ -1,4 +1,4 @@
-from .builtin.sms_gateway import sms_gateway
+from .builtin.sms_gateway.sms_gateway import SMSGateway
 from .manager import PluginManager
 from .base import EnclavePlugin, PluginCore
 
