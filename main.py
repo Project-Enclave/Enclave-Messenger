@@ -29,7 +29,7 @@ from core.identity import IdentityManager
 from core.crypto import CryptoManager
 from core.crypto.e2e import E2EManager
 from core.storage import ConfigStore, ChatStore, PeerStore, LogStore
-from core.plugins import SMSGateway, PluginManager
+from core.plugins.builtin.smsgateway import SMSGateway, PluginManager
 from core.plugins.builtin.bluetooth.main import (
     BluetoothPlugin,
     BluetoothUnavailableError,
