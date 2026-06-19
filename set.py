@@ -120,6 +120,7 @@ def step_install_requirements():
         result = run([sys.executable, "-m", "pip", "install", "-r", req_file])
         if result.returncode == 0:
             ok("All requirements installed via pip.")
+            step_install_requirements_pass=True
             return
         err("pip install failed.")
         step_install_requirements_pass=False
