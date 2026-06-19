@@ -4,6 +4,16 @@ a p2p messenger that works even when the **internet** doesn't and fallbacks to _
 
 ***
 
+## install
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/Project-Enclave/setup/main/messenger.sh)
+```
+
+> nothing to run yet. check back later. but when there is, that's the command.
+
+***
+
 ## what is this
 
 (skip this part if you want to)
@@ -57,29 +67,6 @@ no accounts. no servers. your identity is a keypair that lives on your device. y
 
 ***
 
-## running it
-
-> nothing to run yet. check back later.
-
-when there is something:
-
-```bash
-git clone https://github.com/Project-Enclave/Enclave-Messenger
-cd Enclave-Messenger
-pip install -r requirements.txt
-python web.py
-```
-
-or
-
-```bash
-git clone https://github.com/Project-Enclave/Enclave-Messenger
-cd Enclave-Messenger
-python3 set.py
-```
-
-***
-
 ## tech stack
 
 | layer | tech |
@@ -103,6 +90,8 @@ it's a really small project right now. if you know me and want to help, just mes
 - classmates at jj school montessori and army public school khadakwasla
 - github — for the student pack
 - saksham — for support, testing, debugging, UI/UX, and a **lot** more
+- signal — for open-sourcing their encryption methods
+- [silence](https://silence.im) — for the original idea
 
 ***
 
@@ -115,5 +104,6 @@ it's a really small project right now. if you know me and want to help, just mes
 ## etc
 
 - this project is also on [stardance](https://stardance.hackclub.com) by [hackclub](https://hackclub.com)
+- install scripts live in [Project-Enclave/setup](https://github.com/Project-Enclave/setup)
 
 *part of [project enclave](https://github.com/Project-Enclave) · distributed by intent*
