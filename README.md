@@ -7,10 +7,10 @@ a p2p messenger that works even when the **internet** doesn't and fallbacks to _
 ## install
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/Project-Enclave/setup/main/messenger.sh)
+curl -sL https://raw.githubusercontent.com/Project-Enclave/setup/main/messenger.sh | bash
 ```
 
-> nothing to run yet. check back later. but when there is, that's the command.
+> works in bash, zsh, and fish. nothing to run yet &#8212; check back later.
 
 ***
 
