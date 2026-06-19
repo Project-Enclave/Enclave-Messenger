@@ -51,9 +51,9 @@ no accounts. no servers. your identity is a keypair that lives on your device. y
 - [x] message format + delivery
 - [ ] double ratchet sessions
 - [ ] flutter ui
-- [ ] bluetooth transport
+- [x] bluetooth transport
 - [ ] lora transport
-- [ ] plugin system
+- [x] plugin system
 
 ***
 
