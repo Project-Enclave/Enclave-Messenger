@@ -7,20 +7,21 @@ a clean API that web.py, tui.py, gui.py etc. import directly.
 Running directly:
     python main.py run              # start node (discovery + transport)
     python main.py run --passphrase secret
+    python main.py run --profile alice
 
-CLI utilities :
+CLI utilities:
     python main.py init
+    python main.py init --profile alice
     python main.py encrypt ...
     python main.py decrypt ...
     python main.py sms send ...
     python main.py bt scan
     python main.py bt send --to AA:BB:CC:DD:EE:FF --message "Hello"
-
-Note: This is the same as the ~/core.py from the first couple of versions.
 """
 
 import argparse
 import json
+import os
 import sys
 import signal
 import threading
@@ -37,16 +38,41 @@ from core.plugins.builtin.bluetooth.main import (
     chat_id_from_mac,
 )
 from core.network import Node
+from core import profiles as _profiles
+
 
 # ---------------------------------------------------------------------------
-# Singletons — initialised once, imported by web.py / tui.py / gui.py
+# Profile-aware store initialisation
 # ---------------------------------------------------------------------------
 
-config   = ConfigStore()
-chats    = ChatStore()
-peers    = PeerStore()
-identity = IdentityManager()
-log      = LogStore(name="enclave")
+def _init_stores(profile_name: str = None):
+    """
+    Initialise all stores for the given profile.
+    Falls back to the active profile, then ensures a 'default' profile exists.
+    Returns (config, chats, peers, identity, log, profile_name).
+    """
+    if profile_name is None:
+        profile_name = _profiles.get_active_profile()
+    if profile_name is None:
+        profile_name = _profiles.ensure_default_profile()
+
+    data_dir = _profiles.get_profile_data_dir(profile_name)
+    identity_dir = os.path.join(data_dir, "identity")
+
+    _config   = ConfigStore(base_dir=data_dir)
+    _chats    = ChatStore(base_dir=data_dir)
+    _peers    = PeerStore(base_dir=data_dir)
+    _identity = IdentityManager(storage_dir=identity_dir)
+    _log      = LogStore(name=f"enclave-{profile_name}")
+    return _config, _chats, _peers, _identity, _log, profile_name
+
+
+# ---------------------------------------------------------------------------
+# Singletons — initialised once at import time for the active profile.
+# web.py / tui.py / gui.py import these directly and they continue to work.
+# ---------------------------------------------------------------------------
+
+config, chats, peers, identity, log, _active_profile = _init_stores()
 
 # Plugin manager — discovered on import, enabled after node starts.
 plugin_manager = PluginManager(
@@ -72,11 +98,6 @@ _bt_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 def _bt_on_message(chat_id: str, plaintext: str) -> None:
-    """
-    Callback fired by the Bluetooth listener thread when a message arrives.
-    Stores the message in ChatStore so the UI picks it up on the next poll
-    or WebSocket push.
-    """
     import datetime
     ts = datetime.datetime.utcnow().isoformat() + "Z"
     chats.append_message(chat_id, {"token": plaintext, "sender": "peer", "ts": ts})
@@ -84,9 +105,6 @@ def _bt_on_message(chat_id: str, plaintext: str) -> None:
 
 
 def get_bluetooth() -> BluetoothPlugin:
-    """
-    Return the shared BluetoothPlugin instance, creating it on first call.
-    """
     global _bt
     with _bt_lock:
         if _bt is None:
@@ -95,19 +113,10 @@ def get_bluetooth() -> BluetoothPlugin:
 
 
 def scan_bluetooth(duration: int = 8) -> list[dict]:
-    """
-    Scan for nearby Bluetooth devices.
-    Returns [{'name': str, 'mac': str}, ...]
-    Raises BluetoothUnavailableError if hardware is not present.
-    """
     return get_bluetooth().scan(duration=duration)
 
 
 def send_bt(mac_or_chat_id: str, plaintext: str) -> None:
-    """
-    Send a plaintext message to a Bluetooth peer over RFCOMM.
-    Also appends to ChatStore so the message appears in the UI.
-    """
     import datetime
     bt = get_bluetooth()
     bt.send(mac_or_chat_id, plaintext)
@@ -119,10 +128,6 @@ def send_bt(mac_or_chat_id: str, plaintext: str) -> None:
 
 
 def start_bt_listener() -> None:
-    """
-    Start the background RFCOMM listener.
-    No-op if already running or if PyBluez is unavailable.
-    """
     try:
         get_bluetooth().start_listener()
     except BluetoothUnavailableError as e:
@@ -130,21 +135,16 @@ def start_bt_listener() -> None:
 
 
 def stop_bt_listener() -> None:
-    """Stop the background RFCOMM listener if running."""
     with _bt_lock:
         if _bt is not None:
             _bt.stop_listener()
 
 
 # ---------------------------------------------------------------------------
-# Node lifecycle (called by web.py on startup, or by 'run' CLI command)
+# Node lifecycle
 # ---------------------------------------------------------------------------
 
 def start_node(passphrase: str) -> Node:
-    """
-    Load identity, create Node, start background threads.
-    Returns the Node. Safe to call only once.
-    """
     global _node
     with _node_lock:
         if _node is not None:
@@ -156,20 +156,26 @@ def start_node(passphrase: str) -> Node:
         identity.load_identity(passphrase=passphrase)
         log.info("Identity loaded: " + identity.get_user_id())
 
+        profile_meta  = _profiles.get_profile(_active_profile)
+        transport_port = (
+            profile_meta["transport_port"]
+            if profile_meta
+            else 43100
+        )
+
         _node = Node(
             identity_manager=identity,
             config_store=config,
             peer_store=peers,
             chat_store=chats,
+            port=transport_port,
         )
         _node.start()
         log.info("Node started")
 
-        # Wire node into plugin manager and enable saved plugins.
         plugin_manager.set_node(_node)
         plugin_manager.enable_all_saved()
 
-        # Start Bluetooth listener (silently skipped if PyBluez unavailable).
         start_bt_listener()
 
         return _node
@@ -194,11 +200,6 @@ def get_node() -> Node | None:
 # ---------------------------------------------------------------------------
 
 def send_message(peer_user_id: str, plaintext: str) -> bool:
-    """
-    Send a plaintext message to a peer.
-    Automatically routes over Bluetooth if the chat ID starts with 'BT:'.
-    Returns True on delivery.
-    """
     if is_bt_chat_id(peer_user_id):
         send_bt(peer_user_id, plaintext)
         return True
@@ -208,12 +209,10 @@ def send_message(peer_user_id: str, plaintext: str) -> bool:
 
 
 def get_messages(chat_id: str) -> list:
-    """Return all stored messages for a chat."""
     return chats.load_messages(chat_id)
 
 
 def get_chats() -> list:
-    """Return all known chat IDs with message counts."""
     return [
         {"id": cid, "count": chats.message_count(cid)}
         for cid in chats.list_chats()
@@ -221,12 +220,10 @@ def get_chats() -> list:
 
 
 def get_peers() -> list:
-    """Return all known peers."""
     return peers.all()
 
 
 def get_identity_status() -> dict:
-    """Return current identity info for the UI."""
     has = identity.has_identity()
     user_id = ""
     if has and identity.ed25519_priv:
@@ -239,20 +236,11 @@ def get_identity_status() -> dict:
         "user_id": user_id,
         "username": config.username or "",
         "node_running": _node is not None,
+        "profile": _active_profile,
     }
 
 
 def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: str) -> str:
-    """
-    Encrypt a message token for display/storage.
-
-    If the identity is unlocked and the peer has an X25519 public key in
-    PeerStore, use E2EManager (X25519-AES-256-GCM with ephemeral keys).
-    Otherwise fall back to the legacy CryptoManager (passphrase + AES-256-GCM).
-
-    NOTE: E2E-encrypted sent messages cannot be re-decrypted from the token.
-    Store the plaintext locally after calling this.
-    """
     if identity.x25519_priv is not None:
         peer_info = peers.get(chat_id)
         peer_pub  = peer_info.get("x25519_pub") if peer_info else None
@@ -263,8 +251,6 @@ def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: s
                 chat_id=chat_id,
                 created_at=created_at,
             )
-
-    # Legacy path — passphrase-based
     return CryptoManager(passphrase).encrypt(
         plaintext=plaintext,
         chat_id=chat_id,
@@ -273,18 +259,6 @@ def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: s
 
 
 def decrypt_message(token: str, passphrase: str, chat_id: str | None = None) -> str:
-    """
-    Decrypt a message token.
-
-    E2E tokens (ephemeral X25519-AES-256-GCM) are decrypted with E2EManager
-    using the local identity X25519 private key.
-
-    Legacy passphrase tokens fall back to CryptoManager.
-
-    NOTE: Sent E2E messages cannot be re-decrypted — ephemeral sender keys
-    are never stored. The chat_id parameter is kept for API compatibility
-    but is no longer used for E2E decryption.
-    """
     if E2EManager.is_e2e_token(token):
         if identity.x25519_priv is None:
             raise RuntimeError(
@@ -292,8 +266,6 @@ def decrypt_message(token: str, passphrase: str, chat_id: str | None = None) -> 
                 "Start the node with your passphrase first."
             )
         return E2EManager(identity.x25519_priv).decrypt(token)
-
-    # Legacy path
     return CryptoManager(passphrase).decrypt(token)
 
 
@@ -306,11 +278,9 @@ def configure_sms(username: str, password: str, host: str | None):
 
 
 def send_sms(to: str, message: str) -> dict:
-    # Prefer plugin instance if available and configured
     plugin = plugin_manager.get("sms_gateway")
     if plugin and plugin._enabled:
         return plugin.get_sms_instance().send(to, message)
-    # Fallback to legacy ConfigStore-based approach
     sms = SMSGateway.from_config(config)
     return sms.send(to, message)
 
@@ -320,6 +290,10 @@ def send_sms(to: str, message: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def cmd_init(args):
+    if args.profile:
+        global config, chats, peers, identity, log, _active_profile
+        config, chats, peers, identity, log, _active_profile = _init_stores(args.profile)
+
     if identity.has_identity():
         print("Identity already exists.")
         return 0
@@ -333,12 +307,16 @@ def cmd_init(args):
     identity.save_identity(passphrase=passphrase)
     if args.username:
         config.username = args.username
-    print("Identity created.")
+    print(f"Identity created (profile: {_active_profile}).")
     print("User ID:", identity.get_user_id())
     return 0
 
 
 def cmd_run(args):
+    if args.profile:
+        global config, chats, peers, identity, log, _active_profile
+        config, chats, peers, identity, log, _active_profile = _init_stores(args.profile)
+
     import getpass
     passphrase = args.passphrase or getpass.getpass("Passphrase: ")
     try:
@@ -347,7 +325,8 @@ def cmd_run(args):
         print(f"Error: {e}")
         return 1
 
-    print(f"Enclave node running. User ID: {identity.get_user_id()}")
+    print(f"Enclave node running (profile: {_active_profile}).")
+    print(f"User ID: {identity.get_user_id()}")
     print("Press Ctrl+C to stop.")
 
     stop_event = threading.Event()
@@ -443,12 +422,16 @@ def build_parser():
     # init
     p_init = sub.add_parser("init", help="Create a new identity")
     p_init.add_argument("--username", default=None)
+    p_init.add_argument("--profile", default=None,
+                        help="Profile name to initialise (defaults to active profile)")
     p_init.set_defaults(func=cmd_init)
 
     # run
     p_run = sub.add_parser("run", help="Start the Enclave node (discovery + transport)")
     p_run.add_argument("--passphrase", default=None,
                        help="Identity passphrase (prompted if omitted)")
+    p_run.add_argument("--profile", default=None,
+                       help="Profile name to run (defaults to active profile)")
     p_run.set_defaults(func=cmd_run)
 
     # encrypt
@@ -491,7 +474,7 @@ def build_parser():
 
     p_bt_send = bt_sub.add_parser("send", help="Send a message over Bluetooth")
     p_bt_send.add_argument("--to",      required=True,
-                           help="Target MAC address (AA:BB:CC:DD:EE:FF) or BT: chat ID")
+                           help="Target MAC address or BT: chat ID")
     p_bt_send.add_argument("--message", required=True)
     p_bt_send.set_defaults(func=cmd_bt_send)
 

@@ -29,6 +29,8 @@ import threading
 import time
 from typing import Callable
 
+from core.plugins.base import EnclavePlugin, PluginCore
+
 logger = logging.getLogger(__name__)
 
 RFCOMM_PORT     = 3
@@ -58,7 +60,7 @@ def _require_bt():
         )
 
 
-# ── MAC helpers ───────────────────────────────────────────────────────────────
+# ── MAC helpers ──────────────────────────────────────────────────────
 
 MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 
@@ -77,7 +79,7 @@ def chat_id_from_mac(mac: str) -> str:
     return 'BT:' + mac.upper()
 
 
-# ── Main plugin class ─────────────────────────────────────────────────────────
+# ── Main plugin class ──────────────────────────────────────────────────
 
 class BluetoothPlugin:
     """
@@ -93,7 +95,7 @@ class BluetoothPlugin:
         self._listener    = None
         self._stop_event  = threading.Event()
 
-    # ── Discovery ─────────────────────────────────────────────────────────────
+    # ── Discovery ─────────────────────────────────────────────────────
 
     def scan(self, duration: int = 8, flush_cache: bool = True) -> list[dict]:
         """
@@ -161,7 +163,7 @@ class BluetoothPlugin:
         logger.info("[bluetooth] bluetoothctl scan done — %d device(s)", len(devices))
         return devices
 
-    # ── Send ──────────────────────────────────────────────────────────────────
+    # ── Send ──────────────────────────────────────────────────────────
 
     def send(self, mac_or_chat_id: str, plaintext: str) -> None:
         _require_bt()
@@ -175,7 +177,7 @@ class BluetoothPlugin:
         finally:
             sock.close()
 
-    # ── Listener ──────────────────────────────────────────────────────────────
+    # ── Listener ──────────────────────────────────────────────────────
 
     def start_listener(self) -> None:
         _require_bt()
@@ -244,3 +246,65 @@ class BluetoothPlugin:
     @classmethod
     def from_config(cls, config, on_message=None) -> "BluetoothPlugin":
         return cls(on_message=on_message)
+
+
+# ── EnclavePlugin wrapper (required by PluginManager) ─────────────────────────
+
+class Plugin(EnclavePlugin):
+    """
+    EnclavePlugin wrapper around BluetoothPlugin.
+    Registered by PluginManager; exposes lifecycle hooks and status.
+    """
+
+    name         = "bluetooth"
+    display_name = "Bluetooth"
+    description  = "Bluetooth RFCOMM transport for local peer-to-peer messaging."
+    version      = "1.0.0"
+    author       = "Project Enclave"
+
+    def __init__(self):
+        super().__init__()
+        self._bt: BluetoothPlugin | None = None
+
+    def enable(self, core: PluginCore) -> None:
+        super().enable(core)
+        self._bt = BluetoothPlugin(
+            on_message=self._on_message_cb,
+        )
+        try:
+            self._bt.start_listener()
+        except BluetoothUnavailableError as e:
+            logger.warning("[bluetooth:plugin] listener not started: %s", e)
+
+    def disable(self) -> None:
+        if self._bt:
+            self._bt.stop_listener()
+            self._bt = None
+        super().disable()
+
+    def _on_message_cb(self, chat_id: str, text: str) -> None:
+        if self._core and self._core.chats:
+            import datetime
+            ts = datetime.datetime.utcnow().isoformat() + "Z"
+            self._core.chats.append_message(
+                chat_id, {"token": text, "sender": "peer", "ts": ts}
+            )
+
+    def get_status(self) -> dict:
+        if not self._enabled:
+            return {"ok": False, "message": "disabled"}
+        if not _BT_AVAILABLE:
+            return {"ok": False, "message": "PyBluez not installed"}
+        return {"ok": True, "message": "listening"}
+
+    def get_settings_schema(self) -> list[dict]:
+        return [
+            {
+                "key": "scan_duration",
+                "label": "Scan duration (seconds)",
+                "type": "number",
+                "required": False,
+                "default": 8,
+                "hint": "How long to scan for nearby Bluetooth devices.",
+            }
+        ]
