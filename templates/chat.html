@@ -37,7 +37,7 @@
     html,body{height:100%;}
     body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;}
 
-    /* ── Splash ── */
+    /* -- Splash -- */
     #splash {
       position:fixed;inset:0;background:var(--bg);
       display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -67,7 +67,7 @@
     .splash-bar-fill { height:100%;width:0%;background:linear-gradient(90deg,var(--primary),var(--coral));border-radius:2px;animation: barFill 1s ease 1.3s forwards; }
     @keyframes barFill { to { width:100%; } }
 
-    /* ── Modal backdrop ── */
+    /* -- Modal backdrop -- */
     .modal-backdrop{
       position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
       display:flex;align-items:center;justify-content:center;z-index:1000;transition:opacity .2s;
@@ -139,7 +139,7 @@
     .nc-type-badge.bt    { background:rgba(160,120,255,.12);color:#b09af5; }
     .nc-type-badge.node  { background:rgba(242,114,128,.12);color:var(--primary); }
 
-    /* ── Settings modal — two-pane ── */
+    /* -- Settings modal -- two-pane -- */
     #settings-backdrop .settings-shell {
       background:var(--surface);
       border:1px solid var(--border);
@@ -227,7 +227,7 @@
     }
     .btn-ripple.rippling::after{opacity:1;transform:scale(1);}
 
-    /* ── Instances rail ── */
+    /* -- Instances rail -- */
     .instances-rail {
       width:52px;min-width:52px;
       background:var(--bg);
@@ -296,7 +296,7 @@
     }
     .inst-btn-wrap:hover .inst-tooltip { opacity:1; }
 
-    /* ── Sidebar ── */
+    /* -- Sidebar -- */
     .sidebar{
       width:300px;min-width:260px;display:flex;flex-direction:column;
       background:var(--surface);border-right:2px solid var(--border);height:100%;
@@ -365,7 +365,7 @@
     .node-status.on{background:rgba(80,200,120,.12);color:#6fcf97;}
     .node-status.off{background:rgba(242,114,128,.12);color:var(--coral);}
 
-    /* ── Accordion ── */
+    /* -- Accordion -- */
     .accordion { margin-bottom:.2rem; }
     .accordion-trigger {
       width:100%;background:none;border:none;cursor:pointer;
@@ -396,7 +396,7 @@
     .settings-open-btn:hover { color:var(--text); }
     .settings-open-btn-arrow { font-size:.65rem;color:var(--faint); }
 
-    /* ── Peers ── */
+    /* -- Peers -- */
     .peers-body{padding:.5rem 0 .2rem;display:flex;flex-direction:column;gap:.4rem;}
     .peer-row{
       display:flex;align-items:center;gap:.6rem;padding:.35rem .5rem;
@@ -458,7 +458,7 @@
     }
     .peer-count-badge.visible { opacity:1;transform:scale(1); }
 
-    /* ── Misc ── */
+    /* -- Misc -- */
     .btn{padding:.45rem .9rem;border-radius:7px;font-size:.82rem;font-weight:600;cursor:pointer;font-family:var(--font);border:none;transition:background .15s,transform .1s;}
     .btn:active{transform:scale(.97);}
     .btn-primary{background:var(--primary);color:#fff9f7;}
@@ -469,7 +469,7 @@
     .status-line.ok  {color:#6fcf97;}
     .status-line.err {color:var(--coral);}
 
-    /* ── Chat panel ── */
+    /* -- Chat panel -- */
     .chat-panel{flex:1;display:flex;flex-direction:column;height:100%;min-width:0;}
     .chat-topbar{
       display:flex;align-items:center;gap:.85rem;padding:.9rem 1.4rem;
@@ -541,7 +541,7 @@
       *,*::before,*::after { animation-duration:0.01ms !important;transition-duration:0.01ms !important; }
     }
 
-    /* ── Bluetooth panel ── */
+    /* -- Bluetooth panel -- */
     .bt-device-list { display:flex;flex-direction:column;gap:.5rem;margin-top:.25rem; }
     .bt-device-row {
       display:flex;align-items:center;justify-content:space-between;
@@ -673,669 +673,4 @@
           <button class="btn btn-ghost btn-ripple" id="cfg-save-btn" onclick="saveConfig()" style="flex:1;">
             save sms config
           </button>
-        </div>
-        <div class="smod-status" id="cfg-sms-status"></div>
-      </div>
-
-      <!-- Plugin panels injected by EnclavePlugins.registerSettingsTab() -->
-
-    </div>
-  </div>
-</div>
-
-<!-- main layout -->
-<!-- instances rail -->
-<nav class="instances-rail" id="instances-rail" aria-label="Instances">
-  <!-- populated by renderInstances() -->
-</nav>
-
-<aside class="sidebar">
-  <div class="brand">
-    <div class="logo">project <span>enclave</span></div>
-    <button class="theme-btn" onclick="toggleTheme()">theme</button>
-  </div>
-  <div class="search-wrap">
-    <input id="search" placeholder="Search chats&hellip;" oninput="filterChats(this.value)"/>
-  </div>
-  <div class="chat-list" id="chat-list">
-    <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading&hellip;</div>
-  </div>
-  <button class="new-chat-btn" onclick="newChat()">+ new chat</button>
-  <div class="sidebar-footer">
-    <div class="profile-row">
-      <div class="avatar" id="me-avatar">?</div>
-      <div class="profile-info">
-        <div class="name" id="me-name">&mdash;</div>
-        <div class="uid" id="me-uid">no identity</div>
-      </div>
-    </div>
-    <div id="node-status" class="node-status off">node offline</div>
-
-    <div class="accordion" id="peers-accordion">
-      <button class="accordion-trigger" onclick="toggleAccordion('peers')" aria-expanded="false" id="peers-trigger">
-        <span>peers <span id="peers-count" class="peer-count-badge"></span></span>
-        <span class="accordion-arrow">&#9660;</span>
-      </button>
-      <div class="accordion-body" id="peers-body">
-        <div class="peers-body" id="peers-list">
-          <div class="peers-empty">no peers detected yet</div>
-        </div>
-        <div class="scan-progress-wrap" id="scan-progress-wrap">
-          <div class="scan-progress-bar" id="scan-progress-bar"></div>
-        </div>
-        <div class="status-line" id="scan-status" style="margin-bottom:.25rem;"></div>
-        <button class="scan-btn" id="scan-btn" onclick="scanPeers()">
-          <span class="scan-dot"></span><span id="scan-btn-label">scan network</span>
-        </button>
-      </div>
-    </div>
-
-    <button class="settings-open-btn" onclick="openSettingsModal()">
-      <span>settings &amp; config</span>
-      <span class="settings-open-btn-arrow">&#8599;</span>
-    </button>
-  </div>
-</aside>
-
-<section class="chat-panel">
-  <div class="no-chat" id="no-chat">
-    <div class="big">enclave</div>
-    <div>select a chat or create one</div>
-    <div style="font-size:.78rem;color:var(--faint);">messages are end-to-end encrypted</div>
-  </div>
-  <div id="active-chat" style="display:none;flex-direction:column;height:100%;">
-    <div class="chat-topbar">
-      <div class="avatar" id="chat-avatar">?</div>
-      <div class="topbar-info">
-        <div class="title" id="chat-title">&mdash;</div>
-        <div class="sub" id="chat-sub">&mdash;</div>
-      </div>
-      <div class="topbar-actions">
-        <button onclick="refreshMessages()" title="refresh">refresh</button>
-        <button onclick="closeChat()" title="close">close</button>
-      </div>
-    </div>
-    <div class="messages-area" id="messages-area"></div>
-    <div class="composer-area">
-      <input id="composer"
-             placeholder="send a message&hellip;"
-             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"/>
-      <button class="send-btn" id="send-btn" onclick="sendMessage()">send &rarr;</button>
-    </div>
-  </div>
-</section>
-
-<script>
-let currentChatId = null;
-let allChats = [];
-let knownPeers = {};
-let decryptDebounce = null;
-const $  = id => document.getElementById(id);
-const pass = () => $('cfg-pass').value;
-const isPhone = id => /^\+?[0-9]{7,15}$/.test((id||'').replace(/\s/g,''));
-const isBT    = id => /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test((id||'').trim());
-
-async function api(url, body) {
-  const opts = body
-    ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}
-    : {};
-  const r = await fetch(url, opts);
-  return r.json();
-}
-
-function setStatus(txt, type='') {
-  const el = $('cfg-status');
-  el.textContent = txt;
-  el.className = 'smod-status' + (type ? ' '+type : '');
-}
-
-function toggleTheme() {
-  const h = document.documentElement;
-  h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
-}
-
-// ── Instances rail ────────────────────────────────────────────────────────
-
-// Each instance: { id, label, host, online }
-let instances = [];
-let activeInstanceId = null;
-
-function renderInstances() {
-  const rail = $('instances-rail');
-  rail.innerHTML = '';
-
-  instances.forEach(inst => {
-    const wrap = document.createElement('div');
-    wrap.className = 'inst-btn-wrap';
-
-    const btn = document.createElement('div');
-    btn.className = 'inst-btn' + (inst.id === activeInstanceId ? ' active' : '');
-    btn.setAttribute('role', 'button');
-    btn.setAttribute('tabindex', '0');
-    btn.setAttribute('aria-label', inst.label);
-    btn.textContent = inst.label.slice(0, 2).toUpperCase();
-    btn.onclick = () => switchInstance(inst.id);
-    btn.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') switchInstance(inst.id); };
-
-    const dot = document.createElement('span');
-    dot.className = 'inst-dot ' + (inst.online === true ? 'online' : inst.online === false ? 'offline' : 'unknown');
-    btn.appendChild(dot);
-
-    const tip = document.createElement('div');
-    tip.className = 'inst-tooltip';
-    tip.textContent = inst.label + (inst.host ? ' — ' + inst.host : '') + (inst.online === true ? ' ● online' : inst.online === false ? ' ○ offline' : '');
-
-    wrap.appendChild(btn);
-    wrap.appendChild(tip);
-    rail.appendChild(wrap);
-  });
-
-  if (instances.length > 0) {
-    const div = document.createElement('div');
-    div.className = 'inst-divider';
-    rail.appendChild(div);
-  }
-
-  const addBtn = document.createElement('button');
-  addBtn.className = 'inst-add-btn';
-  addBtn.title = 'add instance';
-  addBtn.setAttribute('aria-label', 'Add instance');
-  addBtn.innerHTML = '+';
-  addBtn.onclick = () => promptAddInstance();
-  rail.appendChild(addBtn);
-}
-
-function switchInstance(id) {
-  activeInstanceId = id;
-  renderInstances();
-  const inst = instances.find(i => i.id === id);
-  if (!inst) return;
-  // reset UI state for the switched instance
-  currentChatId = null;
-  allChats = [];
-  $('chat-list').innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading\u2026</div>';
-  $('no-chat').style.display = 'flex';
-  $('active-chat').style.display = 'none';
-  // update base URL for api calls if multi-instance backend is supported
-  window._instanceHost = inst.host || '';
-  loadChats();
-  loadIdentity();
-  loadPeers();
-}
-
-function promptAddInstance() {
-  const host = window.prompt('Instance host (e.g. localhost:5001 or 192.168.1.x:5001):', 'localhost:5001');
-  if (!host) return;
-  const label = window.prompt('Short name for this instance:', host.split(':')[0]);
-  if (!label) return;
-  const id = 'inst_' + Date.now();
-  instances.push({ id, label, host: host.trim(), online: null });
-  renderInstances();
-  pingInstance(id);
-}
-
-async function pingInstance(id) {
-  const inst = instances.find(i => i.id === id);
-  if (!inst) return;
-  try {
-    const r = await fetch((inst.host ? 'http://' + inst.host : '') + '/api/identity/status');
-    inst.online = r.ok;
-  } catch {
-    inst.online = false;
-  }
-  renderInstances();
-}
-
-async function initInstances() {
-  // seed with the current/local instance
-  const localId = 'inst_local';
-  instances = [{ id: localId, label: 'local', host: '', online: null }];
-  activeInstanceId = localId;
-  renderInstances();
-  // probe local instance
-  try {
-    const r = await fetch('/api/identity/status');
-    const inst = instances.find(i => i.id === localId);
-    if (inst) { inst.online = r.ok; inst.label = 'local'; }
-  } catch {
-    const inst = instances.find(i => i.id === localId);
-    if (inst) inst.online = false;
-  }
-  renderInstances();
-}
-
-// ── Accordion ────────────────────────────────────────────────────────────
-
-function toggleAccordion(name) {
-  const trigger = $(name + '-trigger');
-  const body    = $(name + '-body');
-  const isOpen  = trigger.getAttribute('aria-expanded') === 'true';
-  if (isOpen) {
-    trigger.setAttribute('aria-expanded', 'false');
-    body.style.maxHeight = body.scrollHeight + 'px';
-    requestAnimationFrame(() => {
-      body.style.maxHeight = '0';
-      body.classList.remove('open');
-    });
-  } else {
-    trigger.setAttribute('aria-expanded', 'true');
-    body.classList.add('open');
-    body.style.maxHeight = body.scrollHeight + 'px';
-    body.addEventListener('transitionend', function onEnd(e) {
-      if (e.propertyName === 'max-height') {
-        body.style.maxHeight = 'none';
-        body.removeEventListener('transitionend', onEnd);
-        body.closest('.sidebar-footer').scrollTo({top: 99999, behavior: 'smooth'});
-      }
-    });
-  }
-}
-
-function ripple(btnId) {
-  const btn = $(btnId);
-  btn.classList.remove('rippling');
-  void btn.offsetWidth;
-  btn.classList.add('rippling');
-  setTimeout(() => btn.classList.remove('rippling'), 420);
-}
-
-// ── Splash ──────────────────────────────────────────────────────────────
-
-function showSplash() {
-  const splash = $('splash');
-  setTimeout(() => {
-    splash.classList.add('fade-out');
-    setTimeout(() => {
-      splash.style.display = 'none';
-      showUnlockModal();
-    }, 600);
-  }, 2400);
-}
-
-function showUnlockModal() {
-  const bd = $('unlock-backdrop');
-  bd.style.display = 'flex';
-  bd.classList.remove('hidden');
-  setTimeout(() => $('modal-pass').focus(), 80);
-}
-
-// ── Unlock modal ────────────────────────────────────────────────────────
-
-function toggleModalEye() {
-  const inp = $('modal-pass');
-  const btn = $('modal-eye-btn');
-  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'hide'; }
-  else                         { inp.type = 'password'; btn.textContent = 'show'; }
-}
-
-function toggleCfgEye() {
-  const inp = $('cfg-pass');
-  const btn = $('cfg-eye-btn');
-  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'hide'; }
-  else                         { inp.type = 'password'; btn.textContent = 'show'; }
-}
-
-function dismissModal() {
-  const bd = $('unlock-backdrop');
-  bd.classList.add('hidden');
-  setTimeout(() => bd.style.display = 'none', 200);
-}
-
-function shakeError(id) {
-  const el = $(id);
-  el.style.animation = 'none';
-  requestAnimationFrame(() => { el.style.animation = ''; });
-}
-
-async function modalUnlock() {
-  const p   = $('modal-pass').value;
-  const errEl = $('modal-error');
-  const btn = $('modal-unlock-btn');
-  if (!p) { errEl.textContent = 'passphrase cannot be empty'; shakeError('modal-error'); return; }
-  btn.disabled = true;
-  btn.textContent = 'unlocking\u2026';
-  errEl.textContent = '';
-  const d = await api('/api/node/start', {passphrase: p});
-  if (d.error) {
-    errEl.textContent = '\u26a0 ' + d.error;
-    shakeError('modal-error');
-    btn.disabled = false;
-    btn.textContent = 'unlock & start node';
-    return;
-  }
-  $('cfg-pass').value = p;
-  setStatus('node started', 'ok');
-  dismissModal();
-  // mark local instance online
-  const inst = instances.find(i => i.id === activeInstanceId);
-  if (inst) { inst.online = true; renderInstances(); }
-  await loadIdentity();
-  await loadPeers();
-  if (currentChatId) refreshMessages();
-  await startRealtime();
-}
-
-// ── Settings modal ──────────────────────────────────────────────────────
-
-function switchSettingsTab(tabId) {
-  document.querySelectorAll('.stab-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.tab === tabId);
-  });
-  document.querySelectorAll('.stab-panel').forEach(el => {
-    el.classList.toggle('active', el.id === 'stab-panel-' + tabId);
-  });
-}
-
-function openSettingsModal(tabId) {
-  switchSettingsTab(tabId || 'node');
-  const bd = $('settings-backdrop');
-  bd.style.display = 'flex';
-  requestAnimationFrame(() => bd.classList.remove('hidden'));
-}
-
-function closeSettingsModal() {
-  const bd = $('settings-backdrop');
-  bd.classList.add('hidden');
-  setTimeout(() => bd.style.display = 'none', 200);
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  $('settings-backdrop').addEventListener('click', e => {
-    if (e.target === $('settings-backdrop')) closeSettingsModal();
-  });
-  initInstances();
-});
-
-// ══════════════════════════════════════════════════════════════════════════
-//  EnclavePlugins — public plugin API
-// ══════════════════════════════════════════════════════════════════════════
-window.EnclavePlugins = (() => {
-  const _tabs = [];
-
-  function registerSettingsTab({ id, label, html = '', init }) {
-    if (!id || !label) { console.warn('[EnclavePlugins] requires id + label'); return; }
-    if (_tabs.find(t => t.id === id)) { console.warn('[EnclavePlugins] tab already registered:', id); return; }
-    _tabs.push({ id, label, html, init });
-
-    const nav = $('stab-nav');
-    const pluginsLabel = $('stab-plugins-label');
-    pluginsLabel.style.display = '';
-    const btn = document.createElement('button');
-    btn.className = 'stab-item';
-    btn.dataset.tab = id;
-    btn.onclick = () => switchSettingsTab(id);
-    btn.textContent = label;
-    nav.appendChild(btn);
-
-    const content = $('stab-content');
-    const panel = document.createElement('div');
-    panel.className = 'stab-panel';
-    panel.id = 'stab-panel-' + id;
-    panel.innerHTML = '<div class="stab-panel-title">' + escHtml(label) + '</div>' + html;
-    content.appendChild(panel);
-
-    if (typeof init === 'function') {
-      try { init(panel); } catch(e) { console.error('[EnclavePlugins] init error for', id, e); }
-    }
-  }
-
-  return { registerSettingsTab, _tabs };
-})();
-
-// ── Smart new-chat modal ────────────────────────────────────────────────
-
-const RE_PHONE = /^\+[1-9]\d{6,14}$/;
-const RE_IP    = /^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$/;
-const RE_HOST  = /^[a-zA-Z0-9.-]+:\d{1,5}$/;
-const RE_BT    = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
-
-function detectType(val) {
-  if (!val) return null;
-  if (RE_BT.test(val))    return 'bt';
-  if (RE_PHONE.test(val)) return 'phone';
-  if (RE_IP.test(val) || RE_HOST.test(val)) return 'ip';
-  return 'node';
-}
-
-function onSmartInput() {
-  const val   = $('nc-smart').value.trim();
-  const badge = $('nc-type-badge');
-  const hint  = $('nc-hint');
-  $('newchat-error').textContent = '';
-
-  if (!val) {
-    badge.className = 'nc-type-badge';
-    badge.textContent = '';
-    hint.textContent = '';
-    hint.className = 'field-hint';
-    return;
-  }
-
-  const type = detectType(val);
-  const labels = { bt:'bluetooth', phone:'phone (SMS)', ip:'direct IP', node:'node ID' };
-  badge.textContent = labels[type] || type;
-  badge.className = 'nc-type-badge visible ' + type;
-
-  if (type === 'phone' && !RE_PHONE.test(val)) {
-    hint.textContent = 'use E.164 format: +[country][number]';
-    hint.className = 'field-hint err';
-  } else if (type === 'ip') {
-    const parts = val.split(':');
-    const port = Number(parts[parts.length - 1]);
-    if (port < 1 || port > 65535) {
-      hint.textContent = 'port must be 1-65535';
-      hint.className = 'field-hint err';
-    } else {
-      hint.textContent = 'valid';
-      hint.className = 'field-hint ok';
-    }
-  } else {
-    hint.textContent = '';
-    hint.className = 'field-hint';
-  }
-}
-
-function newChat() {
-  const inp = $('nc-smart');
-  inp.value = '';
-  inp.classList.remove('input-ok', 'input-err');
-  $('nc-type-badge').className = 'nc-type-badge';
-  $('nc-type-badge').textContent = '';
-  $('nc-hint').textContent = '';
-  $('nc-hint').className = 'field-hint';
-  $('newchat-error').textContent = '';
-  const bd = $('newchat-backdrop');
-  bd.style.display = 'flex';
-  requestAnimationFrame(() => bd.classList.remove('hidden'));
-  setTimeout(() => inp.focus(), 80);
-}
-
-function dismissNewChat() {
-  const bd = $('newchat-backdrop');
-  bd.classList.add('hidden');
-  setTimeout(() => bd.style.display = 'none', 200);
-}
-
-async function submitNewChat() {
-  const val   = $('nc-smart').value.trim();
-  const errEl = $('newchat-error');
-  if (!val) { errEl.textContent = 'enter an address first'; shakeError('newchat-error'); return; }
-
-  const type = detectType(val);
-
-  if (type === 'phone' && !RE_PHONE.test(val)) {
-    errEl.textContent = 'invalid phone number — use E.164: +[country][number]';
-    shakeError('newchat-error'); return;
-  }
-  if (type === 'ip') {
-    const parts = val.split(':');
-    const port = Number(parts[parts.length - 1]);
-    if (port < 1 || port > 65535) {
-      errEl.textContent = 'port out of range (1-65535)';
-      shakeError('newchat-error'); return;
-    }
-  }
-
-  const id = type === 'bt' ? 'BT:' + val.toUpperCase() : val;
-  dismissNewChat();
-  await api('/api/chats/' + encodeURIComponent(id) + '/append', {
-    token: '-- chat started --', sender: 'system', ts: new Date().toISOString(),
-  });
-  await loadChats();
-  openChat(id);
-}
-
-// ── Identity & peers ────────────────────────────────────────────────────
-
-function onPassphraseChange() {
-  clearTimeout(decryptDebounce);
-  decryptDebounce = setTimeout(() => {
-    if (currentChatId) refreshMessages();
-  }, 400);
-}
-
-async function loadIdentity() {
-  const d = await api('/api/identity/status');
-  $('me-uid').textContent    = d.user_id ? d.user_id.slice(0,20)+'...' : (d.has_identity ? 'locked' : 'none');
-  $('me-name').textContent   = d.username || 'you';
-  $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
-  const ns = $('node-status');
-  if (d.node_running) { ns.textContent = 'node online';  ns.className = 'node-status on'; }
-  else                { ns.textContent = 'node offline'; ns.className = 'node-status off'; }
-  // sync instance dot
-  const inst = instances.find(i => i.id === activeInstanceId);
-  if (inst) { inst.online = !!d.node_running; renderInstances(); }
-}
-
-async function startNode() {
-  const p = pass();
-  if (!p) { setStatus('enter passphrase first', 'err'); return; }
-  const btn = $('cfg-unlock-btn');
-  btn.disabled = true;
-  btn.classList.add('btn-unlock-spin');
-  btn.textContent = 'unlocking\u2026';
-  setStatus('starting node\u2026');
-  const d = await api('/api/node/start', {passphrase: p});
-  btn.disabled = false;
-  btn.classList.remove('btn-unlock-spin');
-  btn.textContent = 'unlock & start node';
-  if (d.error) { setStatus('error: ' + d.error, 'err'); return; }
-  ripple('cfg-unlock-btn');
-  setStatus('node started', 'ok');
-  await loadIdentity();
-  await loadPeers();
-}
-
-async function loadPeers() {
-  const d = await api('/api/peers');
-  knownPeers = {};
-  (d.peers || []).forEach(p => { knownPeers[p.user_id] = p; });
-  renderPeers(d.peers || []);
-}
-
-function renderPeers(peers) {
-  const list   = $('peers-list');
-  const badge  = $('peers-count');
-  const online = peers.filter(p => p.online !== false);
-  if (!peers.length) {
-    list.innerHTML = '<div class="peers-empty">no peers detected yet</div>';
-    badge.textContent = '';
-    badge.classList.remove('visible');
-    return;
-  }
-  badge.textContent = online.length || peers.length;
-  badge.classList.add('visible');
-  list.innerHTML = peers.map((p, i) => {
-    const label  = p.username || p.user_id || 'unknown';
-    const addr   = (p.ip && p.port) ? `${p.ip}:${p.port}` : (p.user_id || '');
-    const isOnline = p.online !== false;
-    const badgeClass = p.bt ? 'bt' : (isOnline ? 'online' : 'offline');
-    const badgeLabel = p.bt ? 'bluetooth' : (isOnline ? 'online' : 'offline');
-    return `<div class="peer-row" style="transition-delay:${i*55}ms"
-              onclick="openChat('${escAttr(p.user_id || addr)}')">
-      <div class="peer-avatar">${label.slice(0,2).toUpperCase()}</div>
-      <div class="peer-info">
-        <div class="peer-name">${escHtml(label)}</div>
-        <div class="peer-addr">${escHtml(addr)}</div>
-      </div>
-      <span class="peer-badge ${badgeClass}">${badgeLabel}</span>
-    </div>`;
-  }).join('');
-
-  const body = $('peers-body');
-  if (body.classList.contains('open')) {
-    body.style.maxHeight = body.scrollHeight + 'px';
-  }
-}
-
-// ── Peer scanning ────────────────────────────────────────────────────────
-
-async function scanPeers() {
-  const btn      = $('scan-btn');
-  const label    = $('scan-btn-label');
-  const progress = $('scan-progress-wrap');
-  const bar      = $('scan-progress-bar');
-  const status   = $('scan-status');
-
-  btn.classList.add('scanning');
-  btn.disabled = true;
-  label.textContent = ' scanning LAN\u2026';
-  progress.classList.add('visible');
-  status.textContent = 'probing subnet\u2026';
-
-  bar.style.width = '0%';
-  let fakeProgress = 0;
-  const ticker = setInterval(() => {
-    fakeProgress = Math.min(fakeProgress + Math.random() * 8, 88);
-    bar.style.width = fakeProgress + '%';
-  }, 320);
-
-  try {
-    const d = await api('/api/peers/scan');
-    clearInterval(ticker);
-    bar.style.width = '100%';
-    const found = d.peers || [];
-    knownPeers = {};
-    found.forEach(p => { if (p.user_id) knownPeers[p.user_id] = p; });
-    renderPeers(found);
-    const onlineCount = found.filter(p => p.online !== false).length;
-    status.textContent = onlineCount
-      ? '\u2713 found ' + onlineCount + ' peer' + (onlineCount > 1 ? 's' : '')
-      : 'no enclave peers found on LAN';
-    status.className = 'status-line' + (onlineCount ? ' ok' : '');
-    if (onlineCount && $('peers-trigger').getAttribute('aria-expanded') !== 'true') {
-      toggleAccordion('peers');
-    }
-  } catch (e) {
-    clearInterval(ticker);
-    bar.style.width = '100%';
-    status.textContent = 'scan failed: ' + e.message;
-    status.className = 'status-line err';
-  } finally {
-    setTimeout(() => { progress.classList.remove('visible'); bar.style.width = '0%'; }, 1200);
-    btn.classList.remove('scanning');
-    btn.disabled = false;
-    label.textContent = ' scan network';
-  }
-}
-
-// ── Settings ─────────────────────────────────────────────────────────────
-
-async function saveConfig() {
-  const u = $('cfg-sms-user').value.trim();
-  const p = $('cfg-sms-pass').value;
-  const h = $('cfg-sms-host').value.trim();
-  const statusEl = $('cfg-sms-status');
-  if (!u || !p) {
-    statusEl.textContent = 'username + password required';
-    statusEl.className = 'smod-status err';
-    return;
-  }
-  const btn = $('cfg-save-btn');
-  btn.disabled = true;
-  const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
-  ripple('cfg-save-btn');
-  btn.disabled = false;
-  statusEl.textContent = d.error ? 'error: '+d.error : '\u2713 sms config saved';
-  statusEl.className = 'smod-status ' + (d.error ? 'err' : 'ok');
-}
+        
