@@ -25,6 +25,7 @@ except ImportError:
     _SOCK_AVAILABLE = False
 
 import main as app_core
+from core import profiles as _profiles
 from core.network.scanner import scan_lan_peers, ENCLAVE_PORT
 from core.plugins.builtin.bluetooth.main import BluetoothUnavailableError
 
@@ -320,6 +321,75 @@ def bt_scan():
         return err(str(e), 503)
     except Exception as e:
         return err(str(e), 500, exc=e)
+
+
+# -- Profiles ----------------------------------------------------------------
+
+@app.route("/api/profiles")
+def profiles_list():
+    return jsonify({"profiles": _profiles.list_profiles()})
+
+
+@app.route("/api/profiles", methods=["POST"])
+def profiles_create():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    if not name:
+        return err("name required", 400)
+    try:
+        profile = _profiles.create_profile(
+            name=name,
+            username=data.get("username"),
+            transport_port=data.get("transport_port"),
+            web_port=data.get("web_port"),
+        )
+        return jsonify(profile), 201
+    except ValueError as e:
+        return err(str(e), 409)
+
+
+@app.route("/api/profiles/active")
+def profiles_get_active():
+    name = _profiles.get_active_profile()
+    if not name:
+        return jsonify({"active": None})
+    return jsonify({"active": name, "profile": _profiles.get_profile(name)})
+
+
+@app.route("/api/profiles/<pname>/activate", methods=["POST"])
+def profiles_activate(pname):
+    try:
+        p = _profiles.set_active_profile(pname)
+        return jsonify(p)
+    except ValueError as e:
+        return err(str(e), 404)
+
+
+@app.route("/api/profiles/<pname>", methods=["PATCH"])
+def profiles_rename(pname):
+    data = request.get_json(force=True)
+    new_name = data.get("name", "").strip()
+    if not new_name:
+        return err("new name required", 400)
+    try:
+        return jsonify(_profiles.rename_profile(pname, new_name))
+    except ValueError as e:
+        return err(str(e), 409)
+
+
+@app.route("/api/profiles/<pname>", methods=["DELETE"])
+def profiles_delete(pname):
+    if not _profiles.delete_profile(pname):
+        return err(f"Profile '{pname}' not found", 404)
+    return jsonify({"status": "deleted", "name": pname})
+
+
+@app.route("/api/profiles/<pname>")
+def profiles_get(pname):
+    p = _profiles.get_profile(pname)
+    if p is None:
+        return err(f"Profile '{pname}' not found", 404)
+    return jsonify(p)
 
 
 # ---------------------------------------------------------------------------
