@@ -227,6 +227,75 @@
     }
     .btn-ripple.rippling::after{opacity:1;transform:scale(1);}
 
+    /* ── Instances rail ── */
+    .instances-rail {
+      width:52px;min-width:52px;
+      background:var(--bg);
+      border-right:1px solid var(--border);
+      display:flex;flex-direction:column;
+      align-items:center;
+      padding:.6rem 0;
+      gap:.35rem;
+      overflow-y:auto;
+      z-index:10;
+      flex-shrink:0;
+    }
+    .instances-rail::-webkit-scrollbar{width:2px;}
+    .instances-rail::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+    .inst-btn {
+      position:relative;
+      width:36px;height:36px;border-radius:10px;
+      background:linear-gradient(135deg,var(--primary),var(--purple));
+      color:white;display:grid;place-items:center;
+      font-size:.72rem;font-weight:700;
+      cursor:pointer;border:2px solid transparent;
+      transition:transform .15s,border-color .15s,box-shadow .15s;
+      flex-shrink:0;
+      user-select:none;
+    }
+    .inst-btn:hover { transform:scale(1.1); box-shadow:0 4px 12px rgba(242,114,128,.35); }
+    .inst-btn.active {
+      border-color:var(--primary);
+      box-shadow:0 0 0 2px rgba(242,114,128,.25);
+    }
+    .inst-btn.active::before {
+      content:'';position:absolute;left:-9px;top:50%;transform:translateY(-50%);
+      width:3px;height:60%;background:var(--primary);border-radius:0 3px 3px 0;
+    }
+    /* online/offline dot */
+    .inst-dot {
+      position:absolute;bottom:2px;right:2px;
+      width:8px;height:8px;border-radius:50%;
+      border:2px solid var(--bg);
+      background:var(--faint);
+      transition:background .3s;
+    }
+    .inst-dot.online  { background:#6fcf97; }
+    .inst-dot.offline { background:var(--coral); }
+    .inst-dot.unknown { background:var(--faint); }
+    .inst-divider {
+      width:24px;height:1px;background:var(--border);margin:.15rem 0;flex-shrink:0;
+    }
+    .inst-add-btn {
+      width:36px;height:36px;border-radius:10px;
+      background:none;border:1.5px dashed var(--border);
+      color:var(--faint);font-size:1.1rem;line-height:1;
+      cursor:pointer;display:grid;place-items:center;
+      transition:background .15s,color .15s,border-color .15s,transform .15s;
+      flex-shrink:0;
+    }
+    .inst-add-btn:hover { background:var(--border);color:var(--text);border-color:var(--muted);transform:scale(1.05); }
+    /* tooltip */
+    .inst-btn-wrap { position:relative; }
+    .inst-tooltip {
+      position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);
+      background:var(--surface);border:1px solid var(--border);border-radius:7px;
+      padding:.3rem .65rem;font-size:.72rem;color:var(--text);white-space:nowrap;
+      pointer-events:none;opacity:0;transition:opacity .15s;
+      box-shadow:0 4px 12px rgba(0,0,0,.2);z-index:200;
+    }
+    .inst-btn-wrap:hover .inst-tooltip { opacity:1; }
+
     /* ── Sidebar ── */
     .sidebar{
       width:300px;min-width:260px;display:flex;flex-direction:column;
@@ -615,6 +684,11 @@
 </div>
 
 <!-- main layout -->
+<!-- instances rail -->
+<nav class="instances-rail" id="instances-rail" aria-label="Instances">
+  <!-- populated by renderInstances() -->
+</nav>
+
 <aside class="sidebar">
   <div class="brand">
     <div class="logo">project <span>enclave</span></div>
@@ -720,6 +794,116 @@ function toggleTheme() {
   h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
 }
 
+// ── Instances rail ────────────────────────────────────────────────────────
+
+// Each instance: { id, label, host, online }
+let instances = [];
+let activeInstanceId = null;
+
+function renderInstances() {
+  const rail = $('instances-rail');
+  rail.innerHTML = '';
+
+  instances.forEach(inst => {
+    const wrap = document.createElement('div');
+    wrap.className = 'inst-btn-wrap';
+
+    const btn = document.createElement('div');
+    btn.className = 'inst-btn' + (inst.id === activeInstanceId ? ' active' : '');
+    btn.setAttribute('role', 'button');
+    btn.setAttribute('tabindex', '0');
+    btn.setAttribute('aria-label', inst.label);
+    btn.textContent = inst.label.slice(0, 2).toUpperCase();
+    btn.onclick = () => switchInstance(inst.id);
+    btn.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') switchInstance(inst.id); };
+
+    const dot = document.createElement('span');
+    dot.className = 'inst-dot ' + (inst.online === true ? 'online' : inst.online === false ? 'offline' : 'unknown');
+    btn.appendChild(dot);
+
+    const tip = document.createElement('div');
+    tip.className = 'inst-tooltip';
+    tip.textContent = inst.label + (inst.host ? ' — ' + inst.host : '') + (inst.online === true ? ' ● online' : inst.online === false ? ' ○ offline' : '');
+
+    wrap.appendChild(btn);
+    wrap.appendChild(tip);
+    rail.appendChild(wrap);
+  });
+
+  if (instances.length > 0) {
+    const div = document.createElement('div');
+    div.className = 'inst-divider';
+    rail.appendChild(div);
+  }
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'inst-add-btn';
+  addBtn.title = 'add instance';
+  addBtn.setAttribute('aria-label', 'Add instance');
+  addBtn.innerHTML = '+';
+  addBtn.onclick = () => promptAddInstance();
+  rail.appendChild(addBtn);
+}
+
+function switchInstance(id) {
+  activeInstanceId = id;
+  renderInstances();
+  const inst = instances.find(i => i.id === id);
+  if (!inst) return;
+  // reset UI state for the switched instance
+  currentChatId = null;
+  allChats = [];
+  $('chat-list').innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading\u2026</div>';
+  $('no-chat').style.display = 'flex';
+  $('active-chat').style.display = 'none';
+  // update base URL for api calls if multi-instance backend is supported
+  window._instanceHost = inst.host || '';
+  loadChats();
+  loadIdentity();
+  loadPeers();
+}
+
+function promptAddInstance() {
+  const host = window.prompt('Instance host (e.g. localhost:5001 or 192.168.1.x:5001):', 'localhost:5001');
+  if (!host) return;
+  const label = window.prompt('Short name for this instance:', host.split(':')[0]);
+  if (!label) return;
+  const id = 'inst_' + Date.now();
+  instances.push({ id, label, host: host.trim(), online: null });
+  renderInstances();
+  pingInstance(id);
+}
+
+async function pingInstance(id) {
+  const inst = instances.find(i => i.id === id);
+  if (!inst) return;
+  try {
+    const r = await fetch((inst.host ? 'http://' + inst.host : '') + '/api/identity/status');
+    inst.online = r.ok;
+  } catch {
+    inst.online = false;
+  }
+  renderInstances();
+}
+
+async function initInstances() {
+  // seed with the current/local instance
+  const localId = 'inst_local';
+  instances = [{ id: localId, label: 'local', host: '', online: null }];
+  activeInstanceId = localId;
+  renderInstances();
+  // probe local instance
+  try {
+    const r = await fetch('/api/identity/status');
+    const inst = instances.find(i => i.id === localId);
+    if (inst) { inst.online = r.ok; inst.label = 'local'; }
+  } catch {
+    const inst = instances.find(i => i.id === localId);
+    if (inst) inst.online = false;
+  }
+  renderInstances();
+}
+
 // ── Accordion ────────────────────────────────────────────────────────────
 
 function toggleAccordion(name) {
@@ -822,6 +1006,9 @@ async function modalUnlock() {
   $('cfg-pass').value = p;
   setStatus('node started', 'ok');
   dismissModal();
+  // mark local instance online
+  const inst = instances.find(i => i.id === activeInstanceId);
+  if (inst) { inst.online = true; renderInstances(); }
   await loadIdentity();
   await loadPeers();
   if (currentChatId) refreshMessages();
@@ -856,17 +1043,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('settings-backdrop').addEventListener('click', e => {
     if (e.target === $('settings-backdrop')) closeSettingsModal();
   });
+  initInstances();
 });
 
 // ══════════════════════════════════════════════════════════════════════════
 //  EnclavePlugins — public plugin API
-//  Usage:
-//    EnclavePlugins.registerSettingsTab({
-//      id:    'my-plugin',
-//      label: 'My Plugin',
-//      html:  '<div>...</div>',
-//      init:  (panelEl) => {},
-//    });
 // ══════════════════════════════════════════════════════════════════════════
 window.EnclavePlugins = (() => {
   const _tabs = [];
@@ -1021,6 +1202,9 @@ async function loadIdentity() {
   const ns = $('node-status');
   if (d.node_running) { ns.textContent = 'node online';  ns.className = 'node-status on'; }
   else                { ns.textContent = 'node offline'; ns.className = 'node-status off'; }
+  // sync instance dot
+  const inst = instances.find(i => i.id === activeInstanceId);
+  if (inst) { inst.online = !!d.node_running; renderInstances(); }
 }
 
 async function startNode() {
@@ -1155,382 +1339,3 @@ async function saveConfig() {
   statusEl.textContent = d.error ? 'error: '+d.error : '\u2713 sms config saved';
   statusEl.className = 'smod-status ' + (d.error ? 'err' : 'ok');
 }
-
-// ── Chats ─────────────────────────────────────────────────────────────────
-
-async function loadChats() {
-  const d = await api('/api/chats');
-  allChats = d.chats || [];
-  renderChatList(allChats);
-}
-
-function renderChatList(list) {
-  const el = $('chat-list');
-  if (!list.length) {
-    el.innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">no chats yet</div>';
-    return;
-  }
-  el.innerHTML = list.map((c, i) => {
-    const peer  = knownPeers[c.id];
-    const label = (peer && peer.username) ? peer.username : c.id;
-    const type  = isBT(c.id) || c.id.startsWith('BT:') ? 'bluetooth'
-                : isPhone(c.id) ? 'sms'
-                : (peer ? 'peer' : 'local');
-    return `<div class="chat-item ${c.id===currentChatId?'active':''}"
-              style="animation-delay:${i*40}ms"
-              onclick="openChat('${escAttr(c.id)}')">
-      <div class="avatar">${label.slice(0,2).toUpperCase()}</div>
-      <div class="chat-meta">
-        <div class="chat-name">${escHtml(label)}</div>
-        <div class="chat-preview">${c.count} msg${c.count!==1?'s':''} &middot; ${type}</div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function filterChats(q) {
-  renderChatList(allChats.filter(c => c.id.toLowerCase().includes(q.toLowerCase())));
-}
-
-async function openChat(chatId) {
-  currentChatId = chatId;
-  $('no-chat').style.display = 'none';
-  $('active-chat').style.display = 'flex';
-  const peer  = knownPeers[chatId];
-  const label = (peer && peer.username) ? peer.username : chatId;
-  $('chat-avatar').textContent = label.slice(0,2).toUpperCase();
-  $('chat-title').textContent  = label;
-  const isBTChat = chatId.startsWith('BT:');
-  $('chat-sub').textContent = isBTChat
-    ? 'bluetooth channel'
-    : isPhone(chatId) ? 'sms channel \u2022 encrypted'
-    : peer ? `enclave peer \u2022 ${peer.ip}:${peer.port}`
-    : 'local only';
-  renderChatList(allChats);
-  await refreshMessages();
-  $('composer').focus();
-}
-
-function closeChat() {
-  currentChatId = null;
-  $('active-chat').style.display = 'none';
-  $('no-chat').style.display = 'flex';
-  renderChatList(allChats);
-}
-
-async function refreshMessages() {
-  if (!currentChatId) return;
-  const d    = await api('/api/chats/' + encodeURIComponent(currentChatId));
-  const area = $('messages-area');
-  const msgs = d.messages || [];
-  const p    = pass();
-  if (!msgs.length) {
-    area.innerHTML = '<div class="empty-state"><div class="big">enclave</div><div>no messages yet</div></div>';
-    return;
-  }
-  const rows = await Promise.all(msgs.map(async (entry) => {
-    const token    = typeof entry === 'object' ? entry.token  : entry;
-    const sender   = typeof entry === 'object' ? entry.sender : null;
-    const ts       = typeof entry === 'object' ? entry.ts     : null;
-    const mine     = sender === 'me';
-    const isSystem = sender === 'system';
-    if (isSystem) return {system: true, text: token, ts};
-    let text = token, decrypted = false;
-    if (p && token && token !== '-- chat started --') {
-      try {
-        const dec = await api('/api/crypto/decrypt', {passphrase: p, token, chat_id: currentChatId});
-        if (dec.plaintext !== undefined && dec.plaintext !== null) { text = dec.plaintext; decrypted = true; }
-      } catch(_) {}
-    }
-    return {text, decrypted, mine, ts, system: false};
-  }));
-  area.innerHTML = rows.map((m, i) => {
-    if (m.system) return `<div class="sys-msg" style="animation-delay:${i*30}ms">${escHtml(m.text)}</div>`;
-    const peer = knownPeers[currentChatId];
-    const authorLabel = m.mine ? '' : ((peer && peer.username) || 'peer');
-    return `<div class="msg-row ${m.mine?'me':''}" style="animation-delay:${i*30}ms">
-      <div class="bubble">
-        ${!m.mine ? `<div class="bubble-author">${escHtml(authorLabel)}</div>` : ''}
-        <div>${escHtml(m.text)}
-          ${!m.decrypted && p ? '<span class="badge badge-enc">enc</span>' : ''}
-          ${m.decrypted ? '<span class="badge badge-ok">decrypted</span>' : ''}
-        </div>
-        <div class="bubble-time">${m.ts ? fmtTs(m.ts) : ''}</div>
-      </div>
-    </div>`;
-  }).join('');
-  area.scrollTop = area.scrollHeight;
-}
-
-function fmtTs(ts) {
-  const d = new Date(ts);
-  if (isNaN(d)) return ts;
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-}
-
-async function sendMessage() {
-  const input = $('composer');
-  const text  = input.value.trim();
-  if (!text || !currentChatId) return;
-  const btn = $('send-btn');
-  btn.disabled = true;
-  input.value  = '';
-  const p    = pass();
-  const ts   = new Date().toISOString();
-  const peer = knownPeers[currentChatId];
-  if (peer) {
-    const r = await api('/api/message/send', {peer_id: currentChatId, plaintext: text});
-    if (r.ok) {
-      appendLocalMessage(text, true, true, ts, true);
-      await loadChats(); btn.disabled = false; $('composer').focus(); return;
-    }
-    appendSysMsg('network delivery failed, saving locally only');
-  }
-  let token = text, encrypted = false;
-  if (p) {
-    try {
-      const d = await api('/api/crypto/encrypt', {
-        passphrase: p, plaintext: text, chat_id: currentChatId, created_at: ts,
-      });
-      if (d.token) { token = d.token; encrypted = true; }
-    } catch(_) {}
-  }
-  appendLocalMessage(text, true, encrypted, ts, false);
-  await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', {
-    token, sender: 'me', ts,
-  });
-  if (isPhone(currentChatId)) {
-    try {
-      const r = await api('/api/sms/send', {to: currentChatId, message: text});
-      appendSysMsg(r.error
-        ? 'sms failed: ' + r.error
-        : 'sms sent \u2022 id: ' + (r.id||'?') + ' \u2022 state: ' + (r.state||'?'));
-    } catch(e) { appendSysMsg('sms error: ' + e); }
-  }
-  await loadChats();
-  btn.disabled = false;
-  $('composer').focus();
-}
-
-function appendLocalMessage(text, mine, encrypted, ts, viaNetwork) {
-  const area  = $('messages-area');
-  const empty = area.querySelector('.empty-state');
-  if (empty) empty.remove();
-  const row = document.createElement('div');
-  row.className = 'msg-row' + (mine ? ' me' : '');
-  row.innerHTML = `<div class="bubble">
-    <div>${escHtml(text)}
-      ${encrypted && !viaNetwork ? '<span class="badge badge-enc">enc</span>' : ''}
-      ${viaNetwork ? '<span class="badge badge-net">sent</span>' : ''}
-    </div>
-    <div class="bubble-time">${fmtTs(ts)}</div>
-  </div>`;
-  area.appendChild(row);
-  area.scrollTop = area.scrollHeight;
-}
-
-function appendSysMsg(msg) {
-  const area = $('messages-area');
-  const div  = document.createElement('div');
-  div.className   = 'sys-msg';
-  div.textContent = msg;
-  area.appendChild(div);
-  area.scrollTop = area.scrollHeight;
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-function escAttr(s) {
-  return String(s).replace(/'/g,"&#39;").replace(/\"/g,'&quot;');
-}
-
-let useWebSocket = true;
-let _ws = null;
-let _pollTimer = null;
-
-function toggleConnMode() {
-  useWebSocket = !useWebSocket;
-  $('conn-ws').classList.toggle('active',  useWebSocket);
-  $('conn-poll').classList.toggle('active', !useWebSocket);
-}
-
-function startWebSocket() {
-  if (_ws) { try { _ws.close(); } catch(_) {} }
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  _ws = new WebSocket(`${proto}://${location.host}/ws`);
-  _ws.onopen = () => {
-    _ws._ping = setInterval(() => {
-      if (_ws.readyState === WebSocket.OPEN) _ws.send(JSON.stringify({type:'ping'}));
-    }, 20000);
-  };
-  _ws.onmessage = async (e) => {
-    let frame; try { frame = JSON.parse(e.data); } catch(_) { return; }
-    if (frame.event === 'init') {
-      const peers = frame.peers || [];
-      knownPeers = {};
-      peers.forEach(p => { if (p.user_id) knownPeers[p.user_id] = p; });
-      renderPeers(peers);
-      allChats = frame.chats || []; renderChatList(allChats);
-      const d = frame.identity || {};
-      if (d.node_running !== undefined) {
-        $('me-uid').textContent    = d.user_id ? d.user_id.slice(0,20)+'...' : (d.has_identity ? 'locked' : 'none');
-        $('me-name').textContent   = d.username || 'you';
-        $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
-        const ns = $('node-status');
-        ns.textContent = d.node_running ? 'node online' : 'node offline';
-        ns.className   = 'node-status ' + (d.node_running ? 'on' : 'off');
-      }
-      return;
-    }
-    if (frame.event === 'new_message') {
-      await loadChats();
-      if (currentChatId) await refreshMessages();
-      return;
-    }
-    if (frame.event === 'peer_update') {
-      const p = frame.peer; if (!p || !p.user_id) return;
-      knownPeers[p.user_id] = p; renderPeers(Object.values(knownPeers)); return;
-    }
-  };
-  _ws.onerror = () => {};
-  _ws.onclose = () => { clearInterval(_ws._ping); if (useWebSocket) setTimeout(startWebSocket, 3000); };
-}
-
-function startPolling() {
-  if (_pollTimer) clearInterval(_pollTimer);
-  _pollTimer = setInterval(async () => {
-    await loadIdentity(); await loadPeers();
-    if (currentChatId) await refreshMessages();
-  }, 5000);
-}
-
-async function startRealtime() {
-  if (useWebSocket) {
-    startWebSocket();
-    setInterval(async () => { await loadIdentity(); await loadChats(); }, 30000);
-    setInterval(loadPeers, 30000);
-  } else { startPolling(); }
-}
-
-(async () => {
-  showSplash();
-  await loadIdentity();
-  await loadChats();
-  await loadPeers();
-})();
-</script>
-
-<!-- ── Bluetooth plugin ── -->
-<script>
-(function() {
-  const BT_STORE_KEY = 'enclave_bt_devices';
-
-  function loadStored() {
-    try { return JSON.parse(localStorage.getItem(BT_STORE_KEY) || '[]'); } catch(_) { return []; }
-  }
-  function saveStored(arr) {
-    localStorage.setItem(BT_STORE_KEY, JSON.stringify(arr));
-  }
-
-  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-  function escAttr(s) { return String(s).replace(/'/g,"&#39;"); }
-
-  function renderBTList(panel) {
-    const listEl = panel.querySelector('#bt-device-list');
-    const devices = loadStored();
-    if (!devices.length) {
-      listEl.innerHTML = '<div class="bt-unavail">no devices yet — click scan to find one</div>';
-      return;
-    }
-    listEl.innerHTML = devices.map(d => `
-      <div class="bt-device-row">
-        <div class="bt-device-info">
-          <div class="bt-device-name">${escHtml(d.name)}</div>
-          <div class="bt-device-mac">${escHtml(d.mac)}</div>
-        </div>
-        <button class="bt-device-chat" onclick="openChat('BT:${escAttr(d.mac)}');closeSettingsModal();">
-          open chat
-        </button>
-      </div>`).join('');
-  }
-
-  const panelHTML = `
-    <div class="smod-field">
-      <div class="smod-label">nearby bluetooth devices</div>
-      <div class="bt-device-list" id="bt-device-list"></div>
-    </div>
-    <div class="smod-btn-row">
-      <button class="btn btn-primary" id="bt-scan-btn" style="flex:1;">scan for devices</button>
-      <button class="btn btn-ghost"   id="bt-clear-btn">clear all</button>
-    </div>
-    <div class="smod-status" id="bt-status"></div>
-  `;
-
-  window.EnclavePlugins.registerSettingsTab({
-    id:   'bluetooth',
-    label: 'Bluetooth',
-    html:  panelHTML,
-    init(panel) {
-      renderBTList(panel);
-
-      panel.querySelector('#bt-clear-btn').addEventListener('click', () => {
-        saveStored([]);
-        renderBTList(panel);
-        const st = panel.querySelector('#bt-status');
-        st.textContent = 'cleared';
-        st.className = 'smod-status';
-        setTimeout(() => { st.textContent = ''; }, 1500);
-      });
-
-      panel.querySelector('#bt-scan-btn').addEventListener('click', async () => {
-        const btn = panel.querySelector('#bt-scan-btn');
-        const st  = panel.querySelector('#bt-status');
-
-        btn.disabled = true;
-        btn.textContent = 'scanning\u2026';
-        st.textContent = 'scanning for nearby devices (this may take ~8 s)\u2026';
-        st.className = 'smod-status';
-
-        try {
-          const r = await fetch('/api/bt/scan?duration=8');
-          const data = await r.json();
-
-          if (!r.ok) {
-            st.textContent = 'error: ' + (data.error || r.statusText);
-            st.className = 'smod-status err';
-            return;
-          }
-
-          const found = data.devices || [];
-          if (!found.length) {
-            st.textContent = 'no devices found nearby';
-            st.className = 'smod-status';
-            return;
-          }
-
-          // Merge with stored — avoid duplicates by MAC
-          const stored = loadStored();
-          found.forEach(d => {
-            if (!stored.find(s => s.mac === d.mac)) stored.push(d);
-          });
-          saveStored(stored);
-          renderBTList(panel);
-
-          st.textContent = '\u2713 found ' + found.length + ' device' + (found.length > 1 ? 's' : '');
-          st.className = 'smod-status ok';
-        } catch(e) {
-          st.textContent = 'scan failed: ' + e.message;
-          st.className = 'smod-status err';
-        } finally {
-          btn.disabled = false;
-          btn.textContent = 'scan for devices';
-        }
-      });
-    }
-  });
-})();
-</script>
-
-</body>
-</html>
