@@ -1,11 +1,17 @@
 """
 web.py — Enclave Messenger browser UI.
-Run with: python web.py [--host host|lan]
+Run with: python web.py [--host host|lan] [--port 5000] [--profile name]
 
-  --host host   Bind to 127.0.0.1 only (default)
-  --host lan    Bind to 0.0.0.0 (all interfaces)
+  --host host     Bind to 127.0.0.1 only (default)
+  --host lan      Bind to 0.0.0.0 (all interfaces)
+  --port 5001     Override web UI port (default: 5000, or profile's web_port)
+  --profile alice Switch to a named profile
 
-Alternatively set the ENCLAVE_HOST env var to 'host' or 'lan'.
+To run two instances:
+    python web.py --profile alice --port 5000
+    python web.py --profile bob   --port 5001
+
+Alternatively set ENCLAVE_HOST / ENCLAVE_PORT / ENCLAVE_PROFILE env vars.
 
 This file only handles HTTP ↔ browser.
 The actual logic for crypto and comms is NOT handled by this file.
@@ -441,13 +447,43 @@ if __name__ == "__main__":
         help="Bind target: 'host' (127.0.0.1) or 'lan' (0.0.0.0). "
              "Falls back to ENCLAVE_HOST env var, then defaults to 'host'.",
     )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Web UI port to bind on. Overrides profile web_port and config. "
+             "Falls back to ENCLAVE_PORT env var, then profile web_port, then 5000.",
+    )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Profile to load. Falls back to ENCLAVE_PROFILE env var, "
+             "then the active profile in registry.json.",
+    )
     args = parser.parse_args()
 
-    bind_mode = args.host or os.environ.get("ENCLAVE_HOST", "host")
-    bind_ip = "0.0.0.0" if bind_mode == "lan" else "127.0.0.1"
+    # Profile override: must happen before any app_core state is used
+    profile_arg = args.profile or os.environ.get("ENCLAVE_PROFILE")
+    if profile_arg:
+        app_core.config, app_core.chats, app_core.peers, \
+        app_core.identity, app_core.log, app_core._active_profile = \
+            app_core._init_stores(profile_arg)
+        app_core.plugin_manager.discover()
 
-    port  = app_core.config.get_setting("port", 5000)
+    bind_mode = args.host or os.environ.get("ENCLAVE_HOST", "host")
+    bind_ip   = "0.0.0.0" if bind_mode == "lan" else "127.0.0.1"
+
+    # Port resolution order: --port flag > ENCLAVE_PORT env > profile web_port > config > 5000
+    profile_meta = _profiles.get_profile(app_core._active_profile)
+    profile_web_port = (profile_meta or {}).get("web_port")
+    port = (
+        args.port
+        or int(os.environ.get("ENCLAVE_PORT", 0)) or None
+        or profile_web_port
+        or app_core.config.get_setting("port", 5000)
+    )
+
     debug = app_core.config.get_setting("debug", False)
 
-    print(f" * Binding to {bind_ip}:{port}")
+    print(f" * Binding to {bind_ip}:{port}  (profile: {app_core._active_profile})")
     app.run(host=bind_ip, port=port, debug=debug)

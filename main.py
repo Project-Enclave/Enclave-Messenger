@@ -144,7 +144,15 @@ def stop_bt_listener() -> None:
 # Node lifecycle
 # ---------------------------------------------------------------------------
 
-def start_node(passphrase: str) -> Node:
+def start_node(passphrase: str, transport_port: int = None) -> Node:
+    """
+    Start the network node for the active profile.
+
+    transport_port: override the port Node listens on for P2P traffic.
+                    If omitted, Node uses config_store's 'network_port',
+                    falling back to TRANSPORT_PORT (51821) in router.py.
+                    Pass this when running multiple instances on one machine.
+    """
     global _node
     with _node_lock:
         if _node is not None:
@@ -156,8 +164,15 @@ def start_node(passphrase: str) -> Node:
         identity.load_identity(passphrase=passphrase)
         log.info("Identity loaded: " + identity.get_user_id())
 
-        # Node reads its port from config_store (network_port key).
-        # If you need a non-default port, set it via ConfigStore before calling start_node().
+        # Write the port into config so Node picks it up.
+        # Profile meta takes priority; CLI/env override wins over both.
+        if transport_port is None:
+            profile_meta = _profiles.get_profile(_active_profile)
+            transport_port = (profile_meta or {}).get("transport_port")
+
+        if transport_port is not None:
+            config.set_setting("network_port", transport_port)
+
         _node = Node(
             identity_manager=identity,
             config_store=config,
@@ -314,7 +329,10 @@ def cmd_run(args):
     import getpass
     passphrase = args.passphrase or getpass.getpass("Passphrase: ")
     try:
-        node = start_node(passphrase=passphrase)
+        node = start_node(
+            passphrase=passphrase,
+            transport_port=args.transport_port,
+        )
     except RuntimeError as e:
         print(f"Error: {e}")
         return 1
@@ -426,6 +444,8 @@ def build_parser():
                        help="Identity passphrase (prompted if omitted)")
     p_run.add_argument("--profile", default=None,
                        help="Profile name to run (defaults to active profile)")
+    p_run.add_argument("--transport-port", type=int, default=None,
+                       help="P2P transport port override")
     p_run.set_defaults(func=cmd_run)
 
     # encrypt
