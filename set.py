@@ -283,4 +283,4 @@ if __name__ == "__main__":
 
     step_dump(False)
 
-    print("\n\033[92m  All done! Run with: python web.py\033[0m\n")
+    print("\n\033[92m  All done! Run with: python3 web.py\033[0m\n")

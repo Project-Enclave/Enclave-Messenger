@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 # Path to the embedded public key (same directory as this script)
-PUBLIC_KEY = os.path.join(os.path.dirname(__file__), "public.pem")
+PUBLIC_KEY = os.path.join(os.path.dirname(__file__), ".public.pem")
 
 
 def verify_and_apply(update_dir):
