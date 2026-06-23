@@ -83,7 +83,7 @@ def step_dump(err):
     if err==True:
         sys.exit(1)
     elif err==False:
-        print("\n\033[92m  All done! Run with: python web.py\033[0m\n")
+        print("\n\033[92m  All done! Run with: python3 web.py\033[0m\n")
         sys.exit(0)
     else:
         print("actually im not exiting")
