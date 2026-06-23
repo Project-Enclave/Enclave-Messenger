@@ -205,6 +205,7 @@
     }
     .smod-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.12);}
     .smod-input[type=password]{letter-spacing:.1em;}
+    .smod-input[readonly]{opacity:.6;cursor:default;}
     .smod-pass-wrap{position:relative;}
     .smod-pass-wrap .smod-input{padding-right:2.6rem;}
     .smod-btn-row{display:flex;gap:.6rem;align-items:center;margin-top:.1rem;}
@@ -226,6 +227,49 @@
       opacity:0;transform:scale(0);transition:opacity .4s,transform .4s;
     }
     .btn-ripple.rippling::after{opacity:1;transform:scale(1);}
+
+    /* ── Profile panel specific ── */
+    .profile-avatar-large {
+      width:56px;height:56px;border-radius:14px;flex-shrink:0;
+      background:linear-gradient(135deg,var(--primary),var(--purple));
+      color:white;display:grid;place-items:center;
+      font-family:var(--display);font-size:1.3rem;font-weight:700;
+    }
+    .profile-header-row {
+      display:flex;align-items:center;gap:1rem;
+      padding:.75rem;background:var(--bg);border-radius:10px;
+      border:1px solid var(--border);
+    }
+    .profile-header-info { display:flex;flex-direction:column;gap:.2rem;min-width:0; }
+    .profile-header-name { font-weight:700;font-size:.95rem;color:var(--text); }
+    .profile-header-sub  { font-size:.72rem;color:var(--faint); }
+    .smod-copy-wrap { position:relative; }
+    .smod-copy-btn {
+      position:absolute;right:.6rem;top:50%;transform:translateY(-50%);
+      background:none;border:1px solid var(--border);border-radius:6px;
+      padding:.18rem .5rem;font-size:.68rem;font-weight:600;
+      color:var(--faint);font-family:var(--font);cursor:pointer;
+      transition:background .12s,color .12s;
+    }
+    .smod-copy-btn:hover { background:var(--border);color:var(--text); }
+    .smod-copy-wrap .smod-input { padding-right:4.2rem; }
+    .danger-zone {
+      border:1px solid rgba(242,114,128,.25);border-radius:10px;
+      padding:.85rem 1rem;display:flex;flex-direction:column;gap:.5rem;
+    }
+    .danger-zone-label {
+      font-size:.68rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+      color:var(--coral);
+    }
+    .danger-zone-desc { font-size:.78rem;color:var(--muted);line-height:1.45; }
+    .btn-danger {
+      padding:.42rem .9rem;border-radius:7px;font-size:.8rem;font-weight:700;
+      cursor:pointer;font-family:var(--font);
+      background:none;border:1px solid rgba(242,114,128,.4);color:var(--coral);
+      transition:background .15s,border-color .15s,transform .1s;align-self:flex-start;
+    }
+    .btn-danger:hover { background:rgba(242,114,128,.1);border-color:var(--coral); }
+    .btn-danger:active { transform:scale(.97); }
 
     /* ── Sidebar ── */
     .sidebar{
@@ -559,11 +603,69 @@
     <button class="settings-close-btn" onclick="closeSettingsModal()" title="close">&times;</button>
     <nav class="stab-nav" id="stab-nav">
       <div class="stab-section-label">core</div>
+      <button class="stab-item" data-tab="profile" onclick="switchSettingsTab('profile')">Profile</button>
       <button class="stab-item active" data-tab="node" onclick="switchSettingsTab('node')">Node</button>
       <button class="stab-item" data-tab="sms" onclick="switchSettingsTab('sms')">SMS Gateway</button>
       <div class="stab-section-label" id="stab-plugins-label" style="display:none;">plugins</div>
     </nav>
     <div class="stab-content" id="stab-content">
+
+      <!-- Profile panel -->
+      <div class="stab-panel" id="stab-panel-profile">
+        <div class="stab-panel-title">Profile</div>
+
+        <!-- avatar + name header -->
+        <div class="profile-header-row">
+          <div class="profile-avatar-large" id="prof-avatar-large">?</div>
+          <div class="profile-header-info">
+            <div class="profile-header-name" id="prof-header-name">&mdash;</div>
+            <div class="profile-header-sub" id="prof-header-sub">no identity loaded</div>
+          </div>
+        </div>
+
+        <!-- display name -->
+        <div class="smod-field">
+          <div class="smod-label">display name</div>
+          <input id="prof-username" class="smod-input" type="text"
+                 placeholder="how others see you"
+                 autocomplete="off" spellcheck="false"/>
+        </div>
+
+        <!-- node id (read-only + copy) -->
+        <div class="smod-field">
+          <div class="smod-label">node id</div>
+          <div class="smod-copy-wrap">
+            <input id="prof-node-id" class="smod-input" type="text" readonly
+                   placeholder="unlock node to reveal"/>
+            <button class="smod-copy-btn" onclick="copyNodeId()" id="prof-copy-btn">copy</button>
+          </div>
+        </div>
+
+        <!-- active profile name (read-only) -->
+        <div class="smod-field">
+          <div class="smod-label">active profile</div>
+          <input id="prof-profile-name" class="smod-input" type="text" readonly
+                 placeholder="default"/>
+        </div>
+
+        <div class="smod-btn-row">
+          <button class="btn btn-primary btn-ripple" id="prof-save-btn"
+                  onclick="saveProfile()" style="flex:1;">
+            save changes
+          </button>
+        </div>
+        <div class="smod-status" id="prof-status">&mdash;</div>
+
+        <!-- danger zone -->
+        <div class="danger-zone">
+          <div class="danger-zone-label">danger zone</div>
+          <div class="danger-zone-desc">
+            Generate a new identity keypair. Your current node ID will be lost and
+            you will appear as a new peer to everyone.
+          </div>
+          <button class="btn-danger" onclick="generateNewIdentity()">regenerate identity</button>
+        </div>
+      </div>
 
       <!-- Node panel -->
       <div class="stab-panel active" id="stab-panel-node">
@@ -656,7 +758,7 @@
       </div>
     </div>
 
-    <button class="settings-open-btn" onclick="openSettingsModal()">
+    <button class="settings-open-btn" onclick="openSettingsModal('profile')">
       <span>settings &amp; config</span>
       <span class="settings-open-btn-arrow">&#8599;</span>
     </button>
@@ -837,6 +939,7 @@ function switchSettingsTab(tabId) {
   document.querySelectorAll('.stab-panel').forEach(el => {
     el.classList.toggle('active', el.id === 'stab-panel-' + tabId);
   });
+  if (tabId === 'profile') loadProfilePanel();
 }
 
 function openSettingsModal(tabId) {
@@ -857,6 +960,105 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === $('settings-backdrop')) closeSettingsModal();
   });
 });
+
+// ── Profile panel ────────────────────────────────────────────────────────
+
+async function loadProfilePanel() {
+  const [identity, profileResp] = await Promise.all([
+    api('/api/identity/status'),
+    api('/api/profiles/active'),
+  ]);
+
+  const username = identity.username || '';
+  const userId   = identity.user_id  || '';
+  const profName = (profileResp.active) || 'default';
+
+  $('prof-username').value      = username;
+  $('prof-node-id').value       = userId;
+  $('prof-profile-name').value  = profName;
+
+  const initials = username ? username.slice(0,2).toUpperCase() : (userId ? userId.slice(0,2).toUpperCase() : '?');
+  $('prof-avatar-large').textContent = initials;
+  $('prof-header-name').textContent  = username || 'unnamed';
+  $('prof-header-sub').textContent   = userId
+    ? userId.slice(0,24) + (userId.length > 24 ? '\u2026' : '')
+    : 'unlock node to load identity';
+
+  $('prof-status').textContent  = '\u2014';
+  $('prof-status').className    = 'smod-status';
+}
+
+function copyNodeId() {
+  const val = $('prof-node-id').value;
+  if (!val) return;
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = $('prof-copy-btn');
+    btn.textContent = 'copied!';
+    setTimeout(() => { btn.textContent = 'copy'; }, 1800);
+  });
+}
+
+async function saveProfile() {
+  const username = $('prof-username').value.trim();
+  const statusEl = $('prof-status');
+  const btn      = $('prof-save-btn');
+
+  if (!username) {
+    statusEl.textContent = 'display name cannot be empty';
+    statusEl.className   = 'smod-status err';
+    return;
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = 'saving\u2026';
+  statusEl.className   = 'smod-status';
+
+  try {
+    const profName = $('prof-profile-name').value || 'default';
+    const r = await fetch('/api/profiles/' + encodeURIComponent(profName), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username}),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    ripple('prof-save-btn');
+    statusEl.textContent = '\u2713 saved';
+    statusEl.className   = 'smod-status ok';
+    await loadIdentity();
+    await loadProfilePanel();
+  } catch(e) {
+    statusEl.textContent = 'error: ' + e.message;
+    statusEl.className   = 'smod-status err';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function generateNewIdentity() {
+  const p = pass();
+  if (!p) {
+    alert('Unlock the node first (go to the Node tab and enter your passphrase).');
+    return;
+  }
+  if (!confirm('This will permanently replace your keypair. Your current node ID will be gone. Continue?')) return;
+
+  const statusEl = $('prof-status');
+  statusEl.textContent = 'generating\u2026';
+  statusEl.className   = 'smod-status';
+
+  try {
+    const d = await api('/api/identity/generate', {passphrase: p});
+    if (d.error) throw new Error(d.error);
+    statusEl.textContent = '\u2713 new identity generated: ' + (d.user_id || '').slice(0,16) + '\u2026';
+    statusEl.className   = 'smod-status ok';
+    await loadIdentity();
+    await loadProfilePanel();
+  } catch(e) {
+    statusEl.textContent = 'error: ' + e.message;
+    statusEl.className   = 'smod-status err';
+  }
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 //  EnclavePlugins — public plugin API
@@ -1116,421 +1318,4 @@ async function scanPeers() {
     renderPeers(found);
     const onlineCount = found.filter(p => p.online !== false).length;
     status.textContent = onlineCount
-      ? '\u2713 found ' + onlineCount + ' peer' + (onlineCount > 1 ? 's' : '')
-      : 'no enclave peers found on LAN';
-    status.className = 'status-line' + (onlineCount ? ' ok' : '');
-    if (onlineCount && $('peers-trigger').getAttribute('aria-expanded') !== 'true') {
-      toggleAccordion('peers');
-    }
-  } catch (e) {
-    clearInterval(ticker);
-    bar.style.width = '100%';
-    status.textContent = 'scan failed: ' + e.message;
-    status.className = 'status-line err';
-  } finally {
-    setTimeout(() => { progress.classList.remove('visible'); bar.style.width = '0%'; }, 1200);
-    btn.classList.remove('scanning');
-    btn.disabled = false;
-    label.textContent = ' scan network';
-  }
-}
-
-// ── Settings ─────────────────────────────────────────────────────────────
-
-async function saveConfig() {
-  const u = $('cfg-sms-user').value.trim();
-  const p = $('cfg-sms-pass').value;
-  const h = $('cfg-sms-host').value.trim();
-  const statusEl = $('cfg-sms-status');
-  if (!u || !p) {
-    statusEl.textContent = 'username + password required';
-    statusEl.className = 'smod-status err';
-    return;
-  }
-  const btn = $('cfg-save-btn');
-  btn.disabled = true;
-  const d = await api('/api/sms/config', {username:u, password:p, host:h||null});
-  ripple('cfg-save-btn');
-  btn.disabled = false;
-  statusEl.textContent = d.error ? 'error: '+d.error : '\u2713 sms config saved';
-  statusEl.className = 'smod-status ' + (d.error ? 'err' : 'ok');
-}
-
-// ── Chats ─────────────────────────────────────────────────────────────────
-
-async function loadChats() {
-  const d = await api('/api/chats');
-  allChats = d.chats || [];
-  renderChatList(allChats);
-}
-
-function renderChatList(list) {
-  const el = $('chat-list');
-  if (!list.length) {
-    el.innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">no chats yet</div>';
-    return;
-  }
-  el.innerHTML = list.map((c, i) => {
-    const peer  = knownPeers[c.id];
-    const label = (peer && peer.username) ? peer.username : c.id;
-    const type  = isBT(c.id) || c.id.startsWith('BT:') ? 'bluetooth'
-                : isPhone(c.id) ? 'sms'
-                : (peer ? 'peer' : 'local');
-    return `<div class="chat-item ${c.id===currentChatId?'active':''}"
-              style="animation-delay:${i*40}ms"
-              onclick="openChat('${escAttr(c.id)}')">
-      <div class="avatar">${label.slice(0,2).toUpperCase()}</div>
-      <div class="chat-meta">
-        <div class="chat-name">${escHtml(label)}</div>
-        <div class="chat-preview">${c.count} msg${c.count!==1?'s':''} &middot; ${type}</div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function filterChats(q) {
-  renderChatList(allChats.filter(c => c.id.toLowerCase().includes(q.toLowerCase())));
-}
-
-async function openChat(chatId) {
-  currentChatId = chatId;
-  $('no-chat').style.display = 'none';
-  $('active-chat').style.display = 'flex';
-  const peer  = knownPeers[chatId];
-  const label = (peer && peer.username) ? peer.username : chatId;
-  $('chat-avatar').textContent = label.slice(0,2).toUpperCase();
-  $('chat-title').textContent  = label;
-  const isBTChat = chatId.startsWith('BT:');
-  $('chat-sub').textContent = isBTChat
-    ? 'bluetooth channel'
-    : isPhone(chatId) ? 'sms channel \u2022 encrypted'
-    : peer ? `enclave peer \u2022 ${peer.ip}:${peer.port}`
-    : 'local only';
-  renderChatList(allChats);
-  await refreshMessages();
-  $('composer').focus();
-}
-
-function closeChat() {
-  currentChatId = null;
-  $('active-chat').style.display = 'none';
-  $('no-chat').style.display = 'flex';
-  renderChatList(allChats);
-}
-
-async function refreshMessages() {
-  if (!currentChatId) return;
-  const d    = await api('/api/chats/' + encodeURIComponent(currentChatId));
-  const area = $('messages-area');
-  const msgs = d.messages || [];
-  const p    = pass();
-  if (!msgs.length) {
-    area.innerHTML = '<div class="empty-state"><div class="big">enclave</div><div>no messages yet</div></div>';
-    return;
-  }
-  const rows = await Promise.all(msgs.map(async (entry) => {
-    const token    = typeof entry === 'object' ? entry.token  : entry;
-    const sender   = typeof entry === 'object' ? entry.sender : null;
-    const ts       = typeof entry === 'object' ? entry.ts     : null;
-    const mine     = sender === 'me';
-    const isSystem = sender === 'system';
-    if (isSystem) return {system: true, text: token, ts};
-    let text = token, decrypted = false;
-    if (p && token && token !== '-- chat started --') {
-      try {
-        const dec = await api('/api/crypto/decrypt', {passphrase: p, token, chat_id: currentChatId});
-        if (dec.plaintext !== undefined && dec.plaintext !== null) { text = dec.plaintext; decrypted = true; }
-      } catch(_) {}
-    }
-    return {text, decrypted, mine, ts, system: false};
-  }));
-  area.innerHTML = rows.map((m, i) => {
-    if (m.system) return `<div class="sys-msg" style="animation-delay:${i*30}ms">${escHtml(m.text)}</div>`;
-    const peer = knownPeers[currentChatId];
-    const authorLabel = m.mine ? '' : ((peer && peer.username) || 'peer');
-    return `<div class="msg-row ${m.mine?'me':''}" style="animation-delay:${i*30}ms">
-      <div class="bubble">
-        ${!m.mine ? `<div class="bubble-author">${escHtml(authorLabel)}</div>` : ''}
-        <div>${escHtml(m.text)}
-          ${!m.decrypted && p ? '<span class="badge badge-enc">enc</span>' : ''}
-          ${m.decrypted ? '<span class="badge badge-ok">decrypted</span>' : ''}
-        </div>
-        <div class="bubble-time">${m.ts ? fmtTs(m.ts) : ''}</div>
-      </div>
-    </div>`;
-  }).join('');
-  area.scrollTop = area.scrollHeight;
-}
-
-function fmtTs(ts) {
-  const d = new Date(ts);
-  if (isNaN(d)) return ts;
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-}
-
-async function sendMessage() {
-  const input = $('composer');
-  const text  = input.value.trim();
-  if (!text || !currentChatId) return;
-  const btn = $('send-btn');
-  btn.disabled = true;
-  input.value  = '';
-  const p    = pass();
-  const ts   = new Date().toISOString();
-  const peer = knownPeers[currentChatId];
-  if (peer) {
-    const r = await api('/api/message/send', {peer_id: currentChatId, plaintext: text});
-    if (r.ok) {
-      appendLocalMessage(text, true, true, ts, true);
-      await loadChats(); btn.disabled = false; $('composer').focus(); return;
-    }
-    appendSysMsg('network delivery failed, saving locally only');
-  }
-  let token = text, encrypted = false;
-  if (p) {
-    try {
-      const d = await api('/api/crypto/encrypt', {
-        passphrase: p, plaintext: text, chat_id: currentChatId, created_at: ts,
-      });
-      if (d.token) { token = d.token; encrypted = true; }
-    } catch(_) {}
-  }
-  appendLocalMessage(text, true, encrypted, ts, false);
-  await api('/api/chats/' + encodeURIComponent(currentChatId) + '/append', {
-    token, sender: 'me', ts,
-  });
-  if (isPhone(currentChatId)) {
-    try {
-      const r = await api('/api/sms/send', {to: currentChatId, message: text});
-      appendSysMsg(r.error
-        ? 'sms failed: ' + r.error
-        : 'sms sent \u2022 id: ' + (r.id||'?') + ' \u2022 state: ' + (r.state||'?'));
-    } catch(e) { appendSysMsg('sms error: ' + e); }
-  }
-  await loadChats();
-  btn.disabled = false;
-  $('composer').focus();
-}
-
-function appendLocalMessage(text, mine, encrypted, ts, viaNetwork) {
-  const area  = $('messages-area');
-  const empty = area.querySelector('.empty-state');
-  if (empty) empty.remove();
-  const row = document.createElement('div');
-  row.className = 'msg-row' + (mine ? ' me' : '');
-  row.innerHTML = `<div class="bubble">
-    <div>${escHtml(text)}
-      ${encrypted && !viaNetwork ? '<span class="badge badge-enc">enc</span>' : ''}
-      ${viaNetwork ? '<span class="badge badge-net">sent</span>' : ''}
-    </div>
-    <div class="bubble-time">${fmtTs(ts)}</div>
-  </div>`;
-  area.appendChild(row);
-  area.scrollTop = area.scrollHeight;
-}
-
-function appendSysMsg(msg) {
-  const area = $('messages-area');
-  const div  = document.createElement('div');
-  div.className   = 'sys-msg';
-  div.textContent = msg;
-  area.appendChild(div);
-  area.scrollTop = area.scrollHeight;
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-function escAttr(s) {
-  return String(s).replace(/'/g,"&#39;").replace(/\"/g,'&quot;');
-}
-
-let useWebSocket = true;
-let _ws = null;
-let _pollTimer = null;
-
-function toggleConnMode() {
-  useWebSocket = !useWebSocket;
-  $('conn-ws').classList.toggle('active',  useWebSocket);
-  $('conn-poll').classList.toggle('active', !useWebSocket);
-}
-
-function startWebSocket() {
-  if (_ws) { try { _ws.close(); } catch(_) {} }
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  _ws = new WebSocket(`${proto}://${location.host}/ws`);
-  _ws.onopen = () => {
-    _ws._ping = setInterval(() => {
-      if (_ws.readyState === WebSocket.OPEN) _ws.send(JSON.stringify({type:'ping'}));
-    }, 20000);
-  };
-  _ws.onmessage = async (e) => {
-    let frame; try { frame = JSON.parse(e.data); } catch(_) { return; }
-    if (frame.event === 'init') {
-      const peers = frame.peers || [];
-      knownPeers = {};
-      peers.forEach(p => { if (p.user_id) knownPeers[p.user_id] = p; });
-      renderPeers(peers);
-      allChats = frame.chats || []; renderChatList(allChats);
-      const d = frame.identity || {};
-      if (d.node_running !== undefined) {
-        $('me-uid').textContent    = d.user_id ? d.user_id.slice(0,20)+'...' : (d.has_identity ? 'locked' : 'none');
-        $('me-name').textContent   = d.username || 'you';
-        $('me-avatar').textContent = (d.username||'ME').slice(0,2).toUpperCase();
-        const ns = $('node-status');
-        ns.textContent = d.node_running ? 'node online' : 'node offline';
-        ns.className   = 'node-status ' + (d.node_running ? 'on' : 'off');
-      }
-      return;
-    }
-    if (frame.event === 'new_message') {
-      await loadChats();
-      if (currentChatId) await refreshMessages();
-      return;
-    }
-    if (frame.event === 'peer_update') {
-      const p = frame.peer; if (!p || !p.user_id) return;
-      knownPeers[p.user_id] = p; renderPeers(Object.values(knownPeers)); return;
-    }
-  };
-  _ws.onerror = () => {};
-  _ws.onclose = () => { clearInterval(_ws._ping); if (useWebSocket) setTimeout(startWebSocket, 3000); };
-}
-
-function startPolling() {
-  if (_pollTimer) clearInterval(_pollTimer);
-  _pollTimer = setInterval(async () => {
-    await loadIdentity(); await loadPeers();
-    if (currentChatId) await refreshMessages();
-  }, 5000);
-}
-
-async function startRealtime() {
-  if (useWebSocket) {
-    startWebSocket();
-    setInterval(async () => { await loadIdentity(); await loadChats(); }, 30000);
-    setInterval(loadPeers, 30000);
-  } else { startPolling(); }
-}
-
-(async () => {
-  showSplash();
-  await loadIdentity();
-  await loadChats();
-  await loadPeers();
-})();
-</script>
-
-<!-- ── Bluetooth plugin ── -->
-<script>
-(function() {
-  const BT_STORE_KEY = 'enclave_bt_devices';
-
-  function loadStored() {
-    try { return JSON.parse(localStorage.getItem(BT_STORE_KEY) || '[]'); } catch(_) { return []; }
-  }
-  function saveStored(arr) {
-    localStorage.setItem(BT_STORE_KEY, JSON.stringify(arr));
-  }
-
-  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-  function escAttr(s) { return String(s).replace(/'/g,"&#39;"); }
-
-  function renderBTList(panel) {
-    const listEl = panel.querySelector('#bt-device-list');
-    const devices = loadStored();
-    if (!devices.length) {
-      listEl.innerHTML = '<div class="bt-unavail">no devices yet — click scan to find one</div>';
-      return;
-    }
-    listEl.innerHTML = devices.map(d => `
-      <div class="bt-device-row">
-        <div class="bt-device-info">
-          <div class="bt-device-name">${escHtml(d.name)}</div>
-          <div class="bt-device-mac">${escHtml(d.mac)}</div>
-        </div>
-        <button class="bt-device-chat" onclick="openChat('BT:${escAttr(d.mac)}');closeSettingsModal();">
-          open chat
-        </button>
-      </div>`).join('');
-  }
-
-  const panelHTML = `
-    <div class="smod-field">
-      <div class="smod-label">nearby bluetooth devices</div>
-      <div class="bt-device-list" id="bt-device-list"></div>
-    </div>
-    <div class="smod-btn-row">
-      <button class="btn btn-primary" id="bt-scan-btn" style="flex:1;">scan for devices</button>
-      <button class="btn btn-ghost"   id="bt-clear-btn">clear all</button>
-    </div>
-    <div class="smod-status" id="bt-status"></div>
-  `;
-
-  window.EnclavePlugins.registerSettingsTab({
-    id:   'bluetooth',
-    label: 'Bluetooth',
-    html:  panelHTML,
-    init(panel) {
-      renderBTList(panel);
-
-      panel.querySelector('#bt-clear-btn').addEventListener('click', () => {
-        saveStored([]);
-        renderBTList(panel);
-        const st = panel.querySelector('#bt-status');
-        st.textContent = 'cleared';
-        st.className = 'smod-status';
-        setTimeout(() => { st.textContent = ''; }, 1500);
-      });
-
-      panel.querySelector('#bt-scan-btn').addEventListener('click', async () => {
-        const btn = panel.querySelector('#bt-scan-btn');
-        const st  = panel.querySelector('#bt-status');
-
-        btn.disabled = true;
-        btn.textContent = 'scanning\u2026';
-        st.textContent = 'scanning for nearby devices (this may take ~8 s)\u2026';
-        st.className = 'smod-status';
-
-        try {
-          const r = await fetch('/api/bt/scan?duration=8');
-          const data = await r.json();
-
-          if (!r.ok) {
-            st.textContent = 'error: ' + (data.error || r.statusText);
-            st.className = 'smod-status err';
-            return;
-          }
-
-          const found = data.devices || [];
-          if (!found.length) {
-            st.textContent = 'no devices found nearby';
-            st.className = 'smod-status';
-            return;
-          }
-
-          // Merge with stored — avoid duplicates by MAC
-          const stored = loadStored();
-          found.forEach(d => {
-            if (!stored.find(s => s.mac === d.mac)) stored.push(d);
-          });
-          saveStored(stored);
-          renderBTList(panel);
-
-          st.textContent = '\u2713 found ' + found.length + ' device' + (found.length > 1 ? 's' : '');
-          st.className = 'smod-status ok';
-        } catch(e) {
-          st.textContent = 'scan failed: ' + e.message;
-          st.className = 'smod-status err';
-        } finally {
-          btn.disabled = false;
-          btn.textContent = 'scan for devices';
-        }
-      });
-    }
-  });
-})();
-</script>
-
-</body>
-</html>
+      ? '\u2713 found ' + onlineCount + ' peer' + (
