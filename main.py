@@ -156,19 +156,13 @@ def start_node(passphrase: str) -> Node:
         identity.load_identity(passphrase=passphrase)
         log.info("Identity loaded: " + identity.get_user_id())
 
-        profile_meta  = _profiles.get_profile(_active_profile)
-        transport_port = (
-            profile_meta["transport_port"]
-            if profile_meta
-            else 43100
-        )
-
+        # Node reads its port from config_store (network_port key).
+        # If you need a non-default port, set it via ConfigStore before calling start_node().
         _node = Node(
             identity_manager=identity,
             config_store=config,
             peer_store=peers,
             chat_store=chats,
-            port=transport_port,
         )
         _node.start()
         log.info("Node started")
