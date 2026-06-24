@@ -864,7 +864,7 @@ function ripple(btnId) {
 
 function showSplash() {
   const splash = $('splash');
-  // total splash duration: 2400ms display + 600ms fade = 3000ms
+  // total splash duration: 2400ms display + 650ms fade = 3050ms
   setTimeout(() => {
     splash.classList.add('fade-out');
     setTimeout(() => {
@@ -872,15 +872,19 @@ function showSplash() {
       // trigger sidebar slide-in only after splash is gone
       document.querySelector('.sidebar').classList.add('animate-in');
       showUnlockModal();
-    }, 600);
+    }, 650);
   }, 2400);
 }
 
 function showUnlockModal() {
   const bd = $('unlock-backdrop');
+  // Set display first, then let the browser paint one frame before
+  // removing .hidden — this ensures the opacity transition actually plays.
   bd.style.display = 'flex';
-  bd.classList.remove('hidden');
-  setTimeout(() => $('modal-pass').focus(), 80);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    bd.classList.remove('hidden');
+    setTimeout(() => $('modal-pass').focus(), 80);
+  }));
 }
 
 // ── Unlock modal ────────────────────────────────────────────────────────
@@ -971,3 +975,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // start the splash — this controls the unlock modal + sidebar animation
   showSplash();
 });
+</script>
+</body>
+</html>
