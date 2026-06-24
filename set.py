@@ -151,9 +151,9 @@ def step_install_requirements():
             result = run([uv, "venv", VENV_DIR])
             if result.returncode != 0:
                 err("uv venv creation failed.")
-                step_install_requirements_pass=False     
-                step_failed+=1                      
-                step_failed_total+=1
+                step_install_requirements_pass = False
+                step_failed += 1
+                step_failed_total += 1
                 step_dump(True)
             ok(f"Venv created at {VENV_DIR}")
         else:
