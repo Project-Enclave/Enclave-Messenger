@@ -80,9 +80,9 @@ def step_dump(err):
     print(f"     step failed last round: {step_failed}")
     print(f"     Total steps failed: {step_failed_total}")
     print(f"     kms due to something not working?: {err}")
-    if err==True:
+    if err is True:
         sys.exit(1)
-    elif err==False:
+    elif err is False:
         print("\n\033[92m  All done! Run with: python3 web.py\033[0m\n")
         sys.exit(0)
     else:
