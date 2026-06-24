@@ -189,7 +189,7 @@ def step_config():
     username = ask("Your display name", default=current_user or None)
     if username:
         config.username = username
-        ok(f"Username set to: {username}")
+        ok("Username set.")
     else:
         ok("Username skipped.")
 
