@@ -79,7 +79,7 @@ def step_dump(err):
     banner("Exiting. Dumping all vars for debugging")
     print(f"     Am i running in the correct version of snake?: {step_python_version_pass}")
     print(f"     Did i install all the stuff that i need?: {step_install_requirements_pass}")
-    print(f"     Did the configure myself?: {step_config_pass}")
+    print(f"     Did I configure myself?: {step_config_pass}")
     print(f"     Do i have an identity: {step_identity_pass}")
     print(f"     did i kms?: {step_self_destruct_pass}")
     print(f"     step failed last round: {step_failed}")
