@@ -20,15 +20,15 @@ VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv")
 
 # ── setup verify vars ───────────────────────────────────────────────────────
 
-step_python_version_pass=False
-step_install_requirements_pass=False
-step_config_pass=False
-step_identity_pass=False
-step_self_destruct_pass=False
-step_failed=0
-step_failed_total=0
-fatal=False
-venv=""
+step_python_version_pass = False
+step_install_requirements_pass = False
+step_config_pass = False
+step_identity_pass = False
+step_self_destruct_pass = False
+step_failed = 0
+step_failed_total = 0
+fatal = False
+venv = ""
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 def banner(text):
@@ -79,7 +79,7 @@ def step_dump(err):
     banner("Exiting. Dumping all vars for debugging")
     print(f"     Am i running in the correct version of snake?: {step_python_version_pass}")
     print(f"     Did i install all the stuff that i need?: {step_install_requirements_pass}")
-    print(f"     Did the configure myself?: {step_config_pass}")
+    print(f"     Did I configure myself?: {step_config_pass}")
     print(f"     Do i have an identity: {step_identity_pass}")
     print(f"     did i kms?: {step_self_destruct_pass}")
     print(f"     step failed last round: {step_failed}")
@@ -103,9 +103,10 @@ def step_python_version():
         step_failed += 1
         step_failed_total += 1
         step_dump(True)
-    step_python_version_pass = True
-    step_failed = 0
-    ok(f"Python {major}.{minor} — OK")
+    else:
+        step_python_version_pass = True
+        step_failed = 0
+        ok(f"Python {major}.{minor} — OK")
 
 
 def step_install_requirements():
@@ -114,9 +115,9 @@ def step_install_requirements():
     req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
     if not os.path.exists(req_file):
         err("requirements.txt not found!")
-        step_install_requirements_pass=False
-        step_failed+=1
-        step_failed_total+=1
+        step_install_requirements_pass = False
+        step_failed += 1
+        step_failed_total += 1
         step_dump(True)
 
     # ─ try pip first ────────────────────────────────────────────────────
@@ -151,9 +152,9 @@ def step_install_requirements():
             result = run([uv, "venv", VENV_DIR])
             if result.returncode != 0:
                 err("uv venv creation failed.")
-                step_install_requirements_pass=False     
-                step_failed+=1                      
-                step_failed_total+=1
+                step_install_requirements_pass = False
+                step_failed += 1
+                step_failed_total += 1
                 step_dump(True)
             ok(f"Venv created at {VENV_DIR}")
         else:
