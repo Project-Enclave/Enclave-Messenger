@@ -114,9 +114,9 @@ def step_install_requirements():
     req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
     if not os.path.exists(req_file):
         err("requirements.txt not found!")
-        step_install_requirements_pass=False
-        step_failed+=1
-        step_failed_total+=1
+        step_install_requirements_pass = False
+        step_failed += 1
+        step_failed_total += 1
         step_dump(True)
 
     # ─ try pip first ────────────────────────────────────────────────────
