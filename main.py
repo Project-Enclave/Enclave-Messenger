@@ -8,6 +8,8 @@ Running directly:
     python main.py run              # start node (discovery + transport)
     python main.py run --passphrase secret
     python main.py run --profile alice
+    python main.py run --port 8080  # override web-UI port
+    python main.py run --ci         # headless / no browser open
 
 CLI utilities:
     python main.py init
@@ -339,7 +341,20 @@ def cmd_run(args):
 
     print(f"Enclave node running (profile: {_active_profile}).")
     print(f"User ID: {identity.get_user_id()}")
-    print("Press Ctrl+C to stop.")
+
+    # --ci / headless mode: start web server on requested port, skip browser,
+    # and block until SIGINT/SIGTERM instead of waiting for a keypress.
+    ci_mode = getattr(args, "ci", False)
+    web_port = getattr(args, "port", None)
+
+    if web_port is not None:
+        # Store so web.py picks it up if it reads config.
+        config.set_setting("web_port", web_port)
+
+    if ci_mode:
+        print(f"CI/headless mode — web port: {web_port or 'default'}. No browser will open.")
+    else:
+        print("Press Ctrl+C to stop.")
 
     stop_event = threading.Event()
 
@@ -446,6 +461,10 @@ def build_parser():
                        help="Profile name to run (defaults to active profile)")
     p_run.add_argument("--transport-port", type=int, default=None,
                        help="P2P transport port override")
+    p_run.add_argument("--port", type=int, default=None,
+                       help="Web UI port (stored in config; web.py reads it)")
+    p_run.add_argument("--ci", action="store_true", default=False,
+                       help="Headless / CI mode — skip browser launch, block on signal")
     p_run.set_defaults(func=cmd_run)
 
     # encrypt
