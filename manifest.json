@@ -1,9 +1,8 @@
 {
-  "main.py": "2e5ce1abac00d718a6a7600a6ff4b82b6343e785930c256790535a25bed2c510",
+  "main.py": "c4a6f0879c39a534a2bbd78ca4bd2d57609bba38f0a3237d9a714bcfda9071b3",
   "reset.py": "a60557ef219da5b4bada0bef5f80fcca23982c995ba68f0718068bd7189deda8",
-  "set.py": "06bda4974326fd6706bc5cf2a1d83a8a7600e9e30f4e68986768d68e684ee1ce",
   "update.py": "e2590f7ae752325c8909d0a53ae5412f7f235d0e6be23abff82ff5472d324148",
-  "web.py": "9995adb33b6d20ae4f8d7484689ac812c5cb7860beb9c71c6c599c2c034c5e9a",
+  "web.py": "5a31f5ab250e39bda8cbb1d707de00c0609c7281426d86999ce29387b5b9e4b9",
   "core/auth.py": "2295e0de7d6f206bc609e426e722506d4270334a9c3ac3a27b1f0579c1867bcc",
   "core/profiles.py": "c3b32b0b3a7fbbb041da1cd6f0a36b0f0bb0b9907697b6f7d8bf91d88d89ac29",
   "core/crypto/__init__.py": "22c229c62506613b836c56adc48e33fcb282d5daec3d473fb7ec1e29eb516171",
@@ -33,11 +32,5 @@
   "core/storage/config_store.py": "6b64cf487335f84d2c0027d3d8fba4cba1c30809b4cb25eb027dcbdcab9f5b17",
   "core/storage/key_store.py": "5c1cd6eb98e4f94affa88482a6aa68dc4bc8420759067042b61f28f99457ebd1",
   "core/storage/log_store.py": "6a6903724f3df8ccb1728ec13cd8d03abf731a5b9b460dfe4e00b734345384af",
-  "core/storage/peer_store.py": "8450007fc913cbda30eb738fbebd3a71a0fd26247f32c857888846465b9337d2",
-  "tests/test_auth.py": "235b34e697b3993ffd689358b8bbf9b24fa926776106321aee489e5817299425",
-  "tests/test_bluetooth_utils.py": "66612382501f7881fc13e57b7472666bc941babdf7fc55cf1904d0aad2f41fce",
-  "tests/test_identity.py": "755718a4d333148ab62ec6de0799b02c89f3497973c3c7b03c13c262f2f3e0c7",
-  "tests/test_plugin_manager.py": "4a8c129c5ad17b27e653700627c393ecf7ee285b08aa9cc2215f42724f0b84ca",
-  "tests/test_sms_gateway.py": "fccda8305649639fa4bd5b9946536c179bc9b650e137469d09b01591bccb6f39",
-  "tests/test_storage.py": "673d518a27442c0d14b70801ad3722d56199afd757fa096f529dce7ace8a24d1"
+  "core/storage/peer_store.py": "8450007fc913cbda30eb738fbebd3a71a0fd26247f32c857888846465b9337d2"
 }
