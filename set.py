@@ -94,12 +94,12 @@ def step_python_version():
     major, minor = sys.version_info[:2]
     if major < 3 or (major == 3 and minor < 10):
         err(f"Python 3.10+ required. You have {major}.{minor}")
-        step_python_version_pass=False
-        step_failed+=1
-        step_failed_total+=1
+        step_python_version_pass = False
+        step_failed += 1
+        step_failed_total += 1
         step_dump(True)
-    step_python_version_pass=True
-    step_failed=0
+    step_python_version_pass = True
+    step_failed = 0
     ok(f"Python {major}.{minor} — OK")
 
 
