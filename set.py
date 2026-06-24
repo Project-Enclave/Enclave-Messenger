@@ -36,9 +36,14 @@ def banner(text):
     print(f"\033[96m  {text}\033[0m")
     print(f"\033[96m{'=' * 50}\033[0m")
 
-def ok(text):  print(f"  \033[92m>:D\033[0m  {text}")
-def err(text): print(f"  \033[91mx\033[0m  {text}")
-def info(text): print(f"  \033[93m→\033[0m  {text}")
+def ok(text):
+    print(f"  \033[92m>:D\033[0m  {text}")
+
+def err(text):
+    print(f"  \033[91mx\033[0m  {text}")
+
+def info(text):
+    print(f"  \033[93m→\033[0m  {text}")
 
 def ask(prompt, default=None, secret=False):
     display = f"{prompt} [{default}]: " if default else f"{prompt}: "
@@ -71,7 +76,7 @@ def venv_active():
 # ── steps ─────────────────────────────────────────────────────────────────
 
 def step_dump(err):
-    banner("Exiting. Dumping all vars for debuging")
+    banner("Exiting. Dumping all vars for debugging")
     print(f"     Am i running in the correct version of snake?: {step_python_version_pass}")
     print(f"     Did i install all the stuff that i need?: {step_install_requirements_pass}")
     print(f"     Did the configure myself?: {step_config_pass}")
@@ -80,9 +85,9 @@ def step_dump(err):
     print(f"     step failed last round: {step_failed}")
     print(f"     Total steps failed: {step_failed_total}")
     print(f"     kms due to something not working?: {err}")
-    if err==True:
+    if err is True:
         sys.exit(1)
-    elif err==False:
+    elif err is False:
         print("\n\033[92m  All done! Run with: python3 web.py\033[0m\n")
         sys.exit(0)
     else:
@@ -94,12 +99,12 @@ def step_python_version():
     major, minor = sys.version_info[:2]
     if major < 3 or (major == 3 and minor < 10):
         err(f"Python 3.10+ required. You have {major}.{minor}")
-        step_python_version_pass=False
-        step_failed+=1
-        step_failed_total+=1
+        step_python_version_pass = False
+        step_failed += 1
+        step_failed_total += 1
         step_dump(True)
-    step_python_version_pass=True
-    step_failed=0
+    step_python_version_pass = True
+    step_failed = 0
     ok(f"Python {major}.{minor} — OK")
 
 
@@ -184,7 +189,7 @@ def step_config():
     username = ask("Your display name", default=current_user or None)
     if username:
         config.username = username
-        ok(f"Username set to: {username}")
+        ok("Username set.")
     else:
         ok("Username skipped.")
 
