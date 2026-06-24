@@ -36,9 +36,14 @@ def banner(text):
     print(f"\033[96m  {text}\033[0m")
     print(f"\033[96m{'=' * 50}\033[0m")
 
-def ok(text):  print(f"  \033[92m>:D\033[0m  {text}")
-def err(text): print(f"  \033[91mx\033[0m  {text}")
-def info(text): print(f"  \033[93m→\033[0m  {text}")
+def ok(text):
+    print(f"  \033[92m>:D\033[0m  {text}")
+
+def err(text):
+    print(f"  \033[91mx\033[0m  {text}")
+
+def info(text):
+    print(f"  \033[93m→\033[0m  {text}")
 
 def ask(prompt, default=None, secret=False):
     display = f"{prompt} [{default}]: " if default else f"{prompt}: "
