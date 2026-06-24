@@ -20,15 +20,15 @@ VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv")
 
 # ── setup verify vars ───────────────────────────────────────────────────────
 
-step_python_version_pass=False
-step_install_requirements_pass=False
-step_config_pass=False
-step_identity_pass=False
-step_self_destruct_pass=False
-step_failed=0
-step_failed_total=0
-fatal=False
-venv=""
+step_python_version_pass = False
+step_install_requirements_pass = False
+step_config_pass = False
+step_identity_pass = False
+step_self_destruct_pass = False
+step_failed = 0
+step_failed_total = 0
+fatal = False
+venv = ""
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 def banner(text):
