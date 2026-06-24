@@ -103,9 +103,10 @@ def step_python_version():
         step_failed += 1
         step_failed_total += 1
         step_dump(True)
-    step_python_version_pass = True
-    step_failed = 0
-    ok(f"Python {major}.{minor} — OK")
+    else:
+        step_python_version_pass = True
+        step_failed = 0
+        ok(f"Python {major}.{minor} — OK")
 
 
 def step_install_requirements():
