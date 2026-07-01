@@ -90,7 +90,7 @@ it's a really small project right now. if you know me and want to help, just mes
 - classmates at jj school montessori and army public school khadakwasla
 - github — for the student pack
 - saksham — for support, testing, debugging, UI/UX, and a **lot** more
-- signal — for open-sourcing their encryption methods
+- [signal](https://github.com/signalapp) — for open-sourcing their encryption methods
 - [silence](https://silence.im) — for the original idea
 
 ***
