@@ -864,7 +864,7 @@ function ripple(btnId) {
 
 function showSplash() {
   const splash = $('splash');
-  // total splash duration: 2400ms display + 650ms fade = 3050ms
+  // total splash duration: 2400ms display + 600ms fade = 3000ms
   setTimeout(() => {
     splash.classList.add('fade-out');
     setTimeout(() => {
@@ -872,19 +872,22 @@ function showSplash() {
       // trigger sidebar slide-in only after splash is gone
       document.querySelector('.sidebar').classList.add('animate-in');
       showUnlockModal();
-    }, 650);
+    }, 600);
   }, 2400);
 }
 
 function showUnlockModal() {
   const bd = $('unlock-backdrop');
-  // Set display first, then let the browser paint one frame before
-  // removing .hidden — this ensures the opacity transition actually plays.
+  // Set display first, then use a small setTimeout to guarantee the browser
+  // has painted at least one frame before removing .hidden.
+  // A double rAF is unreliable when the tab is backgrounded or under load —
+  // the browser can batch/skip those callbacks, leaving a blank screen.
   bd.style.display = 'flex';
-  requestAnimationFrame(() => requestAnimationFrame(() => {
+  setTimeout(() => {
     bd.classList.remove('hidden');
-    setTimeout(() => $('modal-pass').focus(), 80);
-  }));
+    const passInput = $('modal-pass');
+    if (passInput) setTimeout(() => passInput.focus(), 80);
+  }, 20);
 }
 
 // ── Unlock modal ────────────────────────────────────────────────────────
