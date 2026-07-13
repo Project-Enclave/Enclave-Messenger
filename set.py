@@ -18,7 +18,7 @@ import shutil
 
 VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv")
 
-# ── setup verify vars ───────────────────────────────────────────────────────
+# ── setup verify vars ───────────────────────────────────────────────
 
 step_python_version_pass = False
 step_install_requirements_pass = False
@@ -29,7 +29,7 @@ step_failed = 0
 step_failed_total = 0
 fatal = False
 venv = ""
-# ── helpers ─────────────────────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────
 
 def banner(text):
     print(f"\n\033[96m{'=' * 50}\033[0m")
@@ -73,7 +73,7 @@ def venv_active():
     )
 
 
-# ── steps ─────────────────────────────────────────────────────────────────
+# ── steps ───────────────────────────────────────────────
 
 def step_dump(err):
     banner("Exiting. Dumping all vars for debugging")
@@ -120,7 +120,7 @@ def step_install_requirements():
         step_failed_total += 1
         step_dump(True)
 
-    # ─ try pip first ────────────────────────────────────────────────────
+    # ─ try pip first ────────────────────────────────────────────
     pip_check = run([sys.executable, "-m", "pip", "--version"], capture_output=True)
     if pip_check.returncode == 0:
         result = run([sys.executable, "-m", "pip", "install", "-r", req_file])
@@ -133,7 +133,7 @@ def step_install_requirements():
         step_failed+=1
         step_failed_total+=1
 
-    # ─ pip not available: fall back to uv ──────────────────────────────
+    # ─ pip not available: fall back to uv ──────────────────────
     info("something went wrong with pip — falling back to uv")
 
     uv = shutil.which("uv")
@@ -223,8 +223,10 @@ def step_config():
 def step_identity():
     global step_identity_pass, step_failed, step_failed_total
     banner("Step 4 — Identity")
-    from core.identity import IdentityManager
-    ident = IdentityManager()
+    # Import main so the identity is initialised at the profile path
+    # (same path web.py uses), not the bare ~/.enclave-messenger/identity/ default.
+    import main as _main
+    ident = _main.identity
     if ident.has_identity():
         ok("Identity already exists — skipping.")
         step_identity_pass=True
@@ -239,8 +241,8 @@ def step_identity():
     confirm = getpass.getpass("  Confirm passphrase: ").strip()
     if passphrase != confirm:
         err("Passphrases do not match.")
-        step_identity_pass=False     
-        step_failed+=1                      
+        step_identity_pass=False
+        step_failed+=1
         step_failed_total+=1
         if step_failed > 2:
             step_dump(True)
@@ -261,8 +263,8 @@ def step_self_destruct():
         ok("setup.py deleted — setup complete!")
     except OSError as e:
         err(f"Could not delete setup.py: {e}")
-        step_self_destruct_pass=False     
-        step_failed+=1                      
+        step_self_destruct_pass=False
+        step_failed+=1
         step_failed_total+=1
         step_dump(True)
 
