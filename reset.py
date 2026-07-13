@@ -2,7 +2,7 @@
 reset.py — Enclave Messenger full reset.
 
 Undoes everything setup.py did:
-  1. Deletes identity keys  (~/.enclave-messenger/identity/)
+  1. Deletes ~/.enclave-messenger entirely (all profiles + identity)
   2. Wipes config           (storage/config/config.json)
   3. Wipes chat/key/log     (storage/ subdirs)
   4. Removes .venv          (if created by setup.py uv fallback)
@@ -56,19 +56,9 @@ def remove_dir(path, label):
 # ── steps ─────────────────────────────────────────────────────────────────────
 
 def step_identity():
-    banner("Step 1 — Delete identity keys")
-    identity_dir = os.path.expanduser("~/.enclave-messenger/identity")
-    ed_file  = os.path.join(identity_dir, "ed25519.pem")
-    x25519   = os.path.join(identity_dir, "x25519.pem")
-    remove_file(ed_file,  "ed25519 private key")
-    remove_file(x25519,   "x25519 private key")
-    # remove the dir itself if empty
-    if os.path.isdir(identity_dir) and not os.listdir(identity_dir):
-        remove_dir(identity_dir, "identity dir")
-    # remove parent ~/.enclave-messenger if empty
-    parent = os.path.expanduser("~/.enclave-messenger")
-    if os.path.isdir(parent) and not os.listdir(parent):
-        remove_dir(parent, "~/.enclave-messenger")
+    banner("Step 1 — Delete identity & all profiles")
+    enclave_dir = os.path.expanduser("~/.enclave-messenger")
+    remove_dir(enclave_dir, "~/.enclave-messenger")
 
 
 def step_config():
@@ -109,7 +99,7 @@ def step_restore_setup():
     try:
         import subprocess
         result = subprocess.run(
-            ["git", "checkout", "HEAD", "--", "setu.py"],
+            ["git", "checkout", "HEAD", "--", "set.py"],
             cwd=HERE,
             capture_output=True,
             text=True,
@@ -123,7 +113,7 @@ def step_restore_setup():
         info("git not available.")
 
     # fallback: download from GitHub
-    info("Trying to download setup.py from GitHub...")
+    info("Trying to download set.py from GitHub...")
     try:
         import urllib.request
         url = (
@@ -131,17 +121,17 @@ def step_restore_setup():
             "Project-Enclave/Enclave-Messenger/main/set.py"
         )
         urllib.request.urlretrieve(url, setup_path)
-        ok(f"setup.py downloaded from GitHub.")
+        ok("set.py downloaded from GitHub.")
     except Exception as e:
-        err(f"Could not restore setup.py automatically: {e}")
-        err("Download it manually from: https://github.com/Project-Enclave/Enclave-Messenger/blob/main/setup.py")
+        err(f"Could not restore set.py automatically: {e}")
+        err("Download it manually from: https://github.com/Project-Enclave/Enclave-Messenger/blob/main/set.py")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
     print("\n\033[95m  Enclave Messenger — Reset\033[0m")
-    print("\n  This will delete your identity, config, and all local data.")
+    print("\n  This will delete your identity, all profiles, config, and all local data.")
     print("  This cannot be undone.")
 
     confirm = input("\n  Type 'yes' to continue: ").strip().lower()
