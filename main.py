@@ -236,15 +236,17 @@ def get_peers() -> list:
 
 def get_identity_status() -> dict:
     has = identity.has_identity()
-    user_id = ""
+    node_id = ""
     if has and identity.ed25519_priv:
         try:
-            user_id = identity.get_user_id()
+            node_id = identity.get_user_id()
         except Exception:
             pass
     return {
         "has_identity": has,
-        "user_id": user_id,
+        # Expose as both node_id (frontend) and user_id (legacy callers)
+        "node_id":  node_id,
+        "user_id":  node_id,
         "username": config.username or "",
         "node_running": _node is not None,
         "profile": _active_profile,

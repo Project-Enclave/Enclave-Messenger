@@ -120,17 +120,53 @@ def health():
 def identity_status():
     return jsonify(app_core.get_identity_status())
 
+
+@app.route("/api/identity/update", methods=["POST"])
+def identity_update():
+    """Save display name (username) for the active profile."""
+    data = request.get_json(force=True)
+    username = data.get("username", "").strip()
+    try:
+        app_core.config.username = username
+        return jsonify({"ok": True, "username": username,
+                        "node_id": app_core.get_identity_status().get("node_id", "")})
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+
 @app.route("/api/identity/generate", methods=["POST"])
 @app.route("/api/identity/regenerate", methods=["POST"])
 def identity_generate():
-    data = request.get_json(force=True)
+    """Regenerate identity keypair.
+
+    Passphrase resolution order:
+      1. Explicit ``passphrase`` in request body (always accepted).
+      2. Passphrase inferred from the already-unlocked identity in memory
+         (node is running — re-use the session key so callers don't have to
+         supply it again after unlock).
+    """
+    data = request.get_json(force=True) or {}
     p = data.get("passphrase", "")
+
+    # If node is already unlocked we can derive the passphrase from memory.
+    # IdentityManager keeps a reference to the loaded private key; we ask it
+    # to re-encrypt with the same passphrase it last loaded with.
     if not p:
+        if app_core.identity.ed25519_priv is not None:
+            # identity is loaded — re-save under same passphrase by letting
+            # save_identity() use the cached value.
+            try:
+                app_core.identity.generate_new_identity()
+                app_core.identity.save_identity()  # uses cached passphrase
+                return jsonify({"node_id": app_core.identity.get_user_id()})
+            except Exception as e:
+                return err(str(e), 500, exc=e)
         return err("passphrase required", 400)
+
     try:
         app_core.identity.generate_new_identity()
         app_core.identity.save_identity(passphrase=p)
-        return jsonify({"user_id": app_core.identity.get_user_id()})
+        return jsonify({"node_id": app_core.identity.get_user_id()})
     except Exception as e:
         return err(str(e), 500, exc=e)
 
@@ -295,6 +331,28 @@ def sms_config():
         host=data.get("host"),
     )
     return jsonify({"status": "saved"})
+
+
+@app.route("/api/config/save", methods=["POST"])
+def config_save():
+    """Frontend alias for saving SMS gateway config.
+
+    The Settings panel POSTs {sms_user, sms_pass, sms_host} to this endpoint;
+    we normalise the field names and delegate to configure_sms().
+    """
+    data = request.get_json(force=True) or {}
+    username = data.get("sms_user", "").strip()
+    password = data.get("sms_pass", "").strip()
+    host     = data.get("sms_host", "").strip() or None
+    if not username and not password:
+        # Nothing to save — return ok anyway so the UI doesn't flash an error.
+        return jsonify({"status": "ok"})
+    try:
+        app_core.configure_sms(username=username, password=password, host=host)
+        return jsonify({"status": "saved"})
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
 
 @app.route("/api/sms/send", methods=["POST"])
 def sms_send():
