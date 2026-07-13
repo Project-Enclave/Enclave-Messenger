@@ -276,7 +276,6 @@
       width:300px;min-width:260px;display:flex;flex-direction:column;
       background:var(--surface);border-right:2px solid var(--border);height:100%;
     }
-    /* sidebarSlide is triggered via JS class after splash to avoid race condition */
     .sidebar.animate-in {
       animation: sidebarSlide 0.5s cubic-bezier(0.16,1,0.3,1) both;
     }
@@ -617,7 +616,6 @@
       <div class="stab-panel" id="stab-panel-profile">
         <div class="stab-panel-title">Profile</div>
 
-        <!-- avatar + name header -->
         <div class="profile-header-row">
           <div class="profile-avatar-large" id="prof-avatar-large">?</div>
           <div class="profile-header-info">
@@ -626,7 +624,6 @@
           </div>
         </div>
 
-        <!-- display name -->
         <div class="smod-field">
           <div class="smod-label">display name</div>
           <input id="prof-username" class="smod-input" type="text"
@@ -634,7 +631,6 @@
                  autocomplete="off" spellcheck="false"/>
         </div>
 
-        <!-- node id (read-only + copy) -->
         <div class="smod-field">
           <div class="smod-label">node id</div>
           <div class="smod-copy-wrap">
@@ -644,7 +640,6 @@
           </div>
         </div>
 
-        <!-- active profile name (read-only) -->
         <div class="smod-field">
           <div class="smod-label">active profile</div>
           <input id="prof-profile-name" class="smod-input" type="text" readonly
@@ -659,7 +654,6 @@
         </div>
         <div class="smod-status" id="prof-status">&mdash;</div>
 
-        <!-- danger zone -->
         <div class="danger-zone">
           <div class="danger-zone-label">danger zone</div>
           <div class="danger-zone-desc">
@@ -712,8 +706,6 @@
         </div>
         <div class="smod-status" id="cfg-sms-status"></div>
       </div>
-
-      <!-- Plugin panels injected by EnclavePlugins.registerSettingsTab() -->
 
     </div>
   </div>
@@ -797,23 +789,35 @@
 </section>
 
 <script>
+// ── State ─────────────────────────────────────────────────────────────────
 let currentChatId = null;
 let allChats = [];
 let knownPeers = {};
-let decryptDebounce = null;
+let connMode = 'ws'; // 'ws' | 'poll'
+let wsConn = null;
+let pollInterval = null;
+
 const $  = id => document.getElementById(id);
 const pass = () => $('cfg-pass').value;
 const isPhone = id => /^\+?[0-9]{7,15}$/.test((id||'').replace(/\s/g,''));
 const isBT    = id => /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test((id||'').trim());
+const isIP    = id => /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test((id||'').trim());
+const isNode  = id => /^enc_[a-zA-Z0-9_-]{4,}$/.test((id||'').trim());
 
+// ── API helper ────────────────────────────────────────────────────────────
 async function api(url, body) {
   const opts = body
     ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}
     : {};
-  const r = await fetch(url, opts);
-  return r.json();
+  try {
+    const r = await fetch(url, opts);
+    return r.json();
+  } catch(e) {
+    return {error: e.message};
+  }
 }
 
+// ── Status helpers ────────────────────────────────────────────────────────
 function setStatus(txt, type='') {
   const el = $('cfg-status');
   el.textContent = txt;
@@ -825,8 +829,14 @@ function toggleTheme() {
   h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
 }
 
-// ── Accordion ────────────────────────────────────────────────────────────
+// ── Connection mode toggle ────────────────────────────────────────────────
+function toggleConnMode() {
+  connMode = connMode === 'ws' ? 'poll' : 'ws';
+  $('conn-ws').classList.toggle('active', connMode === 'ws');
+  $('conn-poll').classList.toggle('active', connMode === 'poll');
+}
 
+// ── Accordion ─────────────────────────────────────────────────────────────
 function toggleAccordion(name) {
   const trigger = $(name + '-trigger');
   const body    = $(name + '-body');
@@ -860,16 +870,13 @@ function ripple(btnId) {
   setTimeout(() => btn.classList.remove('rippling'), 420);
 }
 
-// ── Splash ──────────────────────────────────────────────────────────────
-
+// ── Splash ────────────────────────────────────────────────────────────────
 function showSplash() {
   const splash = $('splash');
-  // total splash duration: 2400ms display + 600ms fade = 3000ms
   setTimeout(() => {
     splash.classList.add('fade-out');
     setTimeout(() => {
       splash.style.display = 'none';
-      // trigger sidebar slide-in only after splash is gone
       document.querySelector('.sidebar').classList.add('animate-in');
       showUnlockModal();
     }, 600);
@@ -878,10 +885,6 @@ function showSplash() {
 
 function showUnlockModal() {
   const bd = $('unlock-backdrop');
-  // Set display first, then use a small setTimeout to guarantee the browser
-  // has painted at least one frame before removing .hidden.
-  // A double rAF is unreliable when the tab is backgrounded or under load —
-  // the browser can batch/skip those callbacks, leaving a blank screen.
   bd.style.display = 'flex';
   setTimeout(() => {
     bd.classList.remove('hidden');
@@ -890,8 +893,7 @@ function showUnlockModal() {
   }, 20);
 }
 
-// ── Unlock modal ────────────────────────────────────────────────────────
-
+// ── Unlock modal ──────────────────────────────────────────────────────────
 function toggleModalEye() {
   const inp = $('modal-pass');
   const btn = $('modal-eye-btn');
@@ -943,8 +945,7 @@ async function modalUnlock() {
   await startRealtime();
 }
 
-// ── Settings modal ──────────────────────────────────────────────────────
-
+// ── Settings modal ────────────────────────────────────────────────────────
 function switchSettingsTab(tabId) {
   document.querySelectorAll('.stab-item').forEach(el => {
     el.classList.toggle('active', el.dataset.tab === tabId);
@@ -968,14 +969,383 @@ function closeSettingsModal() {
   setTimeout(() => bd.style.display = 'none', 200);
 }
 
+// ── Node / Settings panel actions ─────────────────────────────────────────
+function onPassphraseChange() {
+  // live feedback placeholder — extend as needed
+}
+
+async function startNode() {
+  const p = $('cfg-pass').value;
+  const btn = $('cfg-unlock-btn');
+  const status = $('cfg-status');
+  if (!p) { setStatus('passphrase required', 'err'); return; }
+  btn.disabled = true;
+  btn.textContent = 'starting\u2026';
+  const d = await api('/api/node/start', {passphrase: p});
+  btn.disabled = false;
+  btn.textContent = 'unlock & start node';
+  if (d.error) { setStatus('\u26a0 ' + d.error, 'err'); return; }
+  setStatus('node running', 'ok');
+  $('node-status').textContent = 'node online';
+  $('node-status').className = 'node-status on';
+  await loadIdentity();
+  await loadPeers();
+  await startRealtime();
+}
+
+async function saveConfig() {
+  const body = {
+    sms_user: $('cfg-sms-user').value,
+    sms_pass: $('cfg-sms-pass').value,
+    sms_host: $('cfg-sms-host').value,
+  };
+  const d = await api('/api/config/save', body);
+  const s = $('cfg-sms-status');
+  if (d.error) { s.textContent = '\u26a0 ' + d.error; s.className = 'smod-status err'; }
+  else         { s.textContent = 'saved';              s.className = 'smod-status ok';  }
+}
+
+async function loadProfilePanel() {
+  const d = await api('/api/identity');
+  if (d.error || !d.node_id) return;
+  $('prof-node-id').value      = d.node_id  || '';
+  $('prof-username').value     = d.username || '';
+  $('prof-profile-name').value = d.profile  || 'default';
+  const initial = (d.username || d.node_id || '?')[0].toUpperCase();
+  $('prof-avatar-large').textContent = initial;
+  $('prof-header-name').textContent  = d.username || d.node_id;
+  $('prof-header-sub').textContent   = d.node_id  || 'no identity';
+}
+
+async function saveProfile() {
+  const username = $('prof-username').value.trim();
+  const s = $('prof-status');
+  const d = await api('/api/identity/update', {username});
+  if (d.error) { s.textContent = '\u26a0 ' + d.error; s.className = 'smod-status err'; }
+  else         { s.textContent = 'saved';              s.className = 'smod-status ok';
+                 $('me-name').textContent = username || d.node_id; }
+}
+
+function copyNodeId() {
+  const val = $('prof-node-id').value;
+  if (!val) return;
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = $('prof-copy-btn');
+    btn.textContent = 'copied!';
+    setTimeout(() => btn.textContent = 'copy', 1500);
+  });
+}
+
+async function generateNewIdentity() {
+  if (!confirm('This will replace your current identity keypair. Your current node ID will be gone. Continue?')) return;
+  const d = await api('/api/identity/regenerate', {});
+  if (d.error) { $('prof-status').textContent = '\u26a0 ' + d.error; $('prof-status').className = 'smod-status err'; return; }
+  await loadProfilePanel();
+  await loadIdentity();
+  $('prof-status').textContent = 'new identity generated';
+  $('prof-status').className = 'smod-status ok';
+}
+
+// ── Identity ──────────────────────────────────────────────────────────────
+async function loadIdentity() {
+  const d = await api('/api/identity');
+  if (d.error || !d.node_id) return;
+  const name = d.username || d.node_id;
+  $('me-name').textContent = name;
+  $('me-uid').textContent  = d.node_id;
+  $('me-avatar').textContent = name[0].toUpperCase();
+  if (d.node_running) {
+    $('node-status').textContent = 'node online';
+    $('node-status').className   = 'node-status on';
+  }
+}
+
+// ── Chats ─────────────────────────────────────────────────────────────────
+async function loadChats() {
+  const d = await api('/api/chats');
+  if (d.error) { $('chat-list').innerHTML = '<div style="color:var(--coral);font-size:.8rem;padding:.5rem .8rem;">' + d.error + '</div>'; return; }
+  allChats = d.chats || [];
+  renderChatList(allChats);
+}
+
+function renderChatList(chats) {
+  const list = $('chat-list');
+  if (!chats.length) {
+    list.innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">no chats yet</div>';
+    return;
+  }
+  list.innerHTML = chats.map((c, i) => {
+    const active = c.id === currentChatId ? ' active' : '';
+    const initial = (c.name || c.peer_id || '?')[0].toUpperCase();
+    const preview = escHtml(c.last_message || '\u2026');
+    return `<div class="chat-item${active}" style="animation-delay:${i*0.04}s" onclick="openChat('${escAttr(c.id)}')">
+      <div class="avatar">${initial}</div>
+      <div class="chat-meta">
+        <div class="chat-name">${escHtml(c.name || c.peer_id)}</div>
+        <div class="chat-preview">${preview}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterChats(q) {
+  const filtered = q
+    ? allChats.filter(c => (c.name||'').toLowerCase().includes(q.toLowerCase()) || (c.peer_id||'').toLowerCase().includes(q.toLowerCase()))
+    : allChats;
+  renderChatList(filtered);
+}
+
+// ── Open / close chat ─────────────────────────────────────────────────────
+async function openChat(chatId) {
+  currentChatId = chatId;
+  const chat = allChats.find(c => c.id === chatId) || {id: chatId, name: chatId, peer_id: chatId};
+  $('no-chat').style.display = 'none';
+  const ac = $('active-chat');
+  ac.style.display = 'flex';
+  $('chat-avatar').textContent = (chat.name || chat.peer_id || '?')[0].toUpperCase();
+  $('chat-title').textContent  = chat.name || chat.peer_id;
+  $('chat-sub').textContent    = chat.peer_id || '';
+  renderChatList(allChats); // re-render to update active state
+  await refreshMessages();
+}
+
+function closeChat() {
+  currentChatId = null;
+  $('no-chat').style.display = '';
+  $('active-chat').style.display = 'none';
+  renderChatList(allChats);
+}
+
+// ── Messages ──────────────────────────────────────────────────────────────
+async function refreshMessages() {
+  if (!currentChatId) return;
+  const d = await api('/api/messages/' + encodeURIComponent(currentChatId) + '?passphrase=' + encodeURIComponent(pass()));
+  if (d.error) { appendSysMsg('\u26a0 ' + d.error); return; }
+  renderMessages(d.messages || []);
+}
+
+function renderMessages(msgs) {
+  const area = $('messages-area');
+  if (!msgs.length) {
+    area.innerHTML = '<div class="empty-state"><div class="big">&#128274;</div><div>no messages yet</div></div>';
+    return;
+  }
+  area.innerHTML = msgs.map(m => {
+    const me = m.direction === 'out' || m.sender === 'me';
+    const rowClass = me ? 'msg-row me' : 'msg-row';
+    const author   = !me && m.sender ? `<div class="bubble-author">${escHtml(m.sender)}</div>` : '';
+    const enc      = m.encrypted  ? '<span class="badge badge-enc">enc</span>' : '';
+    const verified = m.verified   ? '<span class="badge badge-ok">&#10003;</span>' : '';
+    const net      = m.transport  ? `<span class="badge badge-net">${escHtml(m.transport)}</span>` : '';
+    const ts       = m.timestamp  ? `<div class="bubble-time">${fmtTime(m.timestamp)}${enc}${verified}${net}</div>` : '';
+    return `<div class="${rowClass}">
+      <div class="bubble">${author}<div>${escHtml(m.text || m.body || '')}</div>${ts}</div>
+    </div>`;
+  }).join('');
+  area.scrollTop = area.scrollHeight;
+}
+
+function appendSysMsg(txt) {
+  const area = $('messages-area');
+  const el   = document.createElement('div');
+  el.className = 'sys-msg';
+  el.textContent = txt;
+  area.appendChild(el);
+  area.scrollTop = area.scrollHeight;
+}
+
+// ── Send ──────────────────────────────────────────────────────────────────
+async function sendMessage() {
+  if (!currentChatId) return;
+  const inp  = $('composer');
+  const text = inp.value.trim();
+  if (!text) return;
+  const btn  = $('send-btn');
+  btn.disabled = true;
+  inp.value = '';
+  const d = await api('/api/send', {chat_id: currentChatId, text, passphrase: pass()});
+  btn.disabled = false;
+  if (d.error) { appendSysMsg('\u26a0 ' + d.error); inp.value = text; return; }
+  await refreshMessages();
+  await loadChats();
+}
+
+// ── Peers ─────────────────────────────────────────────────────────────────
+async function loadPeers() {
+  const d = await api('/api/peers');
+  if (d.error) return;
+  knownPeers = {};
+  (d.peers || []).forEach(p => knownPeers[p.id] = p);
+  renderPeers(d.peers || []);
+}
+
+function renderPeers(peers) {
+  const list  = $('peers-list');
+  const badge = $('peers-count');
+  if (!peers.length) {
+    list.innerHTML = '<div class="peers-empty">no peers detected yet</div>';
+    badge.classList.remove('visible');
+    return;
+  }
+  badge.textContent = peers.length;
+  badge.classList.add('visible');
+  list.innerHTML = peers.map(p => {
+    const statusCls = p.online ? 'online' : 'offline';
+    const statusTxt = p.transport === 'bt' ? 'BT' : (p.online ? 'online' : 'offline');
+    const badgeCls  = p.transport === 'bt' ? 'bt' : statusCls;
+    const initial   = (p.name || p.id || '?')[0].toUpperCase();
+    return `<div class="peer-row" onclick="startChatWith('${escAttr(p.id)}','${escAttr(p.name||p.id)}')">
+      <div class="peer-avatar">${initial}</div>
+      <div class="peer-info">
+        <div class="peer-name">${escHtml(p.name || p.id)}</div>
+        <div class="peer-addr">${escHtml(p.address || p.id)}</div>
+      </div>
+      <span class="peer-badge ${badgeCls}">${statusTxt}</span>
+    </div>`;
+  }).join('');
+}
+
+async function scanPeers() {
+  const btn   = $('scan-btn');
+  const label = $('scan-btn-label');
+  const prog  = $('scan-progress-wrap');
+  const bar   = $('scan-progress-bar');
+  const stat  = $('scan-status');
+  btn.classList.add('scanning');
+  label.textContent = 'scanning\u2026';
+  prog.classList.add('visible');
+  bar.style.width = '0%';
+  stat.textContent = '';
+  // animate progress bar
+  let pct = 0;
+  const tick = setInterval(() => {
+    pct = Math.min(pct + Math.random() * 18, 90);
+    bar.style.width = pct + '%';
+  }, 300);
+  const d = await api('/api/scan', {});
+  clearInterval(tick);
+  bar.style.width = '100%';
+  setTimeout(() => { prog.classList.remove('visible'); bar.style.width = '0%'; }, 800);
+  btn.classList.remove('scanning');
+  label.textContent = 'scan network';
+  if (d.error) { stat.textContent = '\u26a0 ' + d.error; stat.className = 'status-line err'; return; }
+  stat.textContent = (d.found || 0) + ' peer(s) found';
+  stat.className = 'status-line ok';
+  await loadPeers();
+}
+
+// ── New chat ──────────────────────────────────────────────────────────────
+function newChat() {
+  $('nc-smart').value = '';
+  $('nc-hint').textContent = '';
+  $('nc-hint').className = 'field-hint';
+  $('newchat-error').textContent = '';
+  const badge = $('nc-type-badge');
+  badge.textContent = '';
+  badge.className = 'nc-type-badge';
+  const bd = $('newchat-backdrop');
+  bd.style.display = 'flex';
+  setTimeout(() => { bd.classList.remove('hidden'); $('nc-smart').focus(); }, 20);
+}
+
+function dismissNewChat() {
+  const bd = $('newchat-backdrop');
+  bd.classList.add('hidden');
+  setTimeout(() => bd.style.display = 'none', 200);
+}
+
+function onSmartInput() {
+  const val   = $('nc-smart').value.trim();
+  const badge = $('nc-type-badge');
+  const hint  = $('nc-hint');
+  if (!val) {
+    badge.textContent = ''; badge.className = 'nc-type-badge';
+    hint.textContent  = ''; hint.className  = 'field-hint';
+    return;
+  }
+  if (isNode(val))  { badge.textContent = 'node id'; badge.className = 'nc-type-badge node visible'; hint.textContent = 'enclave node'; hint.className = 'field-hint ok'; }
+  else if (isPhone(val)) { badge.textContent = 'phone'; badge.className = 'nc-type-badge phone visible'; hint.textContent = 'sms gateway'; hint.className = 'field-hint ok'; }
+  else if (isIP(val))    { badge.textContent = 'ip:port'; badge.className = 'nc-type-badge ip visible'; hint.textContent = 'direct tcp'; hint.className = 'field-hint ok'; }
+  else if (isBT(val))    { badge.textContent = 'bluetooth'; badge.className = 'nc-type-badge bt visible'; hint.textContent = 'bluetooth mac'; hint.className = 'field-hint ok'; }
+  else { badge.textContent = ''; badge.className = 'nc-type-badge'; hint.textContent = 'unrecognised format'; hint.className = 'field-hint err'; }
+}
+
+async function submitNewChat() {
+  const val = $('nc-smart').value.trim();
+  const errEl = $('newchat-error');
+  if (!val) { errEl.textContent = 'enter an address'; return; }
+  errEl.textContent = '';
+  const d = await api('/api/chats/new', {address: val});
+  if (d.error) { errEl.textContent = '\u26a0 ' + d.error; return; }
+  dismissNewChat();
+  await loadChats();
+  if (d.chat_id) openChat(d.chat_id);
+}
+
+async function startChatWith(peerId, peerName) {
+  const d = await api('/api/chats/new', {address: peerId, name: peerName});
+  if (!d.error) {
+    await loadChats();
+    if (d.chat_id) openChat(d.chat_id);
+  }
+}
+
+// ── Realtime ──────────────────────────────────────────────────────────────
+async function startRealtime() {
+  if (connMode === 'ws') {
+    startWebSocket();
+  } else {
+    startPolling();
+  }
+}
+
+function startWebSocket() {
+  if (wsConn) { try { wsConn.close(); } catch(e) {} }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url   = `${proto}://${location.host}/ws`;
+  try {
+    wsConn = new WebSocket(url);
+    wsConn.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'new_message' && msg.chat_id === currentChatId) refreshMessages();
+      if (msg.type === 'new_message') loadChats();
+      if (msg.type === 'peer_update') loadPeers();
+    };
+    wsConn.onerror = () => { wsConn = null; startPolling(); }; // fallback to polling
+  } catch(e) {
+    startPolling();
+  }
+}
+
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    if (currentChatId) await refreshMessages();
+    await loadChats();
+  }, 4000);
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) {
+  return String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+}
+function fmtTime(ts) {
+  try {
+    const d = new Date(typeof ts === 'number' ? ts * 1000 : ts);
+    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  } catch(e) { return ''; }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   $('settings-backdrop').addEventListener('click', e => {
     if (e.target === $('settings-backdrop')) closeSettingsModal();
   });
-  // kick off data loading immediately in the background
-  // so chats/identity are ready by the time splash finishes
+  // Pre-load chats and identity in the background while splash plays
   Promise.all([loadChats(), loadIdentity()]);
-  // start the splash — this controls the unlock modal + sidebar animation
   showSplash();
 });
 </script>
