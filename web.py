@@ -115,11 +115,13 @@ def health():
 
 # -- Identity ----------------------------------------------------------------
 
+@app.route("/api/identity")
 @app.route("/api/identity/status")
 def identity_status():
     return jsonify(app_core.get_identity_status())
 
 @app.route("/api/identity/generate", methods=["POST"])
+@app.route("/api/identity/regenerate", methods=["POST"])
 def identity_generate():
     data = request.get_json(force=True)
     p = data.get("passphrase", "")
