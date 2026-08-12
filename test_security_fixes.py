@@ -172,6 +172,32 @@ def main():
 
         alice.stop(); bob.stop(); mallory.stop()
 
+        # ------------------------------------------------------------
+        # Web UI: CSRF protection on /api/* mutating endpoints
+        # ------------------------------------------------------------
+        import web
+        with web.app.test_client() as c:
+            r = c.post("/api/identity/update", data='{"username":"pwned"}',
+                       content_type="text/plain")
+            check("web: CSRF via Content-Type spoof blocked", r.status_code == 403)
+
+            r = c.post("/api/identity/update", data='{"username":"pwned"}',
+                       content_type="text/plain",
+                       headers={"X-Enclave-CSRF": "wrong-guess"})
+            check("web: CSRF with wrong token blocked", r.status_code == 403)
+
+            r = c.post("/api/identity/update", data='{"username":"real"}',
+                       content_type="application/json",
+                       headers={"X-Enclave-CSRF": web._CSRF_TOKEN})
+            check("web: legit request with correct token succeeds", r.status_code == 200)
+
+            r = c.get("/api/health")
+            check("web: GET requests unaffected by CSRF check", r.status_code == 200)
+
+            r = c.get("/")
+            check("web: index page embeds the real CSRF token",
+                  web._CSRF_TOKEN.encode() in r.data)
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -789,6 +789,11 @@
 </section>
 
 <script>
+// Same-origin only (Jinja renders this server-side) — required on every
+// mutating request so cross-origin pages can't ride the user's session
+// via a Content-Type-spoofed fetch(). See web.py for the full rationale.
+const CSRF_TOKEN = "{{ csrf_token }}";
+
 // ── State ─────────────────────────────────────────────────────────────────
 let currentChatId = null;
 let allChats = [];
@@ -807,7 +812,7 @@ const isNode  = id => /^enc_[a-zA-Z0-9_-]{4,}$/.test((id||'').trim());
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(url, body) {
   const opts = body
-    ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}
+    ? {method:'POST', headers:{'Content-Type':'application/json', 'X-Enclave-CSRF': CSRF_TOKEN}, body:JSON.stringify(body)}
     : {};
   try {
     const r = await fetch(url, opts);

@@ -19,11 +19,12 @@ The actual logic for crypto and comms is NOT handled by this file.
 
 import argparse
 import os
+import secrets
 import threading
 import traceback
 from datetime import datetime, timezone, timedelta
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, abort
 try:
     from flask_sock import Sock
     _SOCK_AVAILABLE = True
@@ -36,6 +37,44 @@ from core.network.scanner import scan_lan_peers, ENCLAVE_PORT
 from core.plugins.builtin.bluetooth.main import BluetoothUnavailableError
 
 app = Flask(__name__)
+
+# ---------------------------------------------------------------------------
+# CSRF protection
+# ---------------------------------------------------------------------------
+# request.get_json(force=True) throughout this file parses the body as JSON
+# regardless of the declared Content-Type header. That's convenient, but it
+# means a malicious webpage open in ANY OTHER TAB can fetch() this API with
+# Content-Type: text/plain — a "simple" content type per the Fetch spec —
+# and the browser will send the request with ZERO CORS preflight, bypassing
+# same-origin protections entirely. Concretely: with no defense here, any
+# website could silently send messages as you, overwrite your SMS gateway
+# credentials, or (via /api/identity/regenerate falling back to a "cached"
+# passphrase) corrupt your live identity — all with no interaction beyond
+# you having this app open in one tab while browsing.
+#
+# Fix: a random per-process token, embedded in the page at render time
+# (same-origin only — a cross-origin page cannot read another origin's
+# rendered HTML), required as a custom header on every mutating request.
+# Custom headers always force a CORS preflight, and this server never sends
+# Access-Control-Allow-Origin, so the browser refuses to send the real
+# request cross-origin. This is enough for a single-user local app; it is
+# NOT a general auth system and doesn't need to be — the passphrase already
+# gates the actual cryptographic operations.
+_CSRF_TOKEN = secrets.token_urlsafe(32)
+_CSRF_HEADER = "X-Enclave-CSRF"
+_CSRF_EXEMPT_PATHS = {"/api/health"}
+
+
+@app.before_request
+def _check_csrf():
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if request.path in _CSRF_EXEMPT_PATHS:
+            return
+        if not request.path.startswith("/api/"):
+            return
+        token = request.headers.get(_CSRF_HEADER, "")
+        if not secrets.compare_digest(token, _CSRF_TOKEN):
+            abort(403, description="missing or invalid CSRF token")
 
 # ---------------------------------------------------------------------------
 # WebSocket broker
@@ -117,7 +156,7 @@ def err(msg, code=500, exc=None):
 
 @app.route("/")
 def index():
-    return render_template('chat.html')
+    return render_template('chat.html', csrf_token=_CSRF_TOKEN)
 
 @app.route("/api/health")
 def health():
@@ -475,6 +514,24 @@ def profiles_get(pname):
 if _SOCK_AVAILABLE:
     @_sock.route("/ws")
     def ws_handler(ws):
+        # WebSocket handshakes are NOT covered by CORS/preflight — a page
+        # on any origin can open ws://127.0.0.1:PORT/ws directly and the
+        # browser will happily complete the handshake. Without an explicit
+        # check here, any website you have open could silently connect and
+        # receive the 'init' frame below (identity status, full peer list,
+        # every chat id) plus live message/peer events. Reject anything
+        # whose declared Origin doesn't match this server's own host; allow
+        # requests with no Origin header at all (non-browser clients like a
+        # future CLI/TUI, curl, etc., which don't send one).
+        origin = request.headers.get("Origin", "")
+        if origin:
+            from urllib.parse import urlparse
+            if urlparse(origin).netloc != request.host:
+                log = getattr(app_core, "log", None)
+                if log:
+                    log.warning("[ws] rejected cross-origin connection from %r", origin)
+                return ""  # closes the handshake without upgrading
+
         with _ws_lock:
             _ws_clients.append(ws)
         try:
