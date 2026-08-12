@@ -21,3 +21,4 @@ htmlcov/
 
 .DS_Store
 Thumbs.db
+storage/

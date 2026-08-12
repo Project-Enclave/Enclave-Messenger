@@ -52,9 +52,15 @@ class IdentityManager:
 
         with open(self.ed25519_file, "wb") as f:
             f.write(ed_bytes)
-
         with open(self.x25519_file, "wb") as f:
             f.write(x_bytes)
+
+        # Private keys should never be readable by other local users/groups.
+        try:
+            os.chmod(self.ed25519_file, 0o600)
+            os.chmod(self.x25519_file, 0o600)
+        except OSError:
+            pass  # best-effort — not all filesystems support it (e.g. some FAT mounts)
 
         return True
 

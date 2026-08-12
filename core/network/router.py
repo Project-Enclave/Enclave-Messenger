@@ -10,8 +10,14 @@ Usage:
 Inbound messages are automatically stored; the UI decrypts on demand.
 """
 
+import base64
+import json
 import logging
+import os
 from datetime import datetime, timezone
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.exceptions import InvalidSignature
 
 from .discovery import Discovery
 from .transport import Transport
@@ -20,6 +26,13 @@ from core.crypto import E2EManager
 log = logging.getLogger("network")
 
 TRANSPORT_PORT = 51821
+MAX_INBOUND_BYTES = 256 * 1024  # 256 KiB — generous for a text envelope, stops trivial DoS
+
+
+def _signable(envelope: dict) -> bytes:
+    """Canonical bytes signed/verified for an envelope (excludes 'sig' itself)."""
+    fields = {k: envelope[k] for k in ("from", "chat_id", "token", "ts") if k in envelope}
+    return json.dumps(fields, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 class Node:
@@ -43,8 +56,19 @@ class Node:
         self._identity = self._build_identity()
         port = config_store.get_setting("network_port") or TRANSPORT_PORT
 
+        # Default is loopback-only, same philosophy as web.py's --host flag.
+        # LAN mode must be opted into explicitly (ENCLAVE_NET_HOST=lan or
+        # the 'network_bind' config setting) — it is NOT implied by anything
+        # web.py does, since this transport used to always bind 0.0.0.0
+        # regardless of the web UI's host setting.
+        bind_mode = (
+            os.environ.get("ENCLAVE_NET_HOST")
+            or config_store.get_setting("network_bind", "host")
+        )
+        transport_host = "0.0.0.0" if bind_mode == "lan" else "127.0.0.1"
+
         self._transport = Transport(
-            host="0.0.0.0",
+            host=transport_host,
             port=port,
             on_message=self._on_inbound,
         )
@@ -109,6 +133,11 @@ class Node:
             "token":   token,
             "ts":      ts,
         }
+        # Sign with our Ed25519 identity key so the recipient can verify
+        # this envelope actually came from us and wasn't spoofed/replayed
+        # by someone else on the network.
+        sig = self._im.ed25519_priv.sign(_signable(envelope))
+        envelope["sig"] = base64.urlsafe_b64encode(sig).decode("utf-8")
 
         address = f"http://{peer['ip']}:{peer['port']}"
         ok = self._transport.send(address, envelope)
@@ -124,17 +153,44 @@ class Node:
         sender_id  = envelope.get("from", "")
         token      = envelope.get("token", "")
         ts         = envelope.get("ts", datetime.now(timezone.utc).isoformat())
+        sig_b64    = envelope.get("sig", "")
 
         if not sender_id or not token:
             log.warning("[node] inbound: malformed envelope")
             return
 
+        # Verify the signature against whatever ed25519_pub we have on file
+        # for this sender_id. If we've never seen this peer before, there's
+        # no key to verify against yet (TOFU) — accept but mark unverified
+        # so the UI can flag it instead of silently trusting it forever.
+        known_peer = self._peers.get(sender_id)
+        verified = False
+        if known_peer and known_peer.get("ed25519_pub"):
+            if not sig_b64:
+                log.warning("[node] inbound: unsigned message claiming to be "
+                            "known peer %s — dropped", sender_id[:12])
+                return
+            try:
+                pub = Ed25519PublicKey.from_public_bytes(
+                    base64.urlsafe_b64decode(known_peer["ed25519_pub"].encode())
+                )
+                pub.verify(base64.urlsafe_b64decode(sig_b64.encode()), _signable(envelope))
+                verified = True
+            except (InvalidSignature, ValueError, Exception):
+                log.warning("[node] inbound: BAD SIGNATURE from %s — "
+                            "message dropped (possible spoofing)", sender_id[:12])
+                return
+        else:
+            log.info("[node] inbound: first contact from %s — unverified "
+                      "(no key on file yet)", sender_id[:12])
+
         self._chats.append_message(sender_id, {
-            "token":  token,
-            "sender": sender_id,
-            "ts":     ts,
+            "token":    token,
+            "sender":   sender_id,
+            "ts":       ts,
+            "verified": verified,
         })
-        log.info("[node] inbound message from %s", sender_id[:12])
+        log.info("[node] inbound message from %s (verified=%s)", sender_id[:12], verified)
 
         for cb in self.on_inbound_callbacks:
             try:

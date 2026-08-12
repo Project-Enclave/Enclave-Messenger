@@ -133,11 +133,43 @@ class Discovery:
         if not peer_id or peer_id == self._identity["user_id"]:
             return  # ignore our own broadcasts
 
+        new_ed = msg.get("ed25519_pub", "")
+        new_x  = msg.get("x25519_pub", "")
+
+        # Key pinning (TOFU): once we've recorded keys for a user_id, a later
+        # broadcast claiming the SAME user_id with DIFFERENT keys is either
+        # the peer legitimately regenerating their identity, or someone on
+        # the network trying to hijack that contact's key mapping so future
+        # messages get encrypted to them instead. We can't tell those apart
+        # automatically, so we refuse to silently overwrite — update address
+        # only, keep the pinned keys, and log loudly. A real UI would surface
+        # this as "peer identity changed — re-verify" instead of auto-trusting.
+        existing = self._peer_store.get(peer_id)
+        if existing and existing.get("ed25519_pub") and existing.get("x25519_pub"):
+            key_changed = (
+                (new_ed and new_ed != existing["ed25519_pub"]) or
+                (new_x and new_x != existing["x25519_pub"])
+            )
+            if key_changed:
+                log.warning(
+                    "[discovery] KEY CHANGE for known peer %s @ %s — "
+                    "ignoring entire broadcast, including address "
+                    "(possible impersonation/MITM attempt). Delete and "
+                    "re-add the contact if this is expected.",
+                    peer_id[:12], src_ip,
+                )
+                # Deliberately do NOT call update_address here either.
+                # Trusting the new IP while keeping the old key still lets
+                # an attacker redirect/deny delivery even without being able
+                # to read plaintext. If we can't trust the identity claim,
+                # we can't trust anything else in the same broadcast.
+                return
+
         peer = self._peer_store.upsert(
             user_id=peer_id,
             username=msg.get("username", ""),
-            ed25519_pub=msg.get("ed25519_pub", ""),
-            x25519_pub=msg.get("x25519_pub", ""),
+            ed25519_pub=new_ed,
+            x25519_pub=new_x,
             ip=src_ip,
             port=msg.get("port", 0),
         )

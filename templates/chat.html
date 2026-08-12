@@ -1330,7 +1330,12 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function escAttr(s) {
-  return String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  // Escape backslashes FIRST — otherwise a value ending in a raw backslash
+  // (e.g. an attacker-controlled peer username from an unauthenticated UDP
+  // discovery broadcast) turns the following escaped quote back into a
+  // literal string terminator once the browser HTML-decodes the attribute,
+  // breaking out of the onclick='...' JS string context.
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
 }
 function fmtTime(ts) {
   try {

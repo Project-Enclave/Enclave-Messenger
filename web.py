@@ -97,8 +97,18 @@ def _stamp_online(peers: list) -> list:
 
 def err(msg, code=500, exc=None):
     p = {"error": msg}
+    # Stack traces are useful locally but are a straight-up recon gift to
+    # anyone hitting this API over the LAN (--host lan). Only include them
+    # when debug mode is explicitly on; always log the full trace server-side.
     if exc:
-        p["detail"] = traceback.format_exc()
+        tb = traceback.format_exc()
+        log_line = f"[web] {msg}\n{tb}"
+        try:
+            app_core.log.warning(log_line)
+        except Exception:
+            print(log_line)
+        if app_core.config.get_setting("debug", False):
+            p["detail"] = tb
     return jsonify(p), code
 
 # ---------------------------------------------------------------------------

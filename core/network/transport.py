@@ -32,6 +32,7 @@ from urllib.parse import urlencode
 log = logging.getLogger("network")
 
 _HEALTH_RESP = b'{"ok": true}'
+_MAX_BODY_BYTES = 256 * 1024  # reject anything bigger — a text envelope has no business being large
 
 
 class _SilentHandler(WSGIRequestHandler):
@@ -87,6 +88,14 @@ class Transport:
             try:
                 # CONTENT_LENGTH may be an empty string — coerce safely
                 length = int(environ.get("CONTENT_LENGTH") or 0)
+                if length > _MAX_BODY_BYTES:
+                    log.warning("[transport] inbound rejected: body too large (%d bytes)", length)
+                    resp = json.dumps({"error": "payload too large"}).encode()
+                    start_response("413 Payload Too Large", [
+                        ("Content-Type", "application/json"),
+                        ("Content-Length", str(len(resp))),
+                    ])
+                    return [resp]
                 body   = environ["wsgi.input"].read(length)
                 envelope = json.loads(body.decode("utf-8"))
                 self._on_message(envelope)
