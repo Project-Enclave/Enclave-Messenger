@@ -81,6 +81,14 @@ class PluginManager:
         for entry in os.scandir(directory):
             if not entry.is_dir():
                 continue
+            # __pycache__ (created the moment anything under this tree gets
+            # imported — including just by pytest or another plugin's own
+            # import), hidden dirs (.git, .vscode, ...), and other dunder
+            # dirs are never plugin folders. Skip them before they're ever
+            # treated as a candidate, instead of discovering the mistake
+            # via a "manifest error: No such file" warning on every startup.
+            if entry.name.startswith(".") or entry.name.startswith("__"):
+                continue
             self._load_plugin_folder(entry.path, builtin=builtin)
 
     def _load_plugin_folder(self, folder: str, builtin: bool):

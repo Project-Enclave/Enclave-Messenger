@@ -198,6 +198,36 @@ def main():
             check("web: index page embeds the real CSRF token",
                   web._CSRF_TOKEN.encode() in r.data)
 
+        # ------------------------------------------------------------
+        # Plugin discovery: __pycache__ / hidden dirs must not be treated
+        # as plugin candidates (was spamming a bogus "manifest error"
+        # warning on every single run once anything under core/plugins/
+        # had been imported once, which creates __pycache__).
+        # ------------------------------------------------------------
+        import logging, io
+        from core.plugins.manager import PluginManager
+
+        plog = logging.getLogger("plugins_test_probe")
+        buf = io.StringIO()
+        h = logging.StreamHandler(buf)
+        plog.addHandler(h)
+        plog.setLevel(logging.WARNING)
+
+        pcfg = ConfigStore(base_dir=os.path.join(tmp, "plugcheck"))
+        pchats = ChatStore(base_dir=os.path.join(tmp, "plugcheck"))
+        ppeers = PeerStore(base_dir=os.path.join(tmp, "plugcheck"))
+        pim = IdentityManager(storage_dir=os.path.join(tmp, "plugcheck", "identity"))
+        pim.generate_new_identity()
+
+        pm = PluginManager(config=pcfg, peers=ppeers, chats=pchats, identity=pim, log=plog)
+        pm.discover()
+        plog.removeHandler(h)
+
+        check("plugins: no __pycache__/hidden-dir warning on discover()",
+              "__pycache__" not in buf.getvalue() and ".git" not in buf.getvalue())
+        check("plugins: real builtin plugins still discovered",
+              "bluetooth" in pm._registry and "sms_gateway" in pm._registry)
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -2,7 +2,8 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+  <meta name="theme-color" content="#1a1218"/>
   <title>Enclave Messenger</title>
   <link rel="preconnect" href="https://api.fontshare.com"/>
   <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=zodiak@400,700&display=swap" rel="stylesheet"/>
@@ -277,7 +278,12 @@
       background:var(--surface);border-right:2px solid var(--border);height:100%;
     }
     .sidebar.animate-in {
-      animation: sidebarSlide 0.5s cubic-bezier(0.16,1,0.3,1) both;
+      /* No fill-mode: this is a one-shot entrance animation. With
+         fill-mode:both it would permanently pin transform/opacity via the
+         animation cascade layer — which beats even higher-specificity
+         normal rules — silently fighting the body.chat-open media-query
+         rule below that needs to reposition .sidebar on mobile later. */
+      animation: sidebarSlide 0.5s cubic-bezier(0.16,1,0.3,1);
     }
     @keyframes sidebarSlide {
       from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:translateX(0); }
@@ -516,6 +522,65 @@
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
     @media (prefers-reduced-motion: reduce) {
       *,*::before,*::after { animation-duration:0.01ms !important;transition-duration:0.01ms !important; }
+    }
+
+    /* ── Responsive: tablet / mobile ──────────────────────────────────────
+       Layout below ~860px switches from side-by-side (sidebar + chat-panel)
+       to a single-pane, one-screen-at-a-time view — the chat list OR the
+       open conversation, never both fighting for space on a phone-width
+       screen. `body.chat-open` is toggled by openChat()/closeChat() in the
+       script below and is the only thing driving which pane shows. */
+    .back-btn{
+      display:none;background:none;border:1px solid var(--border);border-radius:8px;
+      width:34px;height:34px;flex-shrink:0;font-size:1.1rem;line-height:1;color:var(--muted);
+      cursor:pointer;align-items:center;justify-content:center;
+      transition:background .15s,color .15s,transform .1s;
+    }
+    .back-btn:hover{background:var(--border);color:var(--text);}
+    .back-btn:active{transform:scale(.92);}
+
+    @media (max-width: 860px) {
+      body{overflow:hidden;}
+      .sidebar{
+        width:100%;min-width:0;border-right:none;
+        position:absolute;inset:0;z-index:5;
+      }
+      .chat-panel{
+        position:absolute;inset:0;width:100%;
+        transform:translateX(100%);transition:transform .25s cubic-bezier(0.16,1,0.3,1);
+      }
+      body.chat-open .chat-panel{transform:translateX(0);}
+      body.chat-open .sidebar{
+        transform:translateX(-8%);opacity:0;pointer-events:none;
+        transition:transform .25s cubic-bezier(0.16,1,0.3,1),opacity .2s;
+      }
+      .back-btn{display:flex;}
+
+      /* Touch targets: bump the small icon/text buttons up to a comfortable
+         44px minimum tap area without changing their look on desktop. */
+      .theme-btn,.topbar-actions button{min-height:38px;padding-top:.5rem;padding-bottom:.5rem;}
+      .chat-item{padding:.85rem .8rem;}
+      .send-btn{padding:.75rem 1.1rem;}
+      .composer-area input{padding:.75rem 1rem;}
+
+      /* Settings modal: side-nav becomes a horizontal scrollable tab strip
+         instead of squeezing a 720px two-pane layout into a phone screen. */
+      #settings-backdrop .settings-shell{
+        flex-direction:column;width:min(480px,94vw);height:min(600px,90vh);
+      }
+      .stab-nav{
+        width:100%;min-width:0;flex-direction:row;overflow-x:auto;
+        border-right:none;border-bottom:1px solid var(--border);
+        padding:.5rem;flex-shrink:0;
+      }
+      .stab-section-label{display:none;}
+    }
+
+    @media (max-width: 420px) {
+      .messages-area{padding:1rem .8rem;}
+      .msg-row{max-width:86%;}
+      .chat-topbar{padding:.75rem .9rem;}
+      .composer-area{padding:.7rem .8rem;}
     }
 
     /* ── Bluetooth panel ── */
@@ -768,6 +833,7 @@
   </div>
   <div id="active-chat" style="display:none;flex-direction:column;height:100%;">
     <div class="chat-topbar">
+      <button class="back-btn" id="chat-back-btn" onclick="closeChat()" title="back to chats" aria-label="back to chats">&larr;</button>
       <div class="avatar" id="chat-avatar">?</div>
       <div class="topbar-info">
         <div class="title" id="chat-title">&mdash;</div>
@@ -1107,6 +1173,7 @@ async function openChat(chatId) {
   $('no-chat').style.display = 'none';
   const ac = $('active-chat');
   ac.style.display = 'flex';
+  document.body.classList.add('chat-open'); // mobile: slide chat-panel over the sidebar
   $('chat-avatar').textContent = (chat.name || chat.peer_id || '?')[0].toUpperCase();
   $('chat-title').textContent  = chat.name || chat.peer_id;
   $('chat-sub').textContent    = chat.peer_id || '';
@@ -1118,6 +1185,7 @@ function closeChat() {
   currentChatId = null;
   $('no-chat').style.display = '';
   $('active-chat').style.display = 'none';
+  document.body.classList.remove('chat-open'); // mobile: slide back to the chat list
   renderChatList(allChats);
 }
 
