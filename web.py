@@ -331,6 +331,51 @@ def list_chats():
 def get_chat(chat_id):
     return jsonify({"chat_id": chat_id, "messages": app_core.get_messages(chat_id)})
 
+@app.route("/api/messages/<path:chat_id>")
+def get_messages_decrypted(chat_id):
+    # This is the route the frontend actually calls (refreshMessages() in
+    # chat.html) — it did not exist at all before this fix, so every
+    # "open a chat" request 404'd. Separately, /api/chats/<id> above never
+    # decrypted anything (it hands back raw ciphertext tokens) and nothing
+    # in the frontend ever called /api/crypto/decrypt either — so even with
+    # a matching URL, messages would have rendered as raw ciphertext.
+    # This route does both: correct URL, and decrypt-on-read.
+    passphrase = request.args.get("passphrase", "")
+    raw = app_core.get_messages(chat_id)
+    peer_meta = app_core.peers.get(chat_id) or {}
+    out = []
+    for m in raw:
+        token = m.get("token", "")
+        if m.get("plaintext"):
+            # Sender's own local echo — already plaintext, see chat_store.py.
+            # Still show it as "encrypted" in the badge sense: it genuinely
+            # was E2E over the wire, we're just skipping a decrypt that's
+            # mathematically impossible for the sender to perform anyway.
+            text, encrypted_ok = token, True
+        else:
+            try:
+                text = app_core.decrypt_message(token, passphrase, chat_id=chat_id)
+                encrypted_ok = True
+            except Exception as e:
+                text = f"[could not decrypt: {e}]"
+                encrypted_ok = False
+        sender = m.get("sender")
+        # Inbound network messages store the raw sender user_id, not a
+        # friendly name — resolve it to the peer's known display name
+        # when we have one, same as the chat topbar does.
+        author = sender
+        if sender and sender != "me" and peer_meta.get("username"):
+            author = peer_meta["username"]
+        out.append({
+            "text":      text,
+            "sender":    sender,
+            "author":    author,
+            "timestamp": m.get("ts"),
+            "verified":  m.get("verified"),
+            "encrypted": encrypted_ok,
+        })
+    return jsonify({"chat_id": chat_id, "messages": out})
+
 @app.route("/api/chats/<path:chat_id>/append", methods=["POST"])
 def append_to_chat(chat_id):
     data  = request.get_json(force=True)

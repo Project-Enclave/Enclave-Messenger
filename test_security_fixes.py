@@ -228,6 +228,63 @@ def main():
         check("plugins: real builtin plugins still discovered",
               "bluetooth" in pm._registry and "sms_gateway" in pm._registry)
 
+        # ------------------------------------------------------------
+        # Message pipeline: sender's own sent messages must appear in
+        # their own history (were previously silently dropped — Node.send()
+        # never wrote anything to the sender's own chat_store), and the
+        # actual route the frontend calls (/api/messages/<id>, which did
+        # not exist before this fix — frontend was hitting a 404 on every
+        # single chat open) must return properly decrypted plaintext for
+        # both sender and recipient.
+        # ------------------------------------------------------------
+        pipe_alice, pipe_ap, pipe_ac = make_node(tmp, "pipe_alice", 52101)
+        pipe_bob,   pipe_bp, pipe_bc = make_node(tmp, "pipe_bob",   52102)
+        pipe_alice.start(); pipe_bob.start()
+        time.sleep(0.3)
+
+        pipe_ap.upsert(user_id=pipe_bob._identity["user_id"], username="bob",
+                       ed25519_pub=pipe_bob._identity["ed25519_pub"],
+                       x25519_pub=pipe_bob._identity["x25519_pub"],
+                       ip="127.0.0.1", port=52102)
+        pipe_bp.upsert(user_id=pipe_alice._identity["user_id"], username="alice",
+                       ed25519_pub=pipe_alice._identity["ed25519_pub"],
+                       x25519_pub=pipe_alice._identity["x25519_pub"],
+                       ip="127.0.0.1", port=52101)
+
+        sent_ok = pipe_alice.send(pipe_bob._identity["user_id"], "pipeline test message")
+        time.sleep(0.3)
+        check("pipeline: send() succeeds", sent_ok)
+
+        alice_own = pipe_ac.load_messages(pipe_bob._identity["user_id"])
+        check("pipeline: sender's own history now records the sent message",
+              len(alice_own) == 1 and alice_own[0]["sender"] == "me"
+              and alice_own[0]["plaintext"] is True)
+
+        web.app_core.chats = pipe_ac
+        web.app_core.peers = pipe_ap
+        web.app_core.identity = pipe_alice._im
+        with web.app.test_client() as c:
+            r = c.get(f"/api/messages/{pipe_bob._identity['user_id']}?passphrase=")
+            d = r.get_json()
+            check("pipeline: /api/messages/<id> route exists (was a 404 before)",
+                  r.status_code == 200)
+            check("pipeline: sender sees own decrypted message via the route",
+                  d["messages"] and d["messages"][0]["text"] == "pipeline test message")
+
+        web.app_core.chats = pipe_bc
+        web.app_core.peers = pipe_bp
+        web.app_core.identity = pipe_bob._im
+        with web.app.test_client() as c:
+            r = c.get(f"/api/messages/{pipe_alice._identity['user_id']}?passphrase=")
+            d = r.get_json()
+            check("pipeline: recipient sees decrypted+verified message via the route",
+                  d["messages"] and d["messages"][0]["text"] == "pipeline test message"
+                  and d["messages"][0]["verified"] is True)
+            check("pipeline: recipient sees resolved peer nickname, not raw id",
+                  d["messages"] and d["messages"][0]["author"] == "alice")
+
+        pipe_alice.stop(); pipe_bob.stop()
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

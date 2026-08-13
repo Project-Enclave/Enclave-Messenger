@@ -143,6 +143,33 @@ class Node:
         ok = self._transport.send(address, envelope)
         if ok:
             log.info("[node] delivered to %s", peer_user_id[:12])
+
+        # Record OUR OWN copy under the same chat thread the recipient uses
+        # (peer_user_id), regardless of delivery outcome — otherwise a sent
+        # message never appears in your own history at all, only the
+        # recipient's.
+        #
+        # This deliberately stores PLAINTEXT, not the ciphertext token.
+        # e2e.py uses ephemeral-static ECDH (the sender's ephemeral private
+        # key is discarded right after encrypt() returns, which is what
+        # gives forward secrecy) — only the RECIPIENT's static private key
+        # can reverse it. The sender can never decrypt their own ciphertext
+        # with this scheme; nobody can but the intended recipient. Since we
+        # already have the plaintext right here (it's a plain function
+        # argument, before encryption), storing it directly for the local
+        # echo is the same trade-off real E2E messengers make: E2E secrecy
+        # covers the network leg, and your own local copy of what you sent
+        # is protected by the same OS file permissions as the rest of your
+        # profile data (see key_manager.py's chmod 600), not by a second
+        # layer of at-rest encryption on top.
+        self._chats.append_message(peer_user_id, {
+            "token":     plaintext,
+            "plaintext": True,
+            "sender":    "me",
+            "ts":        ts,
+            "verified":  True,
+        })
+
         return ok
 
     # ------------------------------------------------------------------

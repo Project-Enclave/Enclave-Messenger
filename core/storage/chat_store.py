@@ -39,9 +39,14 @@ class ChatStore:
     def append_message(self, chat_id: str, entry):
         """
         entry can be:
-          - a dict  {token, sender, ts, verified}  (new format from web UI /
-            network layer — 'verified' is optional, defaults to None meaning
-            "not applicable", e.g. for self-sent or legacy CLI messages)
+          - a dict  {token, sender, ts, verified, plaintext}  (new format
+            from web UI / network layer — 'verified' and 'plaintext' are
+            both optional. 'plaintext': True means the 'token' field holds
+            plaintext, not a ciphertext token — used for the sender's own
+            local echo of a message they just sent (see router.py's
+            Node.send() for why: the E2E scheme's ephemeral-static ECDH
+            means not even the sender can decrypt their own ciphertext
+            after the fact, so the plaintext is cached directly instead).
           - a str   raw token            (legacy / CLI usage)
         """
         self._migrate(chat_id)
@@ -49,16 +54,17 @@ class ChatStore:
             entry = {"token": entry, "sender": None, "ts": None}
         # ensure required keys
         record = {
-            "token":    entry.get("token", ""),
-            "sender":   entry.get("sender"),
-            "ts":       entry.get("ts"),
-            "verified": entry.get("verified"),
+            "token":     entry.get("token", ""),
+            "sender":    entry.get("sender"),
+            "ts":        entry.get("ts"),
+            "verified":  entry.get("verified"),
+            "plaintext": entry.get("plaintext", False),
         }
         with open(self._path(chat_id), "a", encoding="utf-8") as f:
             f.write(json.dumps(record, separators=(',', ':')) + "\n")
 
     def load_messages(self, chat_id: str) -> list:
-        """Returns list of {token, sender, ts, verified} dicts."""
+        """Returns list of {token, sender, ts, verified, plaintext} dicts."""
         self._migrate(chat_id)
         path = self._path(chat_id)
         if not os.path.exists(path):
@@ -70,10 +76,13 @@ class ChatStore:
                 if not line:
                     continue
                 try:
-                    entries.append(json.loads(line))
+                    rec = json.loads(line)
+                    rec.setdefault("plaintext", False)
+                    entries.append(rec)
                 except json.JSONDecodeError:
                     # bare token written directly (shouldn't happen after migration)
-                    entries.append({"token": line, "sender": None, "ts": None, "verified": None})
+                    entries.append({"token": line, "sender": None, "ts": None,
+                                     "verified": None, "plaintext": False})
         return entries
 
     def delete_chat(self, chat_id: str) -> bool:

@@ -1206,7 +1206,7 @@ function renderMessages(msgs) {
   area.innerHTML = msgs.map(m => {
     const me = m.direction === 'out' || m.sender === 'me';
     const rowClass = me ? 'msg-row me' : 'msg-row';
-    const author   = !me && m.sender ? `<div class="bubble-author">${escHtml(m.sender)}</div>` : '';
+    const author   = !me && m.sender ? `<div class="bubble-author">${escHtml(m.author || m.sender)}</div>` : '';
     const enc      = m.encrypted  ? '<span class="badge badge-enc">enc</span>' : '';
     const verified = m.verified   ? '<span class="badge badge-ok">&#10003;</span>' : '';
     const net      = m.transport  ? `<span class="badge badge-net">${escHtml(m.transport)}</span>` : '';
