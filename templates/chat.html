@@ -873,7 +873,12 @@ const pass = () => $('cfg-pass').value;
 const isPhone = id => /^\+?[0-9]{7,15}$/.test((id||'').replace(/\s/g,''));
 const isBT    = id => /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test((id||'').trim());
 const isIP    = id => /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test((id||'').trim());
-const isNode  = id => /^enc_[a-zA-Z0-9_-]{4,}$/.test((id||'').trim());
+// Real user_ids (key_manager.py's get_user_id()) are unpadded base64url
+// Ed25519 public keys with NO prefix — confirmed by every id this app has
+// ever actually generated. This previously required an 'enc_' prefix that
+// nothing in the backend has ever produced, so a real node id pasted here
+// always fell through to "unrecognised format".
+const isNode  = id => /^[A-Za-z0-9_-]{40,50}$/.test((id||'').trim());
 
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(url, body) {

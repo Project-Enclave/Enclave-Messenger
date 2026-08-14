@@ -285,6 +285,58 @@ def main():
 
         pipe_alice.stop(); pipe_bob.stop()
 
+        # ------------------------------------------------------------
+        # templates/chat.html: the <script> block must actually parse.
+        # A duplicate `const`/`function` identifier (or any other syntax
+        # error) silently kills EVERY feature on the page at once — no
+        # console visible to catch it in normal manual testing, page just
+        # looks inert. Caught exactly this via a duplicate `isNode`
+        # declaration while adding the /api/chats/new route below.
+        # ------------------------------------------------------------
+        import re as _re, subprocess as _sp
+        html = open(os.path.join(os.path.dirname(__file__), "templates", "chat.html"),
+                    encoding="utf-8").read()
+        script = _re.search(r"<script>(.*?)</script>", html, _re.DOTALL).group(1)
+        js_path = os.path.join(tmp, "_extracted.js")
+        with open(js_path, "w", encoding="utf-8") as f:
+            f.write(script)
+        node_check = _sp.run(["node", "--check", js_path], capture_output=True, text=True)
+        check("chat.html: <script> block has valid JS syntax (node --check)",
+              node_check.returncode == 0)
+
+        # /api/chats/new — was entirely missing before this fix, meaning
+        # "+ new chat" AND clicking any peer in the peers list (both call
+        # startChatWith() -> this route) were a guaranteed 404.
+        web.app_core.identity = pipe_alice._im  # any unlocked identity is fine here
+        web.app_core.peers = pipe_ap
+        with web.app.test_client() as c:
+            def new_chat(addr, name=None):
+                body = {"address": addr}
+                if name:
+                    body["name"] = name
+                return c.post("/api/chats/new", json=body,
+                              headers={"X-Enclave-CSRF": web._CSRF_TOKEN})
+
+            node_id = "a" * 43
+            r = new_chat(node_id)
+            check("new-chat: node id accepted, chat_id matches",
+                  r.status_code == 200 and r.get_json()["chat_id"] == node_id)
+
+            r = new_chat("AA:BB:CC:DD:EE:FF")
+            check("new-chat: bluetooth MAC normalized with BT: prefix",
+                  r.status_code == 200 and r.get_json()["chat_id"] == "BT:AA:BB:CC:DD:EE:FF")
+
+            r = new_chat("+919876543210")
+            check("new-chat: phone number accepted as-is",
+                  r.status_code == 200 and r.get_json()["chat_id"] == "+919876543210")
+
+            r = new_chat("192.168.1.50:5001")
+            check("new-chat: IP:port honestly rejected, not faked",
+                  r.status_code == 400)
+
+            r = new_chat("garbage!!")
+            check("new-chat: unrecognised format rejected", r.status_code == 400)
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -223,6 +223,45 @@ def get_messages(chat_id: str) -> list:
     return chats.load_messages(chat_id)
 
 
+def get_messages_decrypted(chat_id: str, passphrase: str = "") -> list[dict]:
+    """
+    Same data as get_messages(), but decrypted and shaped for display:
+    {text, sender, author, timestamp, verified, encrypted}. Shared by
+    web.py's /api/messages route and tui.py so there's exactly one place
+    that knows how to turn a stored record into something displayable —
+    including the plaintext-marked self-echo case (see router.py's
+    Node.send()) and resolving a raw sender user_id to the peer's known
+    username for the author label.
+    """
+    raw = chats.load_messages(chat_id)
+    peer_meta = peers.get(chat_id) or {}
+    out = []
+    for m in raw:
+        token = m.get("token", "")
+        if m.get("plaintext"):
+            text, encrypted_ok = token, True
+        else:
+            try:
+                text = decrypt_message(token, passphrase, chat_id=chat_id)
+                encrypted_ok = True
+            except Exception as e:
+                text = f"[could not decrypt: {e}]"
+                encrypted_ok = False
+        sender = m.get("sender")
+        author = sender
+        if sender and sender != "me" and peer_meta.get("username"):
+            author = peer_meta["username"]
+        out.append({
+            "text":      text,
+            "sender":    sender,
+            "author":    author,
+            "timestamp": m.get("ts"),
+            "verified":  m.get("verified"),
+            "encrypted": encrypted_ok,
+        })
+    return out
+
+
 def get_chats() -> list:
     return [
         {"id": cid, "count": chats.message_count(cid)}

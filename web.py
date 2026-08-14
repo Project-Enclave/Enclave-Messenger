@@ -19,6 +19,7 @@ The actual logic for crypto and comms is NOT handled by this file.
 
 import argparse
 import os
+import re
 import secrets
 import threading
 import traceback
@@ -34,7 +35,9 @@ except ImportError:
 import main as app_core
 from core import profiles as _profiles
 from core.network.scanner import scan_lan_peers, ENCLAVE_PORT
-from core.plugins.builtin.bluetooth.main import BluetoothUnavailableError
+from core.plugins.builtin.bluetooth.main import (
+    BluetoothUnavailableError, is_bt_chat_id, mac_from_chat_id, chat_id_from_mac,
+)
 
 app = Flask(__name__)
 
@@ -327,6 +330,72 @@ def crypto_decrypt():
 def list_chats():
     return jsonify({"chats": app_core.get_chats()})
 
+# Address-format classifiers for /api/chats/new — same job the frontend's
+# onSmartInput() was already trying to do by calling isNode()/isPhone()/
+# isIP()/isBT(), except those four functions were never actually defined
+# anywhere in chat.html. Every keystroke in the "new chat" box has been
+# throwing a ReferenceError since before this fix. Classification lives
+# here now (server-side, single source of truth); the frontend copy below
+# is just for the live type badge as you type.
+_NODE_ID_RE  = re.compile(r'^[A-Za-z0-9_-]{40,50}$')          # unpadded b64url Ed25519 pubkey
+_PHONE_RE    = re.compile(r'^\+?[0-9][0-9\-\s]{6,14}[0-9]$')
+_IP_PORT_RE  = re.compile(r'^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$')
+
+@app.route("/api/chats/new", methods=["POST"])
+def new_chat():
+    # This route did not exist at all before this fix. It's called by
+    # BOTH the "+ new chat" modal AND clicking any peer in the peers list
+    # (startChatWith()) — so starting a conversation with anyone, even an
+    # already-discovered LAN peer, has been a guaranteed 404 until now.
+    data = request.get_json(force=True)
+    address = (data.get("address") or "").strip()
+    name = (data.get("name") or "").strip() or None
+    if not address:
+        return err("address required", 400)
+
+    if is_bt_chat_id(address):
+        chat_id = chat_id_from_mac(mac_from_chat_id(address))
+        return jsonify({"chat_id": chat_id, "type": "bluetooth"})
+
+    if _NODE_ID_RE.match(address):
+        # No server-side "create" needed — chat existence is implicit
+        # (ChatStore lazily creates storage on first append_message). If
+        # we already know this peer and got a friendly name, remember it
+        # for the author-label resolution in get_messages_decrypted().
+        if name:
+            existing = app_core.peers.get(address)
+            if existing and not existing.get("username"):
+                app_core.peers.upsert(
+                    user_id=address,
+                    username=name,
+                    ed25519_pub=existing.get("ed25519_pub", ""),
+                    x25519_pub=existing.get("x25519_pub", ""),
+                    ip=existing.get("ip", ""),
+                    port=existing.get("port", 0),
+                )
+        return jsonify({"chat_id": address, "type": "node"})
+
+    if _PHONE_RE.match(address):
+        # SMS isn't E2E and has no cryptographic identity — the phone
+        # number itself is the chat_id, same convention as bluetooth's
+        # MAC-based ids.
+        return jsonify({"chat_id": address, "type": "phone"})
+
+    if _IP_PORT_RE.match(address):
+        # Deliberately NOT faked as working: there is no peer handshake
+        # protocol in this codebase for "here's my IP, exchange identity
+        # keys with me." Peers are only known via LAN discovery broadcast
+        # (see core/network/discovery.py) or by already being in your
+        # peer list. Saying this "worked" while quietly doing nothing
+        # would be worse than telling you it isn't implemented.
+        return err(
+            "direct IP:port connect isn't implemented — peers are found "
+            "via LAN discovery broadcast, not a manual address", 400,
+        )
+
+    return err("unrecognised address — expected a node id, phone number, "
+               "or bluetooth MAC", 400)
+
 @app.route("/api/chats/<path:chat_id>")
 def get_chat(chat_id):
     return jsonify({"chat_id": chat_id, "messages": app_core.get_messages(chat_id)})
@@ -339,42 +408,12 @@ def get_messages_decrypted(chat_id):
     # decrypted anything (it hands back raw ciphertext tokens) and nothing
     # in the frontend ever called /api/crypto/decrypt either — so even with
     # a matching URL, messages would have rendered as raw ciphertext.
-    # This route does both: correct URL, and decrypt-on-read.
+    # Actual decrypt+resolve logic lives in main.py (shared with tui.py).
     passphrase = request.args.get("passphrase", "")
-    raw = app_core.get_messages(chat_id)
-    peer_meta = app_core.peers.get(chat_id) or {}
-    out = []
-    for m in raw:
-        token = m.get("token", "")
-        if m.get("plaintext"):
-            # Sender's own local echo — already plaintext, see chat_store.py.
-            # Still show it as "encrypted" in the badge sense: it genuinely
-            # was E2E over the wire, we're just skipping a decrypt that's
-            # mathematically impossible for the sender to perform anyway.
-            text, encrypted_ok = token, True
-        else:
-            try:
-                text = app_core.decrypt_message(token, passphrase, chat_id=chat_id)
-                encrypted_ok = True
-            except Exception as e:
-                text = f"[could not decrypt: {e}]"
-                encrypted_ok = False
-        sender = m.get("sender")
-        # Inbound network messages store the raw sender user_id, not a
-        # friendly name — resolve it to the peer's known display name
-        # when we have one, same as the chat topbar does.
-        author = sender
-        if sender and sender != "me" and peer_meta.get("username"):
-            author = peer_meta["username"]
-        out.append({
-            "text":      text,
-            "sender":    sender,
-            "author":    author,
-            "timestamp": m.get("ts"),
-            "verified":  m.get("verified"),
-            "encrypted": encrypted_ok,
-        })
-    return jsonify({"chat_id": chat_id, "messages": out})
+    return jsonify({
+        "chat_id": chat_id,
+        "messages": app_core.get_messages_decrypted(chat_id, passphrase),
+    })
 
 @app.route("/api/chats/<path:chat_id>/append", methods=["POST"])
 def append_to_chat(chat_id):
