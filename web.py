@@ -19,7 +19,6 @@ The actual logic for crypto and comms is NOT handled by this file.
 
 import argparse
 import os
-import re
 import secrets
 import threading
 import traceback
@@ -35,9 +34,7 @@ except ImportError:
 import main as app_core
 from core import profiles as _profiles
 from core.network.scanner import scan_lan_peers, ENCLAVE_PORT
-from core.plugins.builtin.bluetooth.main import (
-    BluetoothUnavailableError, is_bt_chat_id, mac_from_chat_id, chat_id_from_mac,
-)
+from core.plugins.builtin.bluetooth.main import BluetoothUnavailableError
 
 app = Flask(__name__)
 
@@ -330,16 +327,9 @@ def crypto_decrypt():
 def list_chats():
     return jsonify({"chats": app_core.get_chats()})
 
-# Address-format classifiers for /api/chats/new — same job the frontend's
-# onSmartInput() was already trying to do by calling isNode()/isPhone()/
-# isIP()/isBT(), except those four functions were never actually defined
-# anywhere in chat.html. Every keystroke in the "new chat" box has been
-# throwing a ReferenceError since before this fix. Classification lives
-# here now (server-side, single source of truth); the frontend copy below
-# is just for the live type badge as you type.
-_NODE_ID_RE  = re.compile(r'^[A-Za-z0-9_-]{40,50}$')          # unpadded b64url Ed25519 pubkey
-_PHONE_RE    = re.compile(r'^\+?[0-9][0-9\-\s]{6,14}[0-9]$')
-_IP_PORT_RE  = re.compile(r'^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$')
+# Address-format classification for /api/chats/new lives in main.py's
+# classify_address() — shared with tui.py's :new command, and it doesn't
+# need Flask, so it doesn't belong in this file.
 
 @app.route("/api/chats/new", methods=["POST"])
 def new_chat():
@@ -350,51 +340,25 @@ def new_chat():
     data = request.get_json(force=True)
     address = (data.get("address") or "").strip()
     name = (data.get("name") or "").strip() or None
-    if not address:
-        return err("address required", 400)
 
-    if is_bt_chat_id(address):
-        chat_id = chat_id_from_mac(mac_from_chat_id(address))
-        return jsonify({"chat_id": chat_id, "type": "bluetooth"})
+    try:
+        chat_id, addr_type = app_core.classify_address(address)
+    except ValueError as e:
+        return err(str(e), 400)
 
-    if _NODE_ID_RE.match(address):
-        # No server-side "create" needed — chat existence is implicit
-        # (ChatStore lazily creates storage on first append_message). If
-        # we already know this peer and got a friendly name, remember it
-        # for the author-label resolution in get_messages_decrypted().
-        if name:
-            existing = app_core.peers.get(address)
-            if existing and not existing.get("username"):
-                app_core.peers.upsert(
-                    user_id=address,
-                    username=name,
-                    ed25519_pub=existing.get("ed25519_pub", ""),
-                    x25519_pub=existing.get("x25519_pub", ""),
-                    ip=existing.get("ip", ""),
-                    port=existing.get("port", 0),
-                )
-        return jsonify({"chat_id": address, "type": "node"})
+    if addr_type == "node" and name:
+        existing = app_core.peers.get(chat_id)
+        if existing and not existing.get("username"):
+            app_core.peers.upsert(
+                user_id=chat_id,
+                username=name,
+                ed25519_pub=existing.get("ed25519_pub", ""),
+                x25519_pub=existing.get("x25519_pub", ""),
+                ip=existing.get("ip", ""),
+                port=existing.get("port", 0),
+            )
 
-    if _PHONE_RE.match(address):
-        # SMS isn't E2E and has no cryptographic identity — the phone
-        # number itself is the chat_id, same convention as bluetooth's
-        # MAC-based ids.
-        return jsonify({"chat_id": address, "type": "phone"})
-
-    if _IP_PORT_RE.match(address):
-        # Deliberately NOT faked as working: there is no peer handshake
-        # protocol in this codebase for "here's my IP, exchange identity
-        # keys with me." Peers are only known via LAN discovery broadcast
-        # (see core/network/discovery.py) or by already being in your
-        # peer list. Saying this "worked" while quietly doing nothing
-        # would be worse than telling you it isn't implemented.
-        return err(
-            "direct IP:port connect isn't implemented — peers are found "
-            "via LAN discovery broadcast, not a manual address", 400,
-        )
-
-    return err("unrecognised address — expected a node id, phone number, "
-               "or bluetooth MAC", 400)
+    return jsonify({"chat_id": chat_id, "type": addr_type})
 
 @app.route("/api/chats/<path:chat_id>")
 def get_chat(chat_id):

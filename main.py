@@ -24,6 +24,7 @@ CLI utilities:
 import argparse
 import json
 import os
+import re
 import sys
 import signal
 import threading
@@ -37,6 +38,7 @@ from core.plugins.builtin.bluetooth.main import (
     BluetoothPlugin,
     BluetoothUnavailableError,
     is_bt_chat_id,
+    mac_from_chat_id,
     chat_id_from_mac,
 )
 from core.network import Node
@@ -271,6 +273,49 @@ def get_chats() -> list:
 
 def get_peers() -> list:
     return peers.all()
+
+
+# Shared by web.py's /api/chats/new and tui.py's :new command — one place
+# that decides what a typed-in address actually means, instead of two
+# copies of the same regexes drifting apart.
+_NODE_ID_RE  = re.compile(r'^[A-Za-z0-9_-]{40,50}$')          # unpadded b64url Ed25519 pubkey
+_PHONE_RE    = re.compile(r'^\+?[0-9][0-9\-\s]{6,14}[0-9]$')
+_IP_PORT_RE  = re.compile(r'^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$')
+
+def classify_address(address: str) -> tuple[str, str]:
+    """
+    Turn a typed-in address into (chat_id, type). Raises ValueError with a
+    user-facing message if the address isn't usable — callers show that
+    message directly rather than pretending something worked.
+    """
+    address = (address or "").strip()
+    if not address:
+        raise ValueError("address required")
+
+    if is_bt_chat_id(address):
+        return chat_id_from_mac(mac_from_chat_id(address)), "bluetooth"
+
+    if _NODE_ID_RE.match(address):
+        return address, "node"
+
+    if _PHONE_RE.match(address):
+        # SMS isn't E2E and has no cryptographic identity — the phone
+        # number itself is the chat_id, same convention as bluetooth's
+        # MAC-based ids.
+        return address, "phone"
+
+    if _IP_PORT_RE.match(address):
+        # Deliberately not faked as working: there's no peer-handshake
+        # protocol in this codebase for "here's my IP, exchange keys with
+        # me." Peers are only known via LAN discovery broadcast or by
+        # already being in the peer list.
+        raise ValueError(
+            "direct IP:port connect isn't implemented — peers are found "
+            "via LAN discovery broadcast, not a manual address"
+        )
+
+    raise ValueError("unrecognised address — expected a node id, phone "
+                      "number, or bluetooth MAC")
 
 
 def get_identity_status() -> dict:
