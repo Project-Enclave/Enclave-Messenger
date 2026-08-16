@@ -21,6 +21,7 @@ from cryptography.exceptions import InvalidSignature
 
 from .discovery import Discovery
 from .transport import Transport
+from .dht import DHTNode
 from core.crypto import E2EManager
 
 log = logging.getLogger("network")
@@ -72,12 +73,28 @@ class Node:
             port=port,
             on_message=self._on_inbound,
         )
+        self._transport_port = port
         self._discovery = Discovery(
             identity=self._identity,
             transport_port=port,
             peer_store=peer_store,
             on_peer_found=self._on_peer_found,
         )
+
+        # DHT (internet discovery) is opt-in, not opt-out: joining a public
+        # DHT means announcing "here's my address" to a swarm of strangers,
+        # which is a meaningfully different exposure than LAN broadcast.
+        # See core/network/dht.py for exactly what this does and doesn't do
+        # (notably: it does NOT solve NAT traversal by itself).
+        self._dht = None
+        if config_store.get_setting("dht_enabled", False):
+            dht_port = config_store.get_setting("dht_port") or (port + 1000)
+            self._dht = DHTNode(
+                user_id=self._identity["user_id"],
+                port=dht_port,
+                peer_store=peer_store,
+                on_peer_found=self._on_peer_found,
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -86,11 +103,29 @@ class Node:
     def start(self):
         self._transport.start()
         self._discovery.start()
+        if self._dht:
+            bootstrap = self._config.get_setting("dht_bootstrap", [])
+            self._dht.start(bootstrap_addrs=bootstrap)
+            self._dht.set_identity_payload(
+                ed25519_pub=self._identity["ed25519_pub"],
+                x25519_pub=self._identity["x25519_pub"],
+                transport_port=self._transport_port,
+                public_ip=self._config.get_setting("dht_public_ip"),
+            )
+            # Always attempt an initial announce, even with no bootstrap
+            # list of our own (e.g. we're the seed/root node others
+            # bootstrap FROM) — it may not have anyone to learn our own
+            # address from yet, in which case DHTNode's own early-retry
+            # loop (a few short retries over the first ~15s) picks it up
+            # once someone has actually contacted us.
+            self._dht.announce_self()
         log.info("[node] started — user_id: %s", self._identity["user_id"][:16])
 
     def stop(self):
         self._discovery.stop()
         self._transport.stop()
+        if self._dht:
+            self._dht.stop()
         log.info("[node] stopped")
 
     # ------------------------------------------------------------------
@@ -104,6 +139,9 @@ class Node:
         Raises RuntimeError if the peer's x25519_pub is unknown.
         """
         peer = self._peers.get(peer_user_id)
+        if not peer and self._dht:
+            log.info("[node] %s not in local peer_store — trying DHT", peer_user_id[:12])
+            peer = self._dht.find_peer(peer_user_id)
         if not peer:
             log.warning("[node] send: unknown peer %s", peer_user_id[:12])
             return False

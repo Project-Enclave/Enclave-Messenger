@@ -416,6 +416,14 @@ def cmd_run(args):
 
     import getpass
     passphrase = args.passphrase or getpass.getpass("Passphrase: ")
+
+    if getattr(args, "dht", False):
+        config.set_setting("dht_enabled", True)
+    if getattr(args, "dht_bootstrap", None):
+        config.set_setting("dht_bootstrap", args.dht_bootstrap)
+    if getattr(args, "dht_public_ip", None):
+        config.set_setting("dht_public_ip", args.dht_public_ip)
+
     try:
         node = start_node(
             passphrase=passphrase,
@@ -427,6 +435,8 @@ def cmd_run(args):
 
     print(f"Enclave node running (profile: {_active_profile}).")
     print(f"User ID: {identity.get_user_id()}")
+    if config.get_setting("dht_enabled", False):
+        print("DHT (internet discovery) enabled.")
 
     # --ci / headless mode: start web server on requested port, skip browser,
     # and block until SIGINT/SIGTERM instead of waiting for a keypress.
@@ -551,6 +561,17 @@ def build_parser():
                        help="Web UI port (stored in config; web.py reads it)")
     p_run.add_argument("--ci", action="store_true", default=False,
                        help="Headless / CI mode — skip browser launch, block on signal")
+    p_run.add_argument("--dht", action="store_true", default=False,
+                       help="Enable DHT (internet) discovery, in addition to LAN. "
+                            "Opt-in: announces your address to a swarm of strangers. "
+                            "See core/network/dht.py for what this does and doesn't do.")
+    p_run.add_argument("--dht-bootstrap", action="append", default=None,
+                       help="host:port of a reachable DHT node to bootstrap from. "
+                            "Repeatable. Required to actually join an existing swarm — "
+                            "there's no public bootstrap infrastructure to fall back on.")
+    p_run.add_argument("--dht-public-ip", default=None,
+                       help="Your own reachable IP, if you already know it (e.g. a VPS "
+                            "with a static IP). Otherwise auto-detected via a bootstrap peer.")
     p_run.set_defaults(func=cmd_run)
 
     # encrypt
