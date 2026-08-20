@@ -79,7 +79,7 @@ class Plugin(EnclavePlugin):
 
     def get_sms_instance(self):
         """Return a live SMSGateway instance using current settings."""
-        from core.plugins.sms_gateway import SMSGateway
+        from core.plugins.builtin.sms_gateway.sms_gateway import SMSGateway
         host = self._settings.get("host", "cloud")
         use_cloud = host in ("cloud", "", None)
         return SMSGateway(

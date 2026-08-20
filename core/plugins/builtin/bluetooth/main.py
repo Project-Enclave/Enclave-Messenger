@@ -76,7 +76,14 @@ def mac_from_chat_id(chat_id: str) -> str:
 
 
 def chat_id_from_mac(mac: str) -> str:
-    return 'BT:' + mac.upper()
+    # Idempotent regardless of whether the input already has a BT: prefix
+    # or not — strip first, then re-add, rather than unconditionally
+    # prepending. The one caller (main.py's classify_address()) already
+    # worked around the unconditional-prepend version by always composing
+    # chat_id_from_mac(mac_from_chat_id(x)), but that composition being
+    # required wasn't documented or enforced anywhere — a direct call on
+    # an already-prefixed value silently produced 'BT:BT:AA:BB:...'.
+    return 'BT:' + mac_from_chat_id(mac)
 
 
 # ── Main plugin class ──────────────────────────────────────────────────
