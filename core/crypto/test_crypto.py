@@ -1,5 +1,8 @@
+import os
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crypto_manager import CryptoManager
 
 HARDCODED = {
@@ -13,7 +16,13 @@ HARDCODED = {
 
 def run_hardcoded():
     print("=== hardcoded test ===")
-    c = CryptoManager(HARDCODED["passphrase"])
+    # Same salt for both instances below — root_salt isn't secret (it's
+    # persisted right alongside the identity, same as any KDF salt), so
+    # the realistic "wrong passphrase" scenario is an attacker who knows
+    # your salt but not your passphrase, not one who's also guessing the
+    # salt.
+    salt = os.urandom(16)
+    c = CryptoManager(HARDCODED["passphrase"], root_salt=salt)
 
     token = c.encrypt_message(
         message_type=HARDCODED["message_type"],
@@ -31,7 +40,7 @@ def run_hardcoded():
 
     print("\n=== wrong passphrase test ===")
     try:
-        bad = CryptoManager("wrong-passphrase")
+        bad = CryptoManager("wrong-passphrase", root_salt=salt)
         bad.decrypt_message(token)
         print("  wrong passphrase: FAILED (should have raised)")
     except Exception:
@@ -55,7 +64,7 @@ def run_interactive():
     text = input("message text: ")
     created_at = str(int(time.time()))
 
-    c = CryptoManager(passphrase)
+    c = CryptoManager(passphrase, root_salt=os.urandom(16))
 
     token = c.encrypt_message(
         message_type="text",

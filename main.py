@@ -348,7 +348,7 @@ def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: s
                 chat_id=chat_id,
                 created_at=created_at,
             )
-    return CryptoManager(passphrase).encrypt(
+    return CryptoManager(passphrase, root_salt=identity.crypto_salt).encrypt(
         plaintext=plaintext,
         chat_id=chat_id,
         created_at=created_at,
@@ -363,7 +363,7 @@ def decrypt_message(token: str, passphrase: str, chat_id: str | None = None) -> 
                 "Start the node with your passphrase first."
             )
         return E2EManager(identity.x25519_priv).decrypt(token)
-    return CryptoManager(passphrase).decrypt(token)
+    return CryptoManager(passphrase, root_salt=identity.crypto_salt).decrypt(token)
 
 
 def configure_sms(username: str, password: str, host: str | None):

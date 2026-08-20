@@ -29,13 +29,36 @@ def verify_and_apply(update_dir):
         capture_output=True, text=True
     )
 
-    if "Verified OK" not in result.stdout:
-        raise PermissionError("Invalid signature — update rejected. Do not apply.")
+    # Check BOTH the exit code and the stdout text. Relying on the stdout
+    # string alone means a broken openssl invocation (missing binary,
+    # wrong args, permission error) that happens to print nothing
+    # containing "Verified OK" is already caught — but it's fragile to
+    # depend on parsing human-readable output at all when the tool gives
+    # you an authoritative signal for exactly this. openssl dgst -verify
+    # exits 0 only on a genuinely valid signature.
+    if result.returncode != 0 or "Verified OK" not in result.stdout:
+        raise PermissionError(
+            f"Invalid signature — update rejected. Do not apply. "
+            f"(exit code {result.returncode}: {result.stderr.strip() or result.stdout.strip()})"
+        )
 
     print("Signature verified ")
 
     # 2. Verify file hashes
     manifest = json.load(open(manifest_path))
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    for fname in manifest:
+        # Path traversal guard: fname comes from the manifest, which is
+        # itself signature-verified — so exploiting this requires already
+        # controlling the signing key, which is a much bigger problem
+        # than this check on its own. Still cheap, still correct
+        # defense-in-depth: reject anything that isn't a plain relative
+        # path staying inside base_dir, rather than trusting the manifest
+        # author never made a mistake either.
+        dst = os.path.normpath(os.path.join(base_dir, fname))
+        if os.path.isabs(fname) or not dst.startswith(base_dir + os.sep):
+            raise ValueError(f"Unsafe path in manifest: {fname!r} — update rejected.")
+
     for fname, expected_hash in manifest.items():
         fpath = os.path.join(update_dir, fname)
         if not os.path.exists(fpath):
@@ -48,7 +71,6 @@ def verify_and_apply(update_dir):
     print("All hashes verified ")
 
     # 3. Apply update
-    base_dir = os.path.dirname(os.path.abspath(__file__))
     for fname in manifest:
         src = os.path.join(update_dir, fname)
         dst = os.path.join(base_dir, fname)
