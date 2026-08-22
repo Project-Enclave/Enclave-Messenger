@@ -333,6 +333,7 @@ def get_identity_status() -> dict:
         "user_id":  node_id,
         "username": config.username or "",
         "node_running": _node is not None,
+        "dht_active": bool(_node is not None and getattr(_node, "_dht", None) is not None),
         "profile": _active_profile,
     }
 

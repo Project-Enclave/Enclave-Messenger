@@ -254,6 +254,38 @@
     }
     .smod-copy-btn:hover { background:var(--border);color:var(--text); }
     .smod-copy-wrap .smod-input { padding-right:4.2rem; }
+
+    /* ── DHT / profiles-tab additions ── */
+    .smod-divider { height:1px;background:var(--border);margin:.4rem 0 .1rem; }
+    .smod-subsection-title { font-size:.82rem;font-weight:700;color:var(--text);margin-bottom:.1rem; }
+    .smod-hint { font-size:.72rem;line-height:1.5;color:var(--faint);background:var(--bg);
+                 border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem; }
+    .smod-checkbox-row { display:flex;align-items:center;gap:.55rem;cursor:pointer;font-size:.85rem;color:var(--text); }
+    .smod-checkbox-row input[type=checkbox] { width:16px;height:16px;accent-color:var(--primary);cursor:pointer; }
+    .smod-textarea { resize:vertical;font-family:var(--font);line-height:1.5;min-height:4.4em; }
+
+    .profiles-list { display:flex;flex-direction:column;gap:.5rem; }
+    .profile-row-item {
+      display:flex;align-items:center;justify-content:space-between;gap:.75rem;
+      padding:.65rem .8rem;background:var(--bg);border:1px solid var(--border);
+      border-radius:10px;flex-wrap:wrap;
+    }
+    .profile-row-name { font-weight:600;font-size:.85rem;color:var(--text);display:flex;align-items:center;gap:.4rem; }
+    .profile-active-badge {
+      font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+      background:rgba(111,207,151,.15);color:#6fcf97;border-radius:5px;padding:.12rem .4rem;
+    }
+    .profile-row-meta { font-size:.72rem;color:var(--faint);margin-top:.15rem; }
+    .profile-row-meta a { color:var(--primary);text-decoration:none; }
+    .profile-row-meta a:hover { text-decoration:underline; }
+    .profile-row-actions { display:flex;gap:.4rem;flex-shrink:0; }
+    .profile-row-actions button {
+      background:none;border:1px solid var(--border);border-radius:7px;
+      padding:.3rem .55rem;font-size:.7rem;font-weight:600;color:var(--faint);
+      font-family:var(--font);cursor:pointer;transition:background .12s,color .12s;
+    }
+    .profile-row-actions button:hover { background:var(--border);color:var(--text); }
+    .profile-row-actions button.danger:hover { background:rgba(242,114,128,.15);color:var(--coral); }
     .danger-zone {
       border:1px solid rgba(242,114,128,.25);border-radius:10px;
       padding:.85rem 1rem;display:flex;flex-direction:column;gap:.5rem;
@@ -671,6 +703,7 @@
     <nav class="stab-nav" id="stab-nav">
       <div class="stab-section-label">core</div>
       <button class="stab-item" data-tab="profile" onclick="switchSettingsTab('profile')">Profile</button>
+      <button class="stab-item" data-tab="profiles" onclick="switchSettingsTab('profiles')">Profiles</button>
       <button class="stab-item active" data-tab="node" onclick="switchSettingsTab('node')">Node</button>
       <button class="stab-item" data-tab="sms" onclick="switchSettingsTab('sms')">SMS Gateway</button>
       <div class="stab-section-label" id="stab-plugins-label" style="display:none;">plugins</div>
@@ -729,6 +762,44 @@
         </div>
       </div>
 
+      <!-- Profiles panel (multiple identities, plural — distinct from
+           the single "Profile" tab above, which is about THIS session's
+           own display name/identity) -->
+      <div class="stab-panel" id="stab-panel-profiles">
+        <div class="stab-panel-title">Profiles</div>
+        <div class="smod-hint">
+          Each profile is a fully separate identity with its own keys,
+          chats, and peers, on its own ports — that's what makes running
+          more than one at the same time on this device actually work.
+          Because of that, <strong>this browser tab is locked to the
+          profile it's already connected to</strong> — "set as default"
+          below only changes which profile a fresh command-line launch
+          uses next time, it does not switch what you're looking at
+          right now. To actually use a different profile, open its own
+          address in a new tab (shown under each profile below) — that's
+          a separate running instance, same as opening a second account
+          in a different browser profile.
+        </div>
+
+        <div id="profiles-list" class="profiles-list">
+          <div style="color:var(--faint);font-size:.8rem;">loading&hellip;</div>
+        </div>
+
+        <div class="smod-divider"></div>
+        <div class="smod-subsection-title">create a new profile</div>
+        <div class="smod-field">
+          <div class="smod-label">name</div>
+          <input id="new-profile-name" class="smod-input" type="text"
+                 placeholder="e.g. work, personal" autocomplete="off" spellcheck="false"/>
+        </div>
+        <div class="smod-btn-row">
+          <button class="btn btn-ghost btn-ripple" onclick="createProfile()" style="flex:1;">
+            + create profile
+          </button>
+        </div>
+        <div class="smod-status" id="profiles-status">&mdash;</div>
+      </div>
+
       <!-- Node panel -->
       <div class="stab-panel active" id="stab-panel-node">
         <div class="stab-panel-title">Node</div>
@@ -747,6 +818,41 @@
           </button>
         </div>
         <div class="smod-status" id="cfg-status">&mdash;</div>
+
+        <div class="smod-divider"></div>
+        <div class="smod-subsection-title">DHT (internet discovery)</div>
+        <div class="smod-hint">
+          Finds peers over the internet, not just your LAN — same idea as
+          BitTorrent's DHT. Two things worth knowing before turning this
+          on: it does <strong>not</strong> get you through NAT/firewalls
+          by itself, it only helps find a peer's last-known address; and
+          there's no public bootstrap server — you need at least one
+          already-reachable peer's address below to actually join a swarm.
+          Changes here take effect next time you start the node, not live.
+        </div>
+        <div class="smod-field">
+          <label class="smod-checkbox-row">
+            <input type="checkbox" id="cfg-dht-enabled"/>
+            <span>enable DHT</span>
+          </label>
+        </div>
+        <div class="smod-field">
+          <div class="smod-label">bootstrap nodes (host:port, one per line)</div>
+          <textarea id="cfg-dht-bootstrap" class="smod-input smod-textarea" rows="3"
+                    placeholder="203.0.113.5:51820&#10;your-vps.example.com:51820"
+                    spellcheck="false"></textarea>
+        </div>
+        <div class="smod-field">
+          <div class="smod-label">your reachable address (optional — auto-detected if blank)</div>
+          <input id="cfg-dht-public-ip" class="smod-input" type="text"
+                 placeholder="e.g. a VPS's static IP" autocomplete="off" spellcheck="false"/>
+        </div>
+        <div class="smod-btn-row">
+          <button class="btn btn-ghost btn-ripple" id="cfg-dht-save-btn" onclick="saveDhtConfig()" style="flex:1;">
+            save DHT settings
+          </button>
+        </div>
+        <div class="smod-status" id="cfg-dht-status">&mdash;</div>
       </div>
 
       <!-- SMS Gateway panel -->
@@ -1030,6 +1136,8 @@ function switchSettingsTab(tabId) {
     el.classList.toggle('active', el.id === 'stab-panel-' + tabId);
   });
   if (tabId === 'profile') loadProfilePanel();
+  if (tabId === 'profiles') loadProfilesTab();
+  if (tabId === 'node') loadDhtConfig();
 }
 
 function openSettingsModal(tabId) {
@@ -1120,6 +1228,120 @@ async function generateNewIdentity() {
   await loadIdentity();
   $('prof-status').textContent = 'new identity generated';
   $('prof-status').className = 'smod-status ok';
+}
+
+// ── Profiles (plural — multiple identities) ─────────────────────────────────
+async function loadProfilesTab() {
+  const list = $('profiles-list');
+  const [profilesRes, activeRes] = await Promise.all([
+    fetch('/api/profiles').then(r => r.json()),
+    fetch('/api/profiles/active').then(r => r.json()),
+  ]);
+  if (profilesRes.error) {
+    list.innerHTML = `<div style="color:var(--coral);font-size:.8rem;">${escHtml(profilesRes.error)}</div>`;
+    return;
+  }
+  const profiles = profilesRes.profiles || [];
+  const currentHost = location.hostname;
+  list.innerHTML = profiles.map(p => {
+    const isDefault = p.is_active;
+    const url = `http://${currentHost}:${p.web_port}`;
+    return `
+      <div class="profile-row-item">
+        <div class="profile-row-main">
+          <div class="profile-row-name">
+            ${escHtml(p.name)}
+            ${isDefault ? '<span class="profile-active-badge">default</span>' : ''}
+          </div>
+          <div class="profile-row-meta">
+            open: <a href="${escAttr(url)}" target="_blank" rel="noopener">${escHtml(url)}</a>
+            &middot; transport port ${p.transport_port}
+          </div>
+        </div>
+        <div class="profile-row-actions">
+          ${!isDefault ? `<button onclick="setDefaultProfile('${escAttr(p.name)}')">set default</button>` : ''}
+          <button onclick="renameProfilePrompt('${escAttr(p.name)}')">rename</button>
+          <button class="danger" onclick="deleteProfileConfirm('${escAttr(p.name)}')">delete</button>
+        </div>
+      </div>`;
+  }).join('') || '<div style="color:var(--faint);font-size:.8rem;">no profiles yet</div>';
+}
+
+async function createProfile() {
+  const nameInput = $('new-profile-name');
+  const name = nameInput.value.trim();
+  const status = $('profiles-status');
+  if (!name) { status.textContent = 'name required'; status.className = 'smod-status err'; return; }
+  const d = await api('/api/profiles', {name});
+  if (d.error) {
+    status.textContent = '\u26a0 ' + d.error;
+    status.className = 'smod-status err';
+    return;
+  }
+  status.textContent = `created — open http://${location.hostname}:${d.web_port} to use it`;
+  status.className = 'smod-status ok';
+  nameInput.value = '';
+  await loadProfilesTab();
+}
+
+async function setDefaultProfile(name) {
+  const status = $('profiles-status');
+  const d = await api(`/api/profiles/${encodeURIComponent(name)}/activate`, {});
+  if (d.error) { status.textContent = '\u26a0 ' + d.error; status.className = 'smod-status err'; return; }
+  status.textContent = `"${name}" set as default for new command-line launches — this tab is unaffected`;
+  status.className = 'smod-status ok';
+  await loadProfilesTab();
+}
+
+async function renameProfilePrompt(oldName) {
+  const newName = prompt(`Rename profile "${oldName}" to:`, oldName);
+  if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
+  const status = $('profiles-status');
+  const r = await fetch(`/api/profiles/${encodeURIComponent(oldName)}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json', 'X-Enclave-CSRF': CSRF_TOKEN},
+    body: JSON.stringify({name: newName.trim()}),
+  });
+  const d = await r.json();
+  if (!r.ok) { status.textContent = '\u26a0 ' + (d.error || 'rename failed'); status.className = 'smod-status err'; return; }
+  status.textContent = 'renamed';
+  status.className = 'smod-status ok';
+  await loadProfilesTab();
+}
+
+async function deleteProfileConfirm(name) {
+  if (!confirm(`Delete profile "${name}"? This removes its registry entry — its identity and chat data on disk are not touched.`)) return;
+  const status = $('profiles-status');
+  const r = await fetch(`/api/profiles/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: {'X-Enclave-CSRF': CSRF_TOKEN},
+  });
+  const d = await r.json();
+  if (!r.ok) { status.textContent = '\u26a0 ' + (d.error || 'delete failed'); status.className = 'smod-status err'; return; }
+  status.textContent = 'deleted';
+  status.className = 'smod-status ok';
+  await loadProfilesTab();
+}
+
+// ── DHT config ───────────────────────────────────────────────────────────────
+async function loadDhtConfig() {
+  const d = await fetch('/api/config/dht').then(r => r.json());
+  if (d.error) return;
+  $('cfg-dht-enabled').checked = !!d.dht_enabled;
+  $('cfg-dht-bootstrap').value = (d.dht_bootstrap || []).join('\n');
+  $('cfg-dht-public-ip').value = d.dht_public_ip || '';
+}
+
+async function saveDhtConfig() {
+  const status = $('cfg-dht-status');
+  const d = await api('/api/config/dht', {
+    dht_enabled: $('cfg-dht-enabled').checked,
+    dht_bootstrap: $('cfg-dht-bootstrap').value,
+    dht_public_ip: $('cfg-dht-public-ip').value.trim(),
+  });
+  if (d.error) { status.textContent = '\u26a0 ' + d.error; status.className = 'smod-status err'; return; }
+  status.textContent = 'saved — ' + d.note;
+  status.className = 'smod-status ok';
 }
 
 // ── Identity ──────────────────────────────────────────────────────────────

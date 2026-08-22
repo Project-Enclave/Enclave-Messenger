@@ -19,6 +19,7 @@ The actual logic for crypto and comms is NOT handled by this file.
 
 import argparse
 import os
+import re
 import secrets
 import threading
 import traceback
@@ -451,7 +452,51 @@ def config_save():
         return err(str(e), 500, exc=e)
 
 
-@app.route("/api/sms/send", methods=["POST"])
+@app.route("/api/config/dht")
+def get_dht_config():
+    return jsonify({
+        "dht_enabled": app_core.config.get_setting("dht_enabled", False),
+        "dht_bootstrap": app_core.config.get_setting("dht_bootstrap", []),
+        "dht_public_ip": app_core.config.get_setting("dht_public_ip", "") or "",
+        # Whether DHT is ACTUALLY running right now, vs just configured —
+        # these can differ, since config changes take effect on the next
+        # node start, not live on an already-running node.
+        "dht_active": bool(app_core.get_identity_status().get("dht_active")),
+    })
+
+
+_BOOTSTRAP_ADDR_RE = re.compile(r'^[^\s:]+:\d{1,5}$')
+
+@app.route("/api/config/dht", methods=["POST"])
+def save_dht_config():
+    data = request.get_json(force=True) or {}
+    enabled = bool(data.get("dht_enabled", False))
+
+    bootstrap_raw = data.get("dht_bootstrap", "")
+    if isinstance(bootstrap_raw, str):
+        candidates = [b.strip() for b in re.split(r'[,\n]', bootstrap_raw) if b.strip()]
+    else:
+        candidates = [str(b).strip() for b in (bootstrap_raw or []) if str(b).strip()]
+
+    bad = [b for b in candidates if not _BOOTSTRAP_ADDR_RE.match(b)]
+    if bad:
+        return err(f"invalid bootstrap address (expected host:port): {bad[0]!r}", 400)
+
+    public_ip = (data.get("dht_public_ip") or "").strip()
+
+    app_core.config.set_setting("dht_enabled", enabled)
+    app_core.config.set_setting("dht_bootstrap", candidates)
+    app_core.config.set_setting("dht_public_ip", public_ip or None)
+
+    return jsonify({
+        "ok": True,
+        "dht_enabled": enabled,
+        "dht_bootstrap": candidates,
+        "dht_public_ip": public_ip,
+        "note": "takes effect the next time the node is started, not live on an already-running node",
+    })
+
+
 def sms_send():
     data = request.get_json(force=True)
     if "to" not in data or "message" not in data:
