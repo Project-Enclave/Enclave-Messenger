@@ -287,7 +287,7 @@ if __name__ == "__main__":
     while not step_identity_pass:
         step_identity()
 
-    :step_self_destruct()        # DO NOT UN-COMMENT FOR DEV
+    step_self_destruct()        # DO NOT UN-COMMENT FOR DEV
 
     step_dump(False)
 
