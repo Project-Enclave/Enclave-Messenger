@@ -2,3 +2,4 @@ cryptography
 flask
 flask-sock
 requests
+websockets
