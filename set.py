@@ -88,7 +88,7 @@ def step_dump(err):
     if err is True:
         sys.exit(1)
     elif err is False:
-        print("\n\033[92m  All done! Run with: python3 web.py\033[0m\n")
+        print("\n\033[92m  All done! Run with: python3 web.py or python3 tui.py\033[0m\n")
         sys.exit(0)
     else:
         print("actually im not exiting")
@@ -287,8 +287,8 @@ if __name__ == "__main__":
     while not step_identity_pass:
         step_identity()
 
-    step_self_destruct()        # DO NOT UN-COMMENT FOR DEV
+    :step_self_destruct()        # DO NOT UN-COMMENT FOR DEV
 
     step_dump(False)
 
-    print("\n\033[92m  All done! Run with: python3 web.py\033[0m\n")
+    print("\n\033[92m  All done! Run with: python3 web.py or python3 tui.py\033[0m\n")
