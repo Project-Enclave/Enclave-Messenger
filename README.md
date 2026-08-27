@@ -47,7 +47,7 @@ ui
   └── python bridge → web ui first
 ```
 
-no accounts. no servers. your identity is a keypair that lives on your device. your user id is derived from your public key. nobody can take it from you.
+no accounts. no servers. just your peers. your identity is a keypair that lives on your device. your user id is derived from your public key. nobody can take it from you.
 
 ***
 
