@@ -792,6 +792,11 @@
           <input id="new-profile-name" class="smod-input" type="text"
                  placeholder="e.g. work, personal" autocomplete="off" spellcheck="false"/>
         </div>
+        <div class="smod-field">
+          <div class="smod-label">passphrase</div>
+          <input id="new-profile-pass" class="smod-input" type="password"
+                 placeholder="protects this profile's identity" autocomplete="new-password"/>
+        </div>
         <div class="smod-btn-row">
           <button class="btn btn-ghost btn-ripple" onclick="createProfile()" style="flex:1;">
             + create profile
@@ -1269,18 +1274,25 @@ async function loadProfilesTab() {
 
 async function createProfile() {
   const nameInput = $('new-profile-name');
+  const passInput = $('new-profile-pass');
   const name = nameInput.value.trim();
+  const passphrase = passInput.value;
   const status = $('profiles-status');
   if (!name) { status.textContent = 'name required'; status.className = 'smod-status err'; return; }
-  const d = await api('/api/profiles', {name});
+  if (!passphrase) { status.textContent = 'passphrase required — this protects the new profile\u2019s identity'; status.className = 'smod-status err'; return; }
+  const d = await api('/api/profiles', {name, passphrase});
   if (d.error) {
     status.textContent = '\u26a0 ' + d.error;
     status.className = 'smod-status err';
     return;
   }
-  status.textContent = `created — open http://${location.hostname}:${d.web_port} to use it`;
-  status.className = 'smod-status ok';
+  const url = `http://${location.hostname}:${d.web_port}`;
+  status.textContent = d.process_started
+    ? `created and running — open ${url} to use it`
+    : `created, but couldn\u2019t start automatically (${d.process_error || 'unknown error'}) — start it yourself, then open ${url}`;
+  status.className = d.process_started ? 'smod-status ok' : 'smod-status err';
   nameInput.value = '';
+  passInput.value = '';
   await loadProfilesTab();
 }
 

@@ -21,6 +21,8 @@ import argparse
 import os
 import re
 import secrets
+import subprocess
+import sys
 import threading
 import traceback
 from datetime import datetime, timezone, timedelta
@@ -540,10 +542,25 @@ def profiles_list():
 
 @app.route("/api/profiles", methods=["POST"])
 def profiles_create():
+    # This used to only write a registry entry (name + ports) — no
+    # identity, and nothing actually listening on the new profile's
+    # port. The profile showed up in the list with a URL that just
+    # connection-refused, because nothing was running there, and even
+    # if something had been, there was no identity to unlock. Now:
+    # create the registry entry, generate + save a real identity for it
+    # (same generate_new_identity() + save_identity() pattern
+    # /api/identity/generate uses for the active profile, just pointed
+    # at the new profile's own data_dir), then spawn an actual `web.py
+    # --profile <name>` process for it so the URL shown in the UI is
+    # real the moment this call returns.
     data = request.get_json(force=True)
     name = data.get("name", "").strip()
+    passphrase = data.get("passphrase", "")
     if not name:
         return err("name required", 400)
+    if not passphrase:
+        return err("passphrase required — a profile with no identity can't be unlocked later", 400)
+
     try:
         profile = _profiles.create_profile(
             name=name,
@@ -551,9 +568,44 @@ def profiles_create():
             transport_port=data.get("transport_port"),
             web_port=data.get("web_port"),
         )
-        return jsonify(profile), 201
     except ValueError as e:
         return err(str(e), 409)
+
+    try:
+        from core.identity.key_manager import IdentityManager
+        data_dir = _profiles.get_profile_data_dir(name)
+        im = IdentityManager(storage_dir=os.path.join(data_dir, "identity"))
+        im.generate_new_identity()
+        im.save_identity(passphrase=passphrase)
+    except Exception as e:
+        return err(
+            f"profile registered but identity creation failed: {e}. "
+            f"Delete '{name}' and try again.", 500,
+        )
+
+    process_started = False
+    process_error = None
+    try:
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        subprocess.Popen(
+            [sys.executable, os.path.join(repo_dir, "web.py"),
+             "--profile", name, "--port", str(profile["web_port"])],
+            cwd=repo_dir,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,  # independent of this request's process — must
+                                      # keep running long after this response returns
+        )
+        process_started = True
+    except OSError as e:
+        process_error = str(e)
+
+    profile["process_started"] = process_started
+    if not process_started:
+        profile["process_error"] = (
+            f"{process_error} — identity was created successfully, but you'll need "
+            f"to start it yourself: python3 web.py --profile {name} --port {profile['web_port']}"
+        )
+    return jsonify(profile), 201
 
 
 @app.route("/api/profiles/active")
