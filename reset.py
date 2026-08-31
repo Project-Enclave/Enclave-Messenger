@@ -127,6 +127,10 @@ def step_restore_setup():
         err("Download it manually from: https://github.com/Project-Enclave/Enclave-Messenger/blob/main/set.py")
 
 
+def clean():
+    os.sys("find . -type f -name "*.py[co]" -delete")
+    os.sys("find . -type d -name "__pycache__" -delete")
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
