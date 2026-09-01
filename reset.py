@@ -127,9 +127,10 @@ def step_restore_setup():
         err("Download it manually from: https://github.com/Project-Enclave/Enclave-Messenger/blob/main/set.py")
 
 
-def clean():
-    os.sys("find . -type f -name "*.py[co]" -delete")
-    os.sys("find . -type d -name "__pycache__" -delete")
+def step_clean():
+    banner("Step 6 — Clean")
+    os.system('find . -type f -name "*.py[co]" -delete')
+    os.system('find . -type d -name "__pycache__" -delete')
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
@@ -148,6 +149,7 @@ def main():
     step_storage()
     step_venv()
     step_restore_setup()
+    step_clean()
 
     print("\n\033[92m  Reset complete. Run python3 set.py to start fresh.\033[0m\n")
 

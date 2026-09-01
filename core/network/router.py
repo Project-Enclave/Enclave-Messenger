@@ -57,16 +57,33 @@ class Node:
         self._identity = self._build_identity()
         port = config_store.get_setting("network_port") or TRANSPORT_PORT
 
-        # Default is loopback-only, same philosophy as web.py's --host flag.
-        # LAN mode must be opted into explicitly (ENCLAVE_NET_HOST=lan or
-        # the 'network_bind' config setting) — it is NOT implied by anything
-        # web.py does, since this transport used to always bind 0.0.0.0
-        # regardless of the web UI's host setting.
+        # Correction to an earlier decision in this same file: this used to
+        # default to loopback-only, requiring explicit opt-in (network_bind=lan)
+        # to be reachable on the LAN at all. That reasoning didn't hold up —
+        # Discovery (right below) has ALWAYS broadcast your presence and real
+        # LAN IP unconditionally, before and after that change. Restricting
+        # only Transport meant the actual broken state was the DEFAULT one:
+        # other peers correctly discover you and record your real IP, then
+        # every attempt to actually message you gets connection-refused,
+        # because nothing was listening on that interface. Discovery already
+        # gives up whatever privacy loopback-only Transport was trying to
+        # protect, so pairing them inconsistently bought nothing and broke
+        # the app's core feature by default. Confirmed this exact failure
+        # end to end, not just in theory: peer_store had the right ip:port,
+        # the send still failed with ECONNREFUSED.
+        #
+        # Fixed by making the two consistent: participating in LAN discovery
+        # and being reachable on the LAN are now the same decision, not two
+        # independently-configurable ones that can silently contradict each
+        # other. Explicit network_bind=host now means "opt OUT of LAN
+        # entirely" — Discovery doesn't start either, so that state is fully
+        # coherent (no broadcast, no listen) instead of the old half-state.
         bind_mode = (
             os.environ.get("ENCLAVE_NET_HOST")
-            or config_store.get_setting("network_bind", "host")
+            or config_store.get_setting("network_bind", "lan")
         )
-        transport_host = "0.0.0.0" if bind_mode == "lan" else "127.0.0.1"
+        self._lan_enabled = bind_mode != "host"
+        transport_host = "0.0.0.0" if self._lan_enabled else "127.0.0.1"
 
         self._transport = Transport(
             host=transport_host,
