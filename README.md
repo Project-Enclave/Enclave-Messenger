@@ -9,7 +9,23 @@ Part of [Project Enclave](https://projectenclave.dev/)
 curl -sL https://raw.githubusercontent.com/Project-Enclave/setup/main/messenger.sh -o /tmp/enclave-setup.sh && bash /tmp/enclave-setup.sh
 ```
 
-### For Windows,
+### For Windows
+
+#### Powershell
+
+```powershell
+irm https://raw.githubusercontent.com/Project-Enclave/setup/main/messenger.ps1 -OutFile $env:TEMPenclave-setup.ps1; & $env:TEMPenclave-setup.ps1
+```
+
+#### Command prompt 
+
+```bat
+curl -sL https://raw.githubusercontent.com/Project-Enclave/setup/main/messenger.bat -o %TEMP%enclave-setup.bat
+%TEMP%enclave-setup.bat
+```
+
+#### Manual for Windows
+
 ```cmd
 git clone https://github.com/Project-Enclave/Enclave-Messenger
 cd Enclave-Messenger
@@ -20,7 +36,7 @@ python set.py
 python tui.py
 ```
 
-### Alt for linux or macOS,
+### Manual for linux or macOS,
 ```bash
 git clone https://github.com/Project-Enclave/Enclave-Messenger
 cd Enclave-Messenger
@@ -28,7 +44,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python set.py
-python web.py
+python tui.py
 ```
 
 ***
