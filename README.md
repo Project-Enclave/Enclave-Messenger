@@ -68,6 +68,7 @@ Please note that this is a hobby project by a teen, it will have problems and yo
 - Saksham - For support, testing, debugging, UI/UX, and a **lot** more
 - [Signal](https://github.com/signalapp) - For open-sourcing their encryption methods
 - [Silence](https://silence.im) - For the original idea
+- government of manipur - for forcing me to use alternatives like silence and making me make this
 
 ***
 
