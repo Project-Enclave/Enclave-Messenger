@@ -119,7 +119,18 @@ class Node:
 
     def start(self):
         self._transport.start()
-        self._discovery.start()
+        if self._lan_enabled:
+            self._discovery.start()
+        else:
+            # Without this, network_bind=host produced the exact incoherent
+            # half-state the bind_mode fix above exists to prevent, just
+            # inverted: Discovery still broadcasts your presence and real
+            # LAN IP to everyone, while Transport listens on loopback only,
+            # so every peer that discovers you gets connection-refused when
+            # they try to reach you. Opting out of LAN has to mean opting
+            # out of both halves, or it isn't opting out of anything.
+            log.info("[node] LAN discovery disabled (network_bind=host) — "
+                      "not broadcasting or listening for LAN peers")
         if self._dht:
             bootstrap = self._config.get_setting("dht_bootstrap", [])
             self._dht.start(bootstrap_addrs=bootstrap)
@@ -139,7 +150,11 @@ class Node:
         log.info("[node] started — user_id: %s", self._identity["user_id"][:16])
 
     def stop(self):
-        self._discovery.stop()
+        # Discovery.stop() joins its two threads unconditionally, which
+        # would raise if they were never started — so this has to mirror
+        # the guard in start() exactly.
+        if self._lan_enabled:
+            self._discovery.stop()
         self._transport.stop()
         if self._dht:
             self._dht.stop()

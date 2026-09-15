@@ -53,18 +53,31 @@ def main():
         time.sleep(0.3)  # let transport threads bind
 
         # ------------------------------------------------------------
-        # Fix #3: transport must bind loopback by default, not 0.0.0.0
+        # Transport/Discovery bind mode must be COHERENT.
+        #
+        # This assertion is the reverse of what it originally checked,
+        # deliberately. The original "Fix #3" made Transport bind
+        # loopback-only by default, on the reasoning that LAN exposure
+        # should be opt-in. That reasoning was wrong in this specific
+        # codebase: Discovery has always broadcast your presence and
+        # real LAN IP unconditionally, so loopback-only Transport didn't
+        # buy any privacy — it just meant peers discovered you correctly
+        # and then got ECONNREFUSED on every message. That was the
+        # default state, i.e. LAN messaging was broken out of the box.
+        # Real user report confirmed it end to end.
+        #
+        # The invariant that actually matters isn't "which default" but
+        # "both halves agree": if we broadcast, we must listen; if we
+        # opt out, we opt out of both.
         # ------------------------------------------------------------
         check(
-            "Fix #3 — transport defaults to 127.0.0.1 (not 0.0.0.0)",
-            alice._transport._host == "127.0.0.1"
-            if hasattr(alice._transport, "_host") else True,
+            "LAN is enabled by default (so discovery and reachability agree)",
+            alice._lan_enabled is True,
         )
-        # Behavioural proof regardless of internal attr name: bob's socket
-        # should NOT be reachable on any non-loopback address. We can't
-        # easily bind-test without a real second interface in this sandbox,
-        # so we assert the constructed transport_host that was passed in.
-        # (see router.py: transport_host computed from bind_mode, default "host")
+        check(
+            "default transport binds 0.0.0.0, matching what discovery advertises",
+            getattr(alice._transport, "_host", "0.0.0.0") == "0.0.0.0",
+        )
 
         # ------------------------------------------------------------
         # Manually pin Alice <-> Bob as already-discovered contacts

@@ -141,10 +141,81 @@ for name, tport, wport, pw in {profiles_spec!r}:
         shutil.rmtree(tmp_home, ignore_errors=True)
         shutil.rmtree(os.path.join(repo, "storage"), ignore_errors=True)
 
+    test_bind_mode_coherence()
+
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:
         print("FAILED:", FAIL)
     return 0 if not FAIL else 1
+
+
+def test_bind_mode_coherence():
+    """
+    Discovery (broadcasting your presence + real LAN IP) and Transport
+    (actually accepting connections) must always agree. They're derived
+    from one setting for exactly this reason.
+
+    This regressed once already, in the worst possible way: the fix was
+    applied to __init__ (computing _lan_enabled) but not to start()/stop()
+    (actually using it), so the flag existed and did nothing. Everything
+    compiled, every other test passed, and network_bind=host still
+    broadcast your IP to the whole LAN while refusing every connection.
+    A half-applied fix to a two-sided invariant is worse than no fix,
+    because it looks done. Hence this test.
+    """
+    import tempfile as _tf
+    from core.identity.key_manager import IdentityManager
+    from core.storage import ConfigStore, ChatStore, PeerStore
+    from core.network.router import Node
+
+    def mk(label, tport, bind_mode=None):
+        d = os.path.join(_tf.mkdtemp(), label)
+        os.makedirs(d)
+        im = IdentityManager(storage_dir=os.path.join(d, "identity"))
+        im.generate_new_identity()
+        cfg = ConfigStore(base_dir=d)
+        cfg.set_setting("network_port", tport)
+        if bind_mode:
+            cfg.set_setting("network_bind", bind_mode)
+        return Node(im, cfg, PeerStore(base_dir=d), ChatStore(base_dir=d))
+
+    import socket as _socket
+    probe = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    probe.connect(("8.8.8.8", 80))
+    real_ip = probe.getsockname()[0]
+    probe.close()
+
+    def can_connect(ip, port, timeout=1.5):
+        s = _socket.socket()
+        s.settimeout(timeout)
+        try:
+            s.connect((ip, port))
+            return True
+        except Exception:
+            return False
+        finally:
+            s.close()
+
+    n1 = mk("coherence_default", 61301)
+    check("default: LAN enabled", n1._lan_enabled is True)
+    n1.start()
+    time.sleep(0.5)
+    check("default: reachable on the real LAN IP (matches what discovery advertises)",
+          can_connect(real_ip, 61301))
+    n1.stop()
+
+    n2 = mk("coherence_host", 61302, bind_mode="host")
+    check("network_bind=host: LAN disabled", n2._lan_enabled is False)
+    n2.start()
+    time.sleep(0.5)
+    check("host mode: NOT reachable on the real LAN IP",
+          not can_connect(real_ip, 61302))
+    check("host mode: still reachable on loopback (that's the point of the mode)",
+          can_connect("127.0.0.1", 61302))
+    # Would raise RuntimeError joining never-started threads without the
+    # matching guard in stop().
+    n2.stop()
+    check("host mode stops cleanly without a RuntimeError", True)
 
 
 if __name__ == "__main__":
