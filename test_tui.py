@@ -216,11 +216,152 @@ def test_pty_integration():
 
 def main():
     test_pure_logic()
+    test_new_command_parsing()
+    test_overlay_state()
+    test_ip_port_connect()
     test_pty_integration()
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:
         print("FAILED:", FAIL)
     return 0 if not FAIL else 1
+
+
+
+
+# ---------------------------------------------------------------------------
+# Additions: command parsing for the new screens, and the ip:port handshake.
+# ---------------------------------------------------------------------------
+
+def test_new_command_parsing():
+    from tui import parse_command
+    check(":profiles parses", parse_command("profiles") == ("profiles", None))
+    check(":settings parses", parse_command("settings") == ("settings", None))
+    check(":help parses", parse_command("help") == ("help", None))
+    check(":? parses as help", parse_command("?") == ("help", None))
+    check(":new-profile with a name parses",
+          parse_command("new-profile work") == ("new_profile", "work"))
+    check(":new-profile with no name parses (prompts interactively)",
+          parse_command("new-profile") == ("new_profile", ""))
+    # Ordering trap: ":new-profile x" must NOT be read as new_chat("-profile x").
+    check(":new-profile is not mis-parsed as :new",
+          parse_command("new-profile x")[0] == "new_profile")
+    check(":new still parses as new_chat",
+          parse_command("new abc123") == ("new_chat", "abc123"))
+
+
+def test_overlay_state():
+    from tui import AppState, SETTINGS_FIELDS
+    s = AppState()
+    check("no overlay by default", s.overlay is None)
+    s.open_overlay("settings")
+    check("open_overlay sets the overlay and resets index",
+          s.overlay == "settings" and s.overlay_idx == 0)
+    s.move_overlay_selection(1, len(SETTINGS_FIELDS))
+    check("overlay selection moves", s.overlay_idx == 1)
+    s.move_overlay_selection(-99, len(SETTINGS_FIELDS))
+    check("overlay selection clamps at 0", s.overlay_idx == 0)
+    s.move_overlay_selection(99, len(SETTINGS_FIELDS))
+    check("overlay selection clamps at the end", s.overlay_idx == len(SETTINGS_FIELDS) - 1)
+    s.move_overlay_selection(1, 0)
+    check("empty overlay list doesn't crash", s.overlay_idx == 0)
+    s.close_overlay()
+    check("close_overlay clears it", s.overlay is None)
+
+    # Opening an overlay must not disturb the chat view underneath.
+    s2 = AppState()
+    s2.chats = [{"id": "a"}, {"id": "b"}]
+    s2.selected_idx = 1
+    s2.current_chat_id = "b"
+    s2.open_overlay("help")
+    s2.close_overlay()
+    check("underlying chat state survives an overlay round trip",
+          s2.selected_idx == 1 and s2.current_chat_id == "b")
+
+
+def test_ip_port_connect():
+    """
+    Manual ip:port peering. Deliberately run with network_bind=host on
+    both nodes so LAN discovery is fully disabled — if this passes, the
+    connection genuinely came from the /identity handshake and not from
+    discovery quietly finding them anyway.
+    """
+    import tempfile as _tf
+    from core.identity.key_manager import IdentityManager
+    from core.storage import ConfigStore, ChatStore, PeerStore
+    from core.network.router import Node
+    from main import classify_address
+
+    check("classify_address now recognises ip:port",
+          classify_address("192.168.0.5:4000") == ("192.168.0.5:4000", "ip"))
+
+    tmp = _tf.mkdtemp()
+
+    def mk(label, tport):
+        d = os.path.join(tmp, label)
+        os.makedirs(d)
+        im = IdentityManager(storage_dir=os.path.join(d, "identity"))
+        im.generate_new_identity()
+        cfg = ConfigStore(base_dir=d)
+        cfg.set_setting("network_port", tport)
+        cfg.set_setting("network_bind", "host")
+        return Node(im, cfg, PeerStore(base_dir=d), ChatStore(base_dir=d))
+
+    alice = mk("ipc_alice", 62101)
+    bob = mk("ipc_bob", 62102)
+    alice.start()
+    bob.start()
+    time.sleep(0.5)
+
+    try:
+        check("alice starts knowing nobody (discovery is off)", len(alice._peers.all()) == 0)
+
+        peer = alice.connect_to_address("127.0.0.1:62102")
+        check("connect_to_address resolves a peer", peer is not None)
+        check("it resolved the right identity",
+              peer and peer["user_id"] == bob._identity["user_id"])
+        check("it stored the real x25519 key (so encryption can work)",
+              peer and peer["x25519_pub"] == bob._identity["x25519_pub"])
+        check("an http:// prefix is tolerated",
+              alice.connect_to_address("http://127.0.0.1:62102") is not None)
+
+        bob._peers.upsert(user_id=alice._identity["user_id"], username="alice",
+                          ed25519_pub=alice._identity["ed25519_pub"],
+                          x25519_pub=alice._identity["x25519_pub"],
+                          ip="127.0.0.1", port=62101)
+        sent = alice.send(bob._identity["user_id"], "hello via manual ip:port")
+        time.sleep(0.4)
+        check("a message actually sends to a manually-added peer", sent)
+        check("and the peer receives it",
+              len(bob._chats.load_messages(alice._identity["user_id"])) == 1)
+
+        try:
+            alice.connect_to_address("not-an-address")
+            check("a malformed address raises", False)
+        except ValueError:
+            check("a malformed address raises", True)
+
+        check("an address with nothing listening returns None",
+              alice.connect_to_address("127.0.0.1:62999") is None)
+
+        try:
+            alice.connect_to_address("127.0.0.1:62101")
+            check("connecting to yourself is rejected", False)
+        except ValueError as e:
+            check("connecting to yourself is rejected", "itself" in str(e))
+
+        # Same key-pinning rule discovery uses: typed by hand is not more
+        # trustworthy than broadcast.
+        alice._peers.upsert(user_id=bob._identity["user_id"], username="bob",
+                            ed25519_pub="DIFFERENT", x25519_pub="DIFFERENT",
+                            ip="9.9.9.9", port=1)
+        try:
+            alice.connect_to_address("127.0.0.1:62102")
+            check("a key change at a manual address is refused", False)
+        except ValueError as e:
+            check("a key change at a manual address is refused", "different keys" in str(e))
+    finally:
+        alice.stop()
+        bob.stop()
 
 
 if __name__ == "__main__":

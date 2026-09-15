@@ -349,6 +349,24 @@ def new_chat():
     except ValueError as e:
         return err(str(e), 400)
 
+    if addr_type == "ip":
+        # An ip:port isn't a chat_id — we have to ask that address who it
+        # is first (GET /identity), then chat with whatever identity comes
+        # back. Needs a running node, since it's a live network round trip.
+        node = app_core.get_node()
+        if node is None:
+            return err("start the node first — connecting to an address needs it running", 409)
+        try:
+            peer = node.connect_to_address(address)
+        except ValueError as e:
+            return err(str(e), 400)
+        except Exception as e:
+            return err(f"could not connect to {address}: {e}", 502)
+        if not peer:
+            return err(f"no enclave node answered at {address}", 404)
+        return jsonify({"chat_id": peer["user_id"], "type": "ip",
+                        "username": peer.get("username", "")})
+
     if addr_type == "node" and name:
         existing = app_core.peers.get(chat_id)
         if existing and not existing.get("username"):
@@ -585,9 +603,10 @@ def profiles_create():
 
     process_started = False
     process_error = None
+    process_pid = None
     try:
         repo_dir = os.path.dirname(os.path.abspath(__file__))
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, os.path.join(repo_dir, "web.py"),
              "--profile", name, "--port", str(profile["web_port"])],
             cwd=repo_dir,
@@ -596,10 +615,18 @@ def profiles_create():
                                       # keep running long after this response returns
         )
         process_started = True
+        process_pid = proc.pid
+        # Print to the terminal that launched THIS server, so there's a
+        # durable record of the child's pid: the browser status line is
+        # gone on the next page load, and you need that pid to stop the
+        # profile later. Same behaviour as tui.py's :new-profile.
+        print(f"[enclave] started profile '{name}' on port {profile['web_port']} "
+              f"— pid {proc.pid}", flush=True)
     except OSError as e:
         process_error = str(e)
 
     profile["process_started"] = process_started
+    profile["pid"] = process_pid
     if not process_started:
         profile["process_error"] = (
             f"{process_error} — identity was created successfully, but you'll need "

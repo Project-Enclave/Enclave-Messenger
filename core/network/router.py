@@ -89,6 +89,10 @@ class Node:
             host=transport_host,
             port=port,
             on_message=self._on_inbound,
+            # Serves GET /identity so another node can resolve a manual
+            # ip:port into a real identity. Only public material — exactly
+            # what discovery already broadcasts over the LAN anyway.
+            identity_provider=lambda: dict(self._identity),
         )
         self._transport_port = port
         self._discovery = Discovery(
@@ -159,6 +163,75 @@ class Node:
         if self._dht:
             self._dht.stop()
         log.info("[node] stopped")
+
+    # ------------------------------------------------------------------
+    # Manual connect (ip:port)
+    # ------------------------------------------------------------------
+
+    def connect_to_address(self, address: str) -> dict | None:
+        """
+        Add a peer by raw "ip:port" — for when discovery can't reach them
+        (different subnet, multicast blocked by the network, a VPS, a
+        device you know the address of but which never showed up in
+        discovery).
+
+        Asks that address who it is via GET /identity, then stores the
+        answer. Returns the peer dict, or None if nothing enclave-shaped
+        answered.
+
+        Key pinning is identical to discovery.py's: if we already know
+        this user_id with DIFFERENT keys, the new keys are refused rather
+        than silently overwriting a trusted mapping. Being typed in by
+        hand doesn't make an address more trustworthy than a broadcast —
+        someone can just as easily give you the wrong one — so the same
+        rule applies. Only the ADDRESS is updated for an already-known
+        peer, which is the legitimate use (peer moved, same identity).
+        """
+        address = (address or "").strip()
+        if address.startswith("http://"):
+            address = address[len("http://"):]
+        host, _, port_s = address.partition(":")
+        if not host or not port_s.isdigit():
+            raise ValueError("expected ip:port, e.g. 192.168.0.102:43110")
+        port = int(port_s)
+
+        info = self._transport.fetch_identity(f"http://{host}:{port}")
+        if not info:
+            return None
+
+        peer_id = info["user_id"]
+        if peer_id == self._identity["user_id"]:
+            raise ValueError("that address is this node itself")
+
+        new_ed, new_x = info["ed25519_pub"], info["x25519_pub"]
+        existing = self._peers.get(peer_id)
+        if existing and existing.get("ed25519_pub") and existing.get("x25519_pub"):
+            if new_ed != existing["ed25519_pub"] or new_x != existing["x25519_pub"]:
+                log.warning(
+                    "[node] KEY CHANGE for known peer %s at manually-entered "
+                    "address %s — refusing (possible impersonation). Delete "
+                    "and re-add the contact if this is expected.",
+                    peer_id[:12], address,
+                )
+                raise ValueError(
+                    "that address claims to be a contact you already have, "
+                    "but with different keys — refusing to overwrite them"
+                )
+
+        # The node's own advertised transport port wins over the port we
+        # happened to dial, so a peer reachable via a forwarded/proxied
+        # port still records the port it actually listens on.
+        peer = self._peers.upsert(
+            user_id=peer_id,
+            username=info.get("username", ""),
+            ed25519_pub=new_ed,
+            x25519_pub=new_x,
+            ip=host,
+            port=info.get("port") or port,
+        )
+        log.info("[node] connected to %s via manual address %s", peer_id[:12], address)
+        self._on_peer_found(peer)
+        return peer
 
     # ------------------------------------------------------------------
     # Send

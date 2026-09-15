@@ -75,7 +75,7 @@ print(im.get_user_id())
         check("web.py server came up", up)
 
         r = requests.get(f"{base}/")
-        token = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r.text).group(1)
+        token = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r.text).group(1)
 
         r = requests.post(f"{base}/api/node/start", json={"passphrase": "alicepass123"},
                            headers={"X-Enclave-CSRF": token})

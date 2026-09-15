@@ -42,21 +42,94 @@ Command mode (:):
     :peers                     peers view
     :chats                      chats view
     :new <address>                start/open a chat — accepts a node id,
-                                   phone number, or bluetooth MAC (same
-                                   classification web.py's "+ new chat"
-                                   modal uses, see main.py's
+                                   phone number, bluetooth MAC, or a raw
+                                   ip:port (same classification web.py's
+                                   "+ new chat" modal uses, see main.py's
                                    classify_address())
+    :profiles                      list profiles on this device
+    :new-profile <name>              create a profile: prompts for a
+                                      passphrase, creates its identity, and
+                                      starts its web UI in the background
+    :settings                          view/edit this profile's settings
+    :help  :?                           key reference
+
+Press ? in normal mode for the same help screen.
 """
 
 import argparse
 import curses
 import getpass
+import logging
+import os
+import subprocess
 import sys
 import time
 
 import main as app_core
+from core import profiles as _profiles
 
 REFRESH_INTERVAL = 2.0  # seconds between background polls for new messages/peers
+
+
+def _silence_console_logging():
+    """
+    core/storage/log_store.py attaches a console StreamHandler (WARNING+)
+    to the root logger. That's correct for main.py/web.py — stderr output
+    there is harmless. It is NOT harmless here: curses owns the whole
+    terminal, so anything else writing to stdout/stderr corrupts the
+    display outright.
+
+    This was a real reported bug, not a hypothetical: a single failed
+    send printed "[transport] send failed to ... Connection refused"
+    straight into the middle of the chat input line. Mute the console
+    handler only — the file handler stays, so logs are still on disk for
+    debugging.
+    """
+    for h in logging.getLogger().handlers:
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            h.setLevel(logging.CRITICAL + 1)
+
+
+# Editable settings, rendered by the :settings screen. "kind" drives how
+# Enter behaves: text prompts for a value, bool toggles immediately.
+SETTINGS_FIELDS = [
+    {"key": "username",      "label": "display name",             "kind": "text"},
+    {"key": "network_bind",  "label": "LAN mode (lan / host)",    "kind": "text"},
+    {"key": "dht_enabled",   "label": "DHT (internet discovery)", "kind": "bool"},
+    {"key": "dht_bootstrap", "label": "DHT bootstrap nodes",      "kind": "list"},
+    {"key": "dht_public_ip", "label": "DHT public IP override",   "kind": "text"},
+]
+
+HELP_TEXT = [
+    "NORMAL mode",
+    "  j / k / Down / Up    move selection",
+    "  Enter                 open chat  (peers view: start a chat)",
+    "  Tab                   switch focus: list <-> messages",
+    "  i                     compose a message (needs an open chat)",
+    "  p / c                 peers view / chats view",
+    "  r                     refresh now",
+    "  ?                     this help",
+    "  :                     command mode",
+    "  q                     quit",
+    "",
+    "INSERT mode",
+    "  type, Enter sends, Esc cancels (discards the draft)",
+    "",
+    "COMMAND mode  (:)",
+    "  :q  :quit             quit",
+    "  :refresh              refresh chats/peers/messages now",
+    "  :peers  :chats        switch views",
+    "  :new <address>        start/open a chat. accepts a node id, a",
+    "                        phone number, a bluetooth MAC, or ip:port",
+    "  :profiles             list every profile on this device",
+    "  :new-profile <name>   create another profile — prompts for a",
+    "                        passphrase, creates its identity, and starts",
+    "                        its web UI in the background",
+    "  :settings             view and edit this profile's settings",
+    "  :help  :?             this help",
+    "",
+    "press any key to close",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +208,29 @@ class AppState:
         self.passphrase = ""
         self.running = True
 
+        # Full-screen overlays: None | "help" | "profiles" | "settings".
+        # These take over both drawing and key handling while open, so the
+        # underlying chat/peer navigation state is left completely alone
+        # and is exactly as it was when the overlay closes.
+        self.overlay = None
+        self.overlay_idx = 0
+        self.profiles: list = []
+        self.settings_values: dict = {}
+
+    def open_overlay(self, name: str):
+        self.overlay = name
+        self.overlay_idx = 0
+
+    def close_overlay(self):
+        self.overlay = None
+        self.overlay_idx = 0
+
+    def move_overlay_selection(self, delta: int, length: int):
+        if length <= 0:
+            self.overlay_idx = 0
+            return
+        self.overlay_idx = max(0, min(length - 1, self.overlay_idx + delta))
+
     def visible_list(self) -> list:
         return self.peers if self.view == "peers" else self.chats
 
@@ -205,7 +301,12 @@ class AppState:
 def parse_command(cmd: str):
     """
     Returns (action, arg). action is one of:
-    "quit", "refresh", "view_chats", "view_peers", "new_chat", "unknown"
+    "quit", "refresh", "view_chats", "view_peers", "new_chat",
+    "profiles", "new_profile", "settings", "help", "unknown"
+
+    NOTE on ordering: "new-profile" must be checked before "new ", or
+    ":new-profile foo" would parse as new_chat("-profile foo"). Tested
+    for explicitly in test_tui.py rather than left to reviewer vigilance.
     """
     cmd = cmd.strip()
     if cmd in ("q", "quit"):
@@ -216,6 +317,14 @@ def parse_command(cmd: str):
         return ("view_chats", None)
     if cmd == "peers":
         return ("view_peers", None)
+    if cmd == "profiles":
+        return ("profiles", None)
+    if cmd == "settings":
+        return ("settings", None)
+    if cmd in ("help", "?"):
+        return ("help", None)
+    if cmd.startswith("new-profile"):
+        return ("new_profile", cmd[len("new-profile"):].strip())
     if cmd.startswith("new "):
         return ("new_chat", cmd[4:].strip())
     return ("unknown", cmd)
@@ -258,29 +367,43 @@ class TUIApp:
 
     # ---- masked passphrase prompt (used before the main loop starts) ----
 
-    def _prompt_passphrase(self, label: str):
+    def _prompt_text(self, label: str, mask: bool = False, initial: str = ""):
+        """
+        Modal single-line input. Returns the string, or None if cancelled
+        with Esc. mask=True renders asterisks (passphrases); everything
+        else shows what you typed, which matters for settings where you
+        need to see the value you're editing.
+        """
         h, w = self.scr.getmaxyx()
-        box = curses.newwin(3, min(60, w - 4), h // 2 - 1, max(0, (w - 60) // 2))
+        box_w = min(70, max(20, w - 4))
+        box = curses.newwin(3, box_w, h // 2 - 1, max(0, (w - box_w) // 2))
         box.keypad(True)
-        buf = ""
+        buf = initial
         curses.curs_set(1)
-        while True:
-            box.erase()
-            box.border()
-            box.addstr(0, 2, f" {label} ")
-            box.addstr(1, 2, "*" * len(buf))
-            box.refresh()
-            ch = box.getch()
-            if ch in (curses.KEY_ENTER, 10, 13):
-                curses.curs_set(0)
-                return buf
-            if ch == 27:  # Esc
-                curses.curs_set(0)
-                return None
-            if ch in (curses.KEY_BACKSPACE, 127, 8):
-                buf = buf[:-1]
-            elif 32 <= ch <= 126:
-                buf += chr(ch)
+        try:
+            while True:
+                box.erase()
+                box.border()
+                box.addstr(0, 2, f" {truncate(label, box_w - 6)} ")
+                shown = "*" * len(buf) if mask else buf
+                # Keep the tail visible when the value is longer than the box.
+                shown = shown[-(box_w - 4):]
+                box.addstr(1, 2, shown)
+                box.refresh()
+                ch = box.getch()
+                if ch in (curses.KEY_ENTER, 10, 13):
+                    return buf
+                if ch == 27:  # Esc
+                    return None
+                if ch in (curses.KEY_BACKSPACE, 127, 8):
+                    buf = buf[:-1]
+                elif 32 <= ch <= 126:
+                    buf += chr(ch)
+        finally:
+            curses.curs_set(0)
+
+    def _prompt_passphrase(self, label: str):
+        return self._prompt_text(label, mask=True)
 
     def _message(self, text: str, pair=0, pause=1.2):
         h, w = self.scr.getmaxyx()
@@ -348,12 +471,140 @@ class TUIApp:
         self.state.set_messages(chat_id, msgs)
         self.state.status = ""
 
+    # ---- profiles / settings data ----
+
+    def _load_profiles(self):
+        try:
+            self.state.profiles = _profiles.list_profiles()
+        except Exception as e:
+            self.state.profiles = []
+            self.state.status = f"could not read profiles: {e}"
+
+    def _load_settings(self):
+        cfg = app_core.config
+        self.state.settings_values = {
+            "username":      cfg.username or "",
+            "network_bind":  cfg.get_setting("network_bind", "lan"),
+            "dht_enabled":   bool(cfg.get_setting("dht_enabled", False)),
+            "dht_bootstrap": cfg.get_setting("dht_bootstrap", []) or [],
+            "dht_public_ip": cfg.get_setting("dht_public_ip", "") or "",
+        }
+
+    def _edit_selected_setting(self):
+        field = SETTINGS_FIELDS[self.state.overlay_idx]
+        key, kind = field["key"], field["kind"]
+        cfg = app_core.config
+
+        if kind == "bool":
+            new_value = not self.state.settings_values.get(key)
+            cfg.set_setting(key, new_value)
+            self.state.status = f"{field['label']}: {'on' if new_value else 'off'} (applies on next node start)"
+        else:
+            current = self.state.settings_values.get(key)
+            initial = ", ".join(current) if kind == "list" and current else (str(current) if current else "")
+            entered = self._prompt_text(field["label"], initial=initial)
+            if entered is None:
+                return  # cancelled — leave the stored value untouched
+            entered = entered.strip()
+            if kind == "list":
+                items = [x.strip() for x in entered.replace("\n", ",").split(",") if x.strip()]
+                cfg.set_setting(key, items)
+            elif key == "username":
+                cfg.username = entered
+            else:
+                cfg.set_setting(key, entered or None)
+            self.state.status = f"{field['label']} updated (applies on next node start)"
+
+        self._load_settings()
+
+    def _create_profile_interactive(self, name: str):
+        """
+        :new-profile — the TUI counterpart to the web UI's profile
+        creation. Same shared backend call (create_profile_with_identity),
+        so both surfaces create profiles identically, and same follow-up:
+        actually start the new profile's web UI so it's usable
+        immediately rather than just being a registry entry.
+        """
+        name = (name or "").strip()
+        if not name:
+            entered = self._prompt_text("new profile name")
+            if entered is None:
+                return
+            name = entered.strip()
+        if not name:
+            self.state.status = "profile name required"
+            return
+
+        p1 = self._prompt_passphrase(f"passphrase for '{name}'")
+        if p1 is None:
+            return
+        if not p1:
+            self.state.status = "passphrase required — a profile with no identity can't be unlocked"
+            return
+        p2 = self._prompt_passphrase("confirm passphrase")
+        if p2 is None:
+            return
+        if p1 != p2:
+            self.state.status = "passphrases did not match — profile not created"
+            return
+
+        try:
+            profile = app_core.create_profile_with_identity(name=name, passphrase=p1)
+        except ValueError as e:
+            self.state.status = str(e)
+            return
+        except Exception as e:
+            self.state.status = f"profile registered but identity creation failed: {e}"
+            return
+
+        pid, err = self._spawn_profile_web(name, profile.get("web_port"))
+        if pid:
+            self.state.status = (f"created '{name}' — web UI on :{profile.get('web_port')} "
+                                  f"(pid {pid})")
+        else:
+            self.state.status = (f"created '{name}', but couldn't start it: {err} — "
+                                  f"run: python3 web.py --profile {name} "
+                                  f"--port {profile.get('web_port')}")
+        self._load_profiles()
+
+    def _spawn_profile_web(self, name: str, web_port):
+        """
+        Starts a profile's web UI as a detached background process.
+        Returns (pid, None) or (None, error_string).
+
+        The PID is also printed to the ORIGINAL terminal's stdout (the one
+        that launched this TUI) so there's a record of it after the TUI
+        exits and the curses screen is gone — you need that pid to stop
+        the thing later, and a status line that disappears on the next
+        keypress is no use for that.
+        """
+        try:
+            repo_dir = os.path.dirname(os.path.abspath(__file__))
+            proc = subprocess.Popen(
+                [sys.executable, os.path.join(repo_dir, "web.py"),
+                 "--profile", name, "--port", str(web_port)],
+                cwd=repo_dir,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                # Goes to the real terminal, not the curses screen. Harmless
+                # here because curses redraws the full screen every loop
+                # iteration anyway, and this lands in the scrollback that
+                # survives after the TUI exits.
+                print(f"[enclave] started profile '{name}' on port {web_port} — pid {proc.pid}",
+                      file=sys.__stdout__, flush=True)
+            except Exception:
+                pass
+            return proc.pid, None
+        except OSError as e:
+            return None, str(e)
+
     # ---- rendering ----
 
     def _draw(self):
         self.scr.erase()
         h, w = self.scr.getmaxyx()
-        list_w = max(20, min(32, w // 3))
 
         status = app_core.get_identity_status()
         header = f" project enclave — {status.get('username') or status.get('node_id', '')[:12]} "
@@ -363,13 +614,80 @@ class TUIApp:
             self.scr.addstr(0, max(0, w - len(mode_tag) - 1), mode_tag, self._c(5) | curses.A_BOLD)
         self.scr.hline(1, 0, curses.ACS_HLINE, w)
 
-        self._draw_list(1, 0, h - 3, list_w)
-        self.scr.vline(2, list_w, curses.ACS_VLINE, h - 4)
-        self._draw_main(2, list_w + 1, h - 4, w - list_w - 1)
+        if self.state.overlay:
+            self._draw_overlay(2, h - 4, w)
+        else:
+            list_w = max(20, min(32, w // 3))
+            self._draw_list(1, 0, h - 3, list_w)
+            self.scr.vline(2, list_w, curses.ACS_VLINE, h - 4)
+            self._draw_main(2, list_w + 1, h - 4, w - list_w - 1)
 
         self.scr.hline(h - 2, 0, curses.ACS_HLINE, w)
         self._draw_bottom(h - 1, w)
         self.scr.refresh()
+
+    # ---- overlays: help / profiles / settings ----
+
+    def _draw_overlay(self, top, height, width):
+        name = self.state.overlay
+        if name == "help":
+            self._draw_help(top, height, width)
+        elif name == "profiles":
+            self._draw_profiles(top, height, width)
+        elif name == "settings":
+            self._draw_settings(top, height, width)
+
+    def _draw_help(self, top, height, width):
+        self.scr.addstr(top, 1, " help ", self._c(2) | curses.A_BOLD)
+        for i, line in enumerate(HELP_TEXT):
+            row = top + 2 + i
+            if row >= top + height:
+                break
+            # Section headers (no leading spaces, non-empty) get the accent
+            # colour so the three modes are scannable at a glance.
+            attr = self._c(1) | curses.A_BOLD if line and not line.startswith(" ") else self._c(0)
+            self.scr.addstr(row, 2, truncate(line, width - 3), attr)
+
+    def _draw_profiles(self, top, height, width):
+        self.scr.addstr(top, 1, " profiles ", self._c(2) | curses.A_BOLD)
+        hint = "Enter: copy launch command   n: new profile   Esc: close"
+        self.scr.addstr(top + 1, 2, truncate(hint, width - 3), self._c(2))
+
+        if not self.state.profiles:
+            self.scr.addstr(top + 3, 2, "(no profiles found)", self._c(2))
+            return
+
+        active = app_core.get_identity_status().get("profile")
+        for i, p in enumerate(self.state.profiles):
+            row = top + 3 + i
+            if row >= top + height:
+                break
+            name = p.get("name", "?")
+            mark = " (this one)" if name == active else ""
+            label = (f" {name}{mark}   web :{p.get('web_port', '?')}"
+                      f"   transport :{p.get('transport_port', '?')}")
+            attr = curses.A_REVERSE if i == self.state.overlay_idx else self._c(0)
+            self.scr.addstr(row, 1, truncate(label, width - 2).ljust(width - 2), attr)
+
+    def _draw_settings(self, top, height, width):
+        self.scr.addstr(top, 1, " settings ", self._c(2) | curses.A_BOLD)
+        hint = "Enter: edit / toggle   Esc: close   (applies on next node start)"
+        self.scr.addstr(top + 1, 2, truncate(hint, width - 3), self._c(2))
+
+        for i, field in enumerate(SETTINGS_FIELDS):
+            row = top + 3 + i
+            if row >= top + height:
+                break
+            raw = self.state.settings_values.get(field["key"])
+            if field["kind"] == "bool":
+                shown = "on" if raw else "off"
+            elif field["kind"] == "list":
+                shown = ", ".join(raw) if raw else "(none)"
+            else:
+                shown = str(raw) if raw else "(not set)"
+            label = f" {field['label']:<32} {shown}"
+            attr = curses.A_REVERSE if i == self.state.overlay_idx else self._c(0)
+            self.scr.addstr(row, 1, truncate(label, width - 2).ljust(width - 2), attr)
 
     def _draw_list(self, top, left, height, width):
         items = self.state.visible_list()
@@ -429,14 +747,44 @@ class TUIApp:
         elif self.state.status:
             self.scr.addstr(row, 0, truncate(self.state.status, w - 1), self._c(3))
         else:
-            hint = "j/k move  Enter open  i compose  p peers  c chats  : cmd  q quit"
+            hint = "j/k move  Enter open  i compose  p peers  c chats  ? help  : cmd  q quit"
             self.scr.addstr(row, 0, truncate(hint, w - 1), self._c(2))
 
     # ---- input handling ----
 
+    def _handle_overlay(self, ch):
+        """
+        Overlays own all key input while open, so normal-mode navigation
+        can't fire underneath them. Esc (and q) always closes.
+        """
+        s = self.state
+        if s.overlay == "help":
+            s.close_overlay()  # help closes on any key, as its footer says
+            return
+
+        length = (len(s.profiles) if s.overlay == "profiles" else len(SETTINGS_FIELDS))
+
+        if ch in (27, ord("q")):
+            s.close_overlay()
+        elif ch in (ord("j"), curses.KEY_DOWN):
+            s.move_overlay_selection(1, length)
+        elif ch in (ord("k"), curses.KEY_UP):
+            s.move_overlay_selection(-1, length)
+        elif ch in (curses.KEY_ENTER, 10, 13):
+            if s.overlay == "settings":
+                self._edit_selected_setting()
+            elif s.overlay == "profiles" and s.profiles:
+                p = s.profiles[s.overlay_idx]
+                s.status = (f"python3 web.py --profile {p.get('name')} "
+                             f"--port {p.get('web_port')}")
+        elif ch == ord("n") and s.overlay == "profiles":
+            self._create_profile_interactive("")
+
     def _handle_normal(self, ch):
         s = self.state
-        if ch in (ord("j"), curses.KEY_DOWN):
+        if ch == ord("?"):
+            s.open_overlay("help")
+        elif ch in (ord("j"), curses.KEY_DOWN):
             if s.focus == "messages":
                 s.scroll_messages(1)
             else:
@@ -517,18 +865,54 @@ class TUIApp:
             s.set_view("peers")
         elif action == "new_chat":
             try:
-                chat_id, _type = app_core.classify_address(arg)
-                self._open_chat(chat_id)
-                s.view = "chats"
-                s.status = ""
+                chat_id, addr_type = app_core.classify_address(arg)
+                if addr_type == "ip":
+                    # ip:port needs a live round trip to learn who's there
+                    # before a chat means anything — see _connect_by_address.
+                    self._connect_by_address(chat_id)
+                else:
+                    self._open_chat(chat_id)
+                    s.view = "chats"
+                    s.status = ""
             except ValueError as e:
                 s.status = str(e)
+        elif action == "profiles":
+            self._load_profiles()
+            s.open_overlay("profiles")
+        elif action == "new_profile":
+            self._create_profile_interactive(arg)
+        elif action == "settings":
+            self._load_settings()
+            s.open_overlay("settings")
+        elif action == "help":
+            s.open_overlay("help")
         else:
             s.status = f"unknown command: {cmd}"
+
+    def _connect_by_address(self, address: str):
+        """:new <ip:port> — resolve a manual address into a real peer."""
+        s = self.state
+        node = app_core.get_node()
+        if node is None:
+            s.status = "node isn't running — can't connect to an address yet"
+            return
+        try:
+            peer = node.connect_to_address(address)
+        except Exception as e:
+            s.status = f"could not connect to {address}: {e}"
+            return
+        if not peer:
+            s.status = f"no enclave node answered at {address}"
+            return
+        self._refresh(force=True)
+        self._open_chat(peer["user_id"])
+        s.view = "chats"
+        s.status = f"connected to {peer.get('username') or peer['user_id'][:12]}"
 
     # ---- main loop ----
 
     def run(self):
+        _silence_console_logging()
         curses.curs_set(0)
         self._setup_colors()
         self.scr.keypad(True)
@@ -545,7 +929,11 @@ class TUIApp:
                 if ch == curses.KEY_RESIZE:
                     continue
                 if ch != -1:
-                    if self.state.mode == "normal":
+                    # Overlays intercept everything so the chat view
+                    # underneath can't react to keys meant for them.
+                    if self.state.overlay:
+                        self._handle_overlay(ch)
+                    elif self.state.mode == "normal":
                         self._handle_normal(ch)
                     elif self.state.mode == "insert":
                         self._handle_insert(ch)

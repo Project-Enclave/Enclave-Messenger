@@ -60,7 +60,7 @@ for name, tport, wport, pw in [("alice", 59961, 59971, "p1"), ("bob", 59962, 599
 
             base = f"http://127.0.0.1:{port}"
             r = requests.get(f"{base}/")
-            match = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r.text)
+            match = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r.text)
             if not match:
                 ids[name] = None
                 continue

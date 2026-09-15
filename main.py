@@ -305,17 +305,18 @@ def classify_address(address: str) -> tuple[str, str]:
         return address, "phone"
 
     if _IP_PORT_RE.match(address):
-        # Deliberately not faked as working: there's no peer-handshake
-        # protocol in this codebase for "here's my IP, exchange keys with
-        # me." Peers are only known via LAN discovery broadcast or by
-        # already being in the peer list.
-        raise ValueError(
-            "direct IP:port connect isn't implemented — peers are found "
-            "via LAN discovery broadcast, not a manual address"
-        )
+        # This used to be rejected outright, because there genuinely was
+        # no way to learn who was at an address — and a chat_id has to be
+        # a real user_id for encryption to work, so pretending otherwise
+        # would have produced a chat that could never send anything.
+        # There's now a real handshake: GET /identity on the transport
+        # server (core/network/transport.py), consumed by
+        # Node.connect_to_address(). The address is NOT a chat_id, so it's
+        # returned as-is with type "ip" and the caller resolves it.
+        return address, "ip"
 
     raise ValueError("unrecognised address — expected a node id, phone "
-                      "number, or bluetooth MAC")
+                      "number, bluetooth MAC, or ip:port")
 
 
 def get_identity_status() -> dict:

@@ -59,7 +59,7 @@ def main():
         check("parent web.py came up", up)
 
         r = requests.get(f"{base}/")
-        token = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r.text).group(1)
+        token = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r.text).group(1)
         headers = {"X-Enclave-CSRF": token}
 
         # --- Reproduce the exact original bug: no passphrase field ---
@@ -95,7 +95,7 @@ def main():
         # --- Can the passphrase we gave it actually unlock it? ---
         if child_up:
             r2 = requests.get(f"{child_base}/")
-            child_token = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r2.text).group(1)
+            child_token = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r2.text).group(1)
             r3 = requests.post(f"{child_base}/api/node/start",
                                json={"passphrase": "testpass456"},
                                headers={"X-Enclave-CSRF": child_token})

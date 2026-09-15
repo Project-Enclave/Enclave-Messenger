@@ -343,9 +343,16 @@ def main():
             check("new-chat: phone number accepted as-is",
                   r.status_code == 200 and r.get_json()["chat_id"] == "+919876543210")
 
+            # ip:port used to be rejected outright (no handshake existed, so
+            # a chat_id couldn't be derived). There's now a real one — GET
+            # /identity on the transport server. With no node running in
+            # this test, the route should say so (409) rather than pretend
+            # it worked or fall back to the old "not implemented" 400.
+            # The full working path is covered in test_tui.py's
+            # test_ip_port_connect(), which uses two live nodes.
             r = new_chat("192.168.1.50:5001")
-            check("new-chat: IP:port honestly rejected, not faked",
-                  r.status_code == 400)
+            check("new-chat: ip:port is accepted as a form, and reports the node isn't running",
+                  r.status_code == 409)
 
             r = new_chat("garbage!!")
             check("new-chat: unrecognised format rejected", r.status_code == 400)
