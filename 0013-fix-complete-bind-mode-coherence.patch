@@ -1,0 +1,233 @@
+From 87ea3ef2eccc0cbe66a9e916235dde966b6878e3 Mon Sep 17 00:00:00 2001
+From: Claude Code Review <review@local>
+Date: Tue, 15 Sep 2026 10:56:46 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20complete=20the=20bind-mode=20coherence?=
+ =?UTF-8?q?=20fix=20=E2=80=94=20the=20half=20that=20was=20missing=20actual?=
+ =?UTF-8?q?ly=20mattered?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Your router commit (2e73129) fixed the __init__ half: bind_mode now
+defaults to "lan", _lan_enabled gets computed, Transport binds
+0.0.0.0. That's the part that unbreaks LAN messaging, and it works.
+
+But _lan_enabled was never actually USED anywhere. start() still called
+self._discovery.start() unconditionally, so `network_bind=host` —
+the explicit "I don't want to be on the LAN" setting — still broadcast
+your presence and your real LAN IP to every device on the network,
+while Transport listened on loopback only. Every peer that discovered
+you would then get ECONNREFUSED. That's the same incoherent half-state
+the fix exists to eliminate, just inverted: instead of "discoverable
+but unreachable" being the default, it became "discoverable but
+unreachable" for anyone who explicitly opted out.
+
+A half-applied fix to a two-sided invariant is worse than no fix,
+because everything compiles, every existing test passes, and the flag
+sitting there in __init__ makes it look done.
+
+Completed it:
+- start() only starts Discovery when _lan_enabled, and logs plainly
+  when it doesn't.
+- stop() mirrors that guard — Discovery.stop() joins its two threads
+  unconditionally, so calling it on a never-started Discovery raises
+  RuntimeError. Verified that's really the behavior rather than
+  assuming it.
+
+Also corrected an assertion in test_security_fixes.py that was still
+enforcing the OLD loopback-by-default behavior. The test wasn't broken
+by the fix — it was encoding a decision we deliberately reversed, so
+leaving it would have meant the suite actively defended the bug. It now
+asserts the invariant that actually matters: discovery and reachability
+agree, whichever mode you're in. (Original "Fix #3" reasoning was mine
+and it was wrong for this codebase specifically: Discovery always
+broadcast your real IP regardless, so loopback-only Transport bought no
+privacy — it only broke messaging. Your bug report is what surfaced it.)
+
+New test in test_multi_profile.py covering the invariant directly,
+using a genuinely non-loopback local address so "reachable on LAN" and
+"reachable on loopback" are actually distinguishable — an earlier
+version of this check quietly passed for the wrong reason because
+gethostbyname() resolved to 127.0.0.1 in a container. Checks both
+modes, both directions, plus the stop()-without-start() crash case.
+
+test_multi_profile.py 13/13, test_security_fixes.py 29/29, full suite
+still green.
+---
+ core/network/router.py | 19 +++++++++--
+ test_multi_profile.py  | 71 ++++++++++++++++++++++++++++++++++++++++++
+ test_security_fixes.py | 31 ++++++++++++------
+ 3 files changed, 110 insertions(+), 11 deletions(-)
+
+diff --git a/core/network/router.py b/core/network/router.py
+index 13081bd..f47c9cc 100644
+--- a/core/network/router.py
++++ b/core/network/router.py
+@@ -119,7 +119,18 @@ class Node:
+ 
+     def start(self):
+         self._transport.start()
+-        self._discovery.start()
++        if self._lan_enabled:
++            self._discovery.start()
++        else:
++            # Without this, network_bind=host produced the exact incoherent
++            # half-state the bind_mode fix above exists to prevent, just
++            # inverted: Discovery still broadcasts your presence and real
++            # LAN IP to everyone, while Transport listens on loopback only,
++            # so every peer that discovers you gets connection-refused when
++            # they try to reach you. Opting out of LAN has to mean opting
++            # out of both halves, or it isn't opting out of anything.
++            log.info("[node] LAN discovery disabled (network_bind=host) — "
++                      "not broadcasting or listening for LAN peers")
+         if self._dht:
+             bootstrap = self._config.get_setting("dht_bootstrap", [])
+             self._dht.start(bootstrap_addrs=bootstrap)
+@@ -139,7 +150,11 @@ class Node:
+         log.info("[node] started — user_id: %s", self._identity["user_id"][:16])
+ 
+     def stop(self):
+-        self._discovery.stop()
++        # Discovery.stop() joins its two threads unconditionally, which
++        # would raise if they were never started — so this has to mirror
++        # the guard in start() exactly.
++        if self._lan_enabled:
++            self._discovery.stop()
+         self._transport.stop()
+         if self._dht:
+             self._dht.stop()
+diff --git a/test_multi_profile.py b/test_multi_profile.py
+index bda0fe3..a8b1854 100644
+--- a/test_multi_profile.py
++++ b/test_multi_profile.py
+@@ -141,11 +141,82 @@ for name, tport, wport, pw in {profiles_spec!r}:
+         shutil.rmtree(tmp_home, ignore_errors=True)
+         shutil.rmtree(os.path.join(repo, "storage"), ignore_errors=True)
+ 
++    test_bind_mode_coherence()
++
+     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+     if FAIL:
+         print("FAILED:", FAIL)
+     return 0 if not FAIL else 1
+ 
+ 
++def test_bind_mode_coherence():
++    """
++    Discovery (broadcasting your presence + real LAN IP) and Transport
++    (actually accepting connections) must always agree. They're derived
++    from one setting for exactly this reason.
++
++    This regressed once already, in the worst possible way: the fix was
++    applied to __init__ (computing _lan_enabled) but not to start()/stop()
++    (actually using it), so the flag existed and did nothing. Everything
++    compiled, every other test passed, and network_bind=host still
++    broadcast your IP to the whole LAN while refusing every connection.
++    A half-applied fix to a two-sided invariant is worse than no fix,
++    because it looks done. Hence this test.
++    """
++    import tempfile as _tf
++    from core.identity.key_manager import IdentityManager
++    from core.storage import ConfigStore, ChatStore, PeerStore
++    from core.network.router import Node
++
++    def mk(label, tport, bind_mode=None):
++        d = os.path.join(_tf.mkdtemp(), label)
++        os.makedirs(d)
++        im = IdentityManager(storage_dir=os.path.join(d, "identity"))
++        im.generate_new_identity()
++        cfg = ConfigStore(base_dir=d)
++        cfg.set_setting("network_port", tport)
++        if bind_mode:
++            cfg.set_setting("network_bind", bind_mode)
++        return Node(im, cfg, PeerStore(base_dir=d), ChatStore(base_dir=d))
++
++    import socket as _socket
++    probe = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
++    probe.connect(("8.8.8.8", 80))
++    real_ip = probe.getsockname()[0]
++    probe.close()
++
++    def can_connect(ip, port, timeout=1.5):
++        s = _socket.socket()
++        s.settimeout(timeout)
++        try:
++            s.connect((ip, port))
++            return True
++        except Exception:
++            return False
++        finally:
++            s.close()
++
++    n1 = mk("coherence_default", 61301)
++    check("default: LAN enabled", n1._lan_enabled is True)
++    n1.start()
++    time.sleep(0.5)
++    check("default: reachable on the real LAN IP (matches what discovery advertises)",
++          can_connect(real_ip, 61301))
++    n1.stop()
++
++    n2 = mk("coherence_host", 61302, bind_mode="host")
++    check("network_bind=host: LAN disabled", n2._lan_enabled is False)
++    n2.start()
++    time.sleep(0.5)
++    check("host mode: NOT reachable on the real LAN IP",
++          not can_connect(real_ip, 61302))
++    check("host mode: still reachable on loopback (that's the point of the mode)",
++          can_connect("127.0.0.1", 61302))
++    # Would raise RuntimeError joining never-started threads without the
++    # matching guard in stop().
++    n2.stop()
++    check("host mode stops cleanly without a RuntimeError", True)
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/test_security_fixes.py b/test_security_fixes.py
+index f1c6b7b..d91b924 100644
+--- a/test_security_fixes.py
++++ b/test_security_fixes.py
+@@ -53,18 +53,31 @@ def main():
+         time.sleep(0.3)  # let transport threads bind
+ 
+         # ------------------------------------------------------------
+-        # Fix #3: transport must bind loopback by default, not 0.0.0.0
++        # Transport/Discovery bind mode must be COHERENT.
++        #
++        # This assertion is the reverse of what it originally checked,
++        # deliberately. The original "Fix #3" made Transport bind
++        # loopback-only by default, on the reasoning that LAN exposure
++        # should be opt-in. That reasoning was wrong in this specific
++        # codebase: Discovery has always broadcast your presence and
++        # real LAN IP unconditionally, so loopback-only Transport didn't
++        # buy any privacy — it just meant peers discovered you correctly
++        # and then got ECONNREFUSED on every message. That was the
++        # default state, i.e. LAN messaging was broken out of the box.
++        # Real user report confirmed it end to end.
++        #
++        # The invariant that actually matters isn't "which default" but
++        # "both halves agree": if we broadcast, we must listen; if we
++        # opt out, we opt out of both.
+         # ------------------------------------------------------------
+         check(
+-            "Fix #3 — transport defaults to 127.0.0.1 (not 0.0.0.0)",
+-            alice._transport._host == "127.0.0.1"
+-            if hasattr(alice._transport, "_host") else True,
++            "LAN is enabled by default (so discovery and reachability agree)",
++            alice._lan_enabled is True,
++        )
++        check(
++            "default transport binds 0.0.0.0, matching what discovery advertises",
++            getattr(alice._transport, "_host", "0.0.0.0") == "0.0.0.0",
+         )
+-        # Behavioural proof regardless of internal attr name: bob's socket
+-        # should NOT be reachable on any non-loopback address. We can't
+-        # easily bind-test without a real second interface in this sandbox,
+-        # so we assert the constructed transport_host that was passed in.
+-        # (see router.py: transport_host computed from bind_mode, default "host")
+ 
+         # ------------------------------------------------------------
+         # Manually pin Alice <-> Bob as already-discovered contacts
+-- 
+2.43.0
+

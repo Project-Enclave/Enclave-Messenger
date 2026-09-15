@@ -1,0 +1,3537 @@
+From 34715f6e3433d376b34f19c4191b9c6e8efefb95 Mon Sep 17 00:00:00 2001
+From: Claude Code Review <review@local>
+Date: Tue, 15 Sep 2026 11:38:48 +0000
+Subject: [PATCH] TUI screens + ip:port peering + rebuilt web UI
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three things, plus the root cause of "the web UI is broken".
+
+--- why the web UI was broken ---
+Not styling. Two dead endpoints. The template called POST /api/send and
+POST /api/scan; the real routes are POST /api/message/send and GET
+/api/peers/scan. It also posted {chat_id, text} where the backend reads
+{peer_id, plaintext}. So sending, receiving and peer loading all failed
+silently while settings and theme — which touch different routes — kept
+working. That's exactly the reported symptom pattern, and it's why a
+restyle would have fixed nothing.
+
+Found it by diffing every fetch() URL in the template against
+web.py's actual url_map rather than reading the code. That check is
+cheap and would have caught this at any point.
+
+--- rebuilt web UI ---
+templates/chat.html rewritten. Same palette and fonts, unchanged. Every
+endpoint verified against url_map before writing a line. Simpler
+structure: one sidebar with chats/peers tabs, one chat panel, one
+settings modal (identity / profiles / network). Keeps what was already
+verified working — CSRF header on mutating requests, WebSocket push,
+mobile slide-over layout, theme toggle.
+
+Two real bugs found while testing the rebuild:
+- switching sidebar tabs rendered from the cached array without
+  refetching, so "peers" looked empty even when peers were discovered.
+- the polling fallback was gated on !document.hidden, which froze the
+  entire UI in a background tab.
+
+Verified end to end in a real browser against two live nodes: unlock,
+discovery, open chat, send — and confirmed the OTHER node actually
+received it, not just that it rendered locally.
+
+--- TUI ---
+:profiles, :new-profile <name>, :settings, :help and ? for help. New
+screens are full overlays that own their key input, so chat navigation
+underneath is untouched. :settings edits display name, LAN mode and all
+three DHT settings; booleans toggle on Enter, text opens an input box.
+:new-profile prompts for a passphrase (twice), creates the identity via
+the same shared backend call the web UI uses, and starts the profile's
+web UI.
+
+Also fixed the reported display corruption: "[transport] send failed
+..." was the console log handler writing to a terminal curses owns.
+Muted the console handler only — file logs still work.
+
+--- ip:port ---
+Previously rejected outright, honestly, because no handshake existed —
+a chat_id must be a real user_id or nothing can be encrypted. Added
+one: GET /identity on the transport server, consumed by
+Node.connect_to_address(). Same key-pinning rule as LAN discovery: an
+address claiming a contact you already have but with different keys is
+refused. Typed by hand is not more trustworthy than broadcast.
+
+Tested with network_bind=host on both nodes so discovery was fully
+disabled — it connected and delivered a message anyway, which proves
+it works independently of discovery rather than accidentally through it.
+
+--- PID ---
+Creating a profile now prints its pid to the terminal that launched the
+parent, from both the TUI and the web UI, and returns it in the API
+response. A browser status line is gone on the next page load and you
+need that pid to stop the thing.
+
+--- test updates ---
+Two of my own tests asserted behaviour this change deliberately
+reverses (ip:port must be rejected) or depended on a frontend variable
+name (CSRF_TOKEN -> CSRF). Updated rather than left to fail, with the
+reasoning recorded.
+
+Known, not fixed: profile usernames don't propagate into discovery, so
+peers display as a node id prefix rather than a name. Pre-existing,
+separate from this work.
+
+test_tui.py 72/72, test_security_fixes.py 29/29,
+test_profile_creation.py 9/9, test_web_multi_profile.py 7/7,
+test_ws_push.py 7/7.
+---
+ core/network/router.py    |   73 ++
+ core/network/transport.py |   56 +-
+ main.py                   |   19 +-
+ templates/chat.html       | 2195 ++++++++++++-------------------------
+ test_profile_creation.py  |    4 +-
+ test_security_fixes.py    |   11 +-
+ test_tui.py               |  141 +++
+ test_web_multi_profile.py |    2 +-
+ test_ws_push.py           |    2 +-
+ tui.py                    |  458 +++++++-
+ web.py                    |   29 +-
+ 11 files changed, 1447 insertions(+), 1543 deletions(-)
+
+diff --git a/core/network/router.py b/core/network/router.py
+index f47c9cc..bc45ad0 100644
+--- a/core/network/router.py
++++ b/core/network/router.py
+@@ -89,6 +89,10 @@ class Node:
+             host=transport_host,
+             port=port,
+             on_message=self._on_inbound,
++            # Serves GET /identity so another node can resolve a manual
++            # ip:port into a real identity. Only public material — exactly
++            # what discovery already broadcasts over the LAN anyway.
++            identity_provider=lambda: dict(self._identity),
+         )
+         self._transport_port = port
+         self._discovery = Discovery(
+@@ -160,6 +164,75 @@ class Node:
+             self._dht.stop()
+         log.info("[node] stopped")
+ 
++    # ------------------------------------------------------------------
++    # Manual connect (ip:port)
++    # ------------------------------------------------------------------
++
++    def connect_to_address(self, address: str) -> dict | None:
++        """
++        Add a peer by raw "ip:port" — for when discovery can't reach them
++        (different subnet, multicast blocked by the network, a VPS, a
++        device you know the address of but which never showed up in
++        discovery).
++
++        Asks that address who it is via GET /identity, then stores the
++        answer. Returns the peer dict, or None if nothing enclave-shaped
++        answered.
++
++        Key pinning is identical to discovery.py's: if we already know
++        this user_id with DIFFERENT keys, the new keys are refused rather
++        than silently overwriting a trusted mapping. Being typed in by
++        hand doesn't make an address more trustworthy than a broadcast —
++        someone can just as easily give you the wrong one — so the same
++        rule applies. Only the ADDRESS is updated for an already-known
++        peer, which is the legitimate use (peer moved, same identity).
++        """
++        address = (address or "").strip()
++        if address.startswith("http://"):
++            address = address[len("http://"):]
++        host, _, port_s = address.partition(":")
++        if not host or not port_s.isdigit():
++            raise ValueError("expected ip:port, e.g. 192.168.0.102:43110")
++        port = int(port_s)
++
++        info = self._transport.fetch_identity(f"http://{host}:{port}")
++        if not info:
++            return None
++
++        peer_id = info["user_id"]
++        if peer_id == self._identity["user_id"]:
++            raise ValueError("that address is this node itself")
++
++        new_ed, new_x = info["ed25519_pub"], info["x25519_pub"]
++        existing = self._peers.get(peer_id)
++        if existing and existing.get("ed25519_pub") and existing.get("x25519_pub"):
++            if new_ed != existing["ed25519_pub"] or new_x != existing["x25519_pub"]:
++                log.warning(
++                    "[node] KEY CHANGE for known peer %s at manually-entered "
++                    "address %s — refusing (possible impersonation). Delete "
++                    "and re-add the contact if this is expected.",
++                    peer_id[:12], address,
++                )
++                raise ValueError(
++                    "that address claims to be a contact you already have, "
++                    "but with different keys — refusing to overwrite them"
++                )
++
++        # The node's own advertised transport port wins over the port we
++        # happened to dial, so a peer reachable via a forwarded/proxied
++        # port still records the port it actually listens on.
++        peer = self._peers.upsert(
++            user_id=peer_id,
++            username=info.get("username", ""),
++            ed25519_pub=new_ed,
++            x25519_pub=new_x,
++            ip=host,
++            port=info.get("port") or port,
++        )
++        log.info("[node] connected to %s via manual address %s", peer_id[:12], address)
++        self._on_peer_found(peer)
++        return peer
++
+     # ------------------------------------------------------------------
+     # Send
+     # ------------------------------------------------------------------
+diff --git a/core/network/transport.py b/core/network/transport.py
+index 4934b31..a208937 100644
+--- a/core/network/transport.py
++++ b/core/network/transport.py
+@@ -42,15 +42,23 @@ class _SilentHandler(WSGIRequestHandler):
+ 
+ 
+ class Transport:
+-    def __init__(self, host: str, port: int, on_message):
++    def __init__(self, host: str, port: int, on_message, identity_provider=None):
+         """
+         host: bind address for inbound server, e.g. '0.0.0.0'
+         port: listen port
+         on_message: callback(envelope: dict) called for each valid inbound message
++        identity_provider: optional callable returning this node's public
++            identity dict, served at GET /identity. That endpoint is what
++            makes manual "connect to ip:port" possible at all: without it
++            there's no way to learn who is at an address, and a chat_id
++            has to be a real user_id for encryption to work. Only public
++            material is ever exposed here — the same fields already
++            broadcast to the whole LAN by discovery.
+         """
+         self._host = host
+         self._port = port
+         self._on_message = on_message
++        self._identity_provider = identity_provider
+         self._server = None
+         self._thread = threading.Thread(target=self._serve, daemon=True)
+ 
+@@ -84,6 +92,22 @@ class Transport:
+             ])
+             return [_HEALTH_RESP]
+ 
++        if method == "GET" and path == "/identity":
++            if self._identity_provider is None:
++                start_response("404 Not Found", [("Content-Length", "0")])
++                return [b""]
++            try:
++                payload = json.dumps(self._identity_provider()).encode("utf-8")
++            except Exception as e:
++                log.warning("[transport] /identity failed: %s", e)
++                start_response("500 Internal Server Error", [("Content-Length", "0")])
++                return [b""]
++            start_response("200 OK", [
++                ("Content-Type", "application/json"),
++                ("Content-Length", str(len(payload))),
++            ])
++            return [payload]
++
+         if method == "POST" and path == "/inbound":
+             try:
+                 # CONTENT_LENGTH may be an empty string — coerce safely
+@@ -135,6 +159,36 @@ class Transport:
+             log.warning("[transport] send failed to %s: %s", url, e)
+             return False
+ 
++    def fetch_identity(self, peer_address: str) -> dict | None:
++        """
++        GET peer_address/identity — asks whoever is listening there who
++        they are. Returns the identity dict, or None if nothing answered,
++        it wasn't an enclave node, or the response wasn't usable.
++
++        Deliberately strict about what counts as a valid answer: a random
++        HTTP server on that port will not have these fields, and we'd
++        rather report "no enclave node there" than half-register a peer
++        we can't actually encrypt to.
++        """
++        url = f"{peer_address}/identity"
++        try:
++            with urlopen(Request(url), timeout=5) as resp:
++                if resp.status != 200:
++                    return None
++                data = json.loads(resp.read(65536).decode("utf-8"))
++        except (URLError, json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
++            log.info("[transport] identity fetch failed for %s: %s", url, e)
++            return None
++
++        if not isinstance(data, dict):
++            return None
++        required = ("user_id", "ed25519_pub", "x25519_pub")
++        if not all(isinstance(data.get(k), str) and data.get(k) for k in required):
++            log.info("[transport] %s answered but isn't an enclave node "
++                      "(missing identity fields)", url)
++            return None
++        return data
++
+     def is_alive(self, peer_address: str) -> bool:
+         """
+         Quick liveness check against peer_address/health.
+diff --git a/main.py b/main.py
+index 02b1e87..5231628 100644
+--- a/main.py
++++ b/main.py
+@@ -305,17 +305,18 @@ def classify_address(address: str) -> tuple[str, str]:
+         return address, "phone"
+ 
+     if _IP_PORT_RE.match(address):
+-        # Deliberately not faked as working: there's no peer-handshake
+-        # protocol in this codebase for "here's my IP, exchange keys with
+-        # me." Peers are only known via LAN discovery broadcast or by
+-        # already being in the peer list.
+-        raise ValueError(
+-            "direct IP:port connect isn't implemented — peers are found "
+-            "via LAN discovery broadcast, not a manual address"
+-        )
++        # This used to be rejected outright, because there genuinely was
++        # no way to learn who was at an address — and a chat_id has to be
++        # a real user_id for encryption to work, so pretending otherwise
++        # would have produced a chat that could never send anything.
++        # There's now a real handshake: GET /identity on the transport
++        # server (core/network/transport.py), consumed by
++        # Node.connect_to_address(). The address is NOT a chat_id, so it's
++        # returned as-is with type "ip" and the caller resolves it.
++        return address, "ip"
+ 
+     raise ValueError("unrecognised address — expected a node id, phone "
+-                      "number, or bluetooth MAC")
++                      "number, bluetooth MAC, or ip:port")
+ 
+ 
+ def get_identity_status() -> dict:
+diff --git a/templates/chat.html b/templates/chat.html
+index 32f996d..44bf1e4 100644
+--- a/templates/chat.html
++++ b/templates/chat.html
+@@ -8,6 +8,8 @@
+   <link rel="preconnect" href="https://api.fontshare.com"/>
+   <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=zodiak@400,700&display=swap" rel="stylesheet"/>
+   <style>
++    /* Colour scheme and fonts carried over unchanged from the previous
++       template — the rebuild was about broken wiring, not the palette. */
+     :root {
+       --bg:      #fdf5f0;
+       --surface: #fef8f4;
+@@ -19,6 +21,7 @@
+       --coral:   #f27280;
+       --warm:    #f9b294;
+       --purple:  #6d5c7d;
++      --ok:      #3f9e6d;
+       --font:    'Satoshi', sans-serif;
+       --display: 'Zodiak', serif;
+     }
+@@ -33,1638 +36,848 @@
+       --coral:   #f9b294;
+       --warm:    #f9b294;
+       --purple:  #c16c86;
++      --ok:      #6fcf97;
+     }
++
+     *{box-sizing:border-box;margin:0;padding:0;}
+     html,body{height:100%;}
+-    body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;}
+-
+-    /* ── Splash ── */
+-    #splash {
+-      position:fixed;inset:0;background:var(--bg);
+-      display:flex;flex-direction:column;align-items:center;justify-content:center;
+-      z-index:9999;gap:1.2rem;
+-    }
+-    #splash.fade-out { animation: splashFadeOut 0.6s cubic-bezier(0.4,0,0.2,1) forwards; }
+-    @keyframes splashFadeOut { to { opacity:0; transform:scale(1.03); pointer-events:none; } }
+-    .splash-logo { display:flex;align-items:baseline;gap:.55rem;overflow:hidden; }
+-    .splash-word-project {
+-      font-family:var(--display);font-size:clamp(2rem,6vw,3.5rem);font-weight:700;
+-      color:var(--muted);opacity:0;transform:translateX(60px);
+-      animation: slideLeft 0.75s cubic-bezier(0.16,1,0.3,1) 0.2s forwards;
+-    }
+-    .splash-word-enclave {
+-      font-family:var(--display);font-size:clamp(2rem,6vw,3.5rem);font-weight:700;
+-      color:var(--primary);opacity:0;transform:translateX(-60px);
+-      animation: slideRight 0.75s cubic-bezier(0.16,1,0.3,1) 0.2s forwards;
+-    }
+-    @keyframes slideLeft  { to { opacity:1; transform:translateX(0); } }
+-    @keyframes slideRight { to { opacity:1; transform:translateX(0); } }
+-    .splash-sub {
+-      font-size:.82rem;color:var(--faint);letter-spacing:.08em;text-transform:uppercase;
+-      opacity:0;animation: fadeUp 0.5s ease 1.1s forwards;
+-    }
+-    @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+-    .splash-bar { width:120px;height:2px;border-radius:2px;background:var(--border);overflow:hidden;opacity:0;animation: fadeUp 0.4s ease 1.2s forwards; }
+-    .splash-bar-fill { height:100%;width:0%;background:linear-gradient(90deg,var(--primary),var(--coral));border-radius:2px;animation: barFill 1s ease 1.3s forwards; }
+-    @keyframes barFill { to { width:100%; } }
+-
+-    /* ── Modal backdrop ── */
+-    .modal-backdrop{
+-      position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+-      display:flex;align-items:center;justify-content:center;z-index:1000;transition:opacity .2s;
+-    }
+-    .modal-backdrop.hidden{opacity:0;pointer-events:none;}
+-    .modal-card{
+-      background:var(--surface);border:1px solid var(--border);border-radius:16px;
+-      padding:2rem 2rem 1.75rem;width:min(440px,90vw);
+-      box-shadow:0 24px 64px rgba(0,0,0,.35);
+-      display:flex;flex-direction:column;gap:1.1rem;
+-      animation: modalPop 0.4s cubic-bezier(0.16,1,0.3,1) both;
+-    }
+-    @keyframes modalPop {
+-      from { opacity:0; transform:scale(0.93) translateY(12px); }
+-      to   { opacity:1; transform:scale(1) translateY(0); }
+-    }
+-    .modal-title{font-family:var(--display);font-size:1.35rem;font-weight:700;color:var(--text);text-align:center;letter-spacing:-.01em;}
+-    .modal-sub{font-size:.82rem;color:var(--muted);text-align:center;line-height:1.5;margin-top:-.4rem;}
+-    .modal-input-wrap{position:relative;}
+-    .modal-input-wrap input{
+-      width:100%;background:var(--bg);border:1.5px solid var(--border);border-radius:10px;
+-      padding:.65rem 2.6rem .65rem 1rem;font-size:.95rem;color:var(--text);font-family:var(--font);
+-      outline:none;transition:border-color .15s, box-shadow .15s;
+-    }
+-    .modal-input-wrap input.plain{padding-right:1rem;}
+-    .modal-input-wrap input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.15);}
+-    .modal-input-wrap input.input-ok  {border-color:#6fcf97 !important;}
+-    .modal-input-wrap input.input-err {border-color:var(--coral) !important;}
+-    .modal-eye{
+-      position:absolute;right:.75rem;top:50%;transform:translateY(-50%);
+-      background:none;border:none;cursor:pointer;color:var(--faint);font-size:.75rem;
+-      padding:0;line-height:1;font-family:var(--font);font-weight:600;letter-spacing:.02em;
+-      transition:color .15s;
+-    }
+-    .modal-eye:hover{color:var(--muted);}
+-    .modal-unlock-btn{
+-      width:100%;padding:.7rem;background:var(--primary);color:#fff9f7;
+-      border:none;border-radius:10px;font-family:var(--font);font-size:.95rem;font-weight:700;
+-      cursor:pointer;transition:background .15s,transform .1s,box-shadow .15s;
+-    }
+-    .modal-unlock-btn:hover{background:var(--coral);box-shadow:0 4px 16px rgba(242,114,128,.35);}
+-    .modal-unlock-btn:active{transform:scale(.97);}
+-    .modal-unlock-btn:disabled{opacity:.5;cursor:not-allowed;}
+-    .modal-error{font-size:.78rem;color:var(--coral);text-align:center;min-height:1.1em;animation: errShake 0.35s ease both;}
+-    @keyframes errShake {
+-      0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)}
+-    }
+-    .modal-skip{font-size:.75rem;color:var(--faint);text-align:center;cursor:pointer;background:none;border:none;font-family:var(--font);transition:color .15s;}
+-    .modal-skip:hover{color:var(--muted);}
+-    .conn-chip{font-size:.72rem;padding:.22rem .65rem;border-radius:9999px;color:var(--faint);transition:background .15s,color .15s;font-family:var(--font);}
+-    .conn-chip.active{background:var(--primary);color:#fff;}
+-    .modal-field-group{display:flex;flex-direction:column;gap:.35rem;}
+-    .field-hint{font-size:.7rem;color:var(--faint);min-height:1em;padding-left:.1rem;transition:color .15s;}
+-    .field-hint.ok  {color:#6fcf97;}
+-    .field-hint.err {color:var(--coral);}
+-
+-    /* new-chat type badge */
+-    .nc-type-badge {
+-      display:inline-block;font-size:.68rem;font-weight:700;letter-spacing:.04em;
+-      padding:.18rem .55rem;border-radius:5px;
+-      background:rgba(242,114,128,.12);color:var(--primary);
+-      opacity:0;transform:translateY(4px);
+-      transition:opacity .2s ease,transform .2s ease,background .2s;
+-      pointer-events:none;
+-    }
+-    .nc-type-badge.visible { opacity:1; transform:translateY(0); }
+-    .nc-type-badge.phone { background:rgba(100,200,120,.12);color:#6fcf97; }
+-    .nc-type-badge.ip    { background:rgba(100,160,255,.12);color:#7ab4f5; }
+-    .nc-type-badge.bt    { background:rgba(160,120,255,.12);color:#b09af5; }
+-    .nc-type-badge.node  { background:rgba(242,114,128,.12);color:var(--primary); }
+-
+-    /* ── Settings modal — two-pane ── */
+-    #settings-backdrop .settings-shell {
+-      background:var(--surface);
+-      border:1px solid var(--border);
+-      border-radius:16px;
+-      width:min(720px,95vw);
+-      height:min(520px,90vh);
+-      display:flex;
+-      overflow:hidden;
+-      box-shadow:0 24px 64px rgba(0,0,0,.4);
+-      animation: modalPop 0.35s cubic-bezier(0.16,1,0.3,1) both;
+-      position:relative;
+-    }
+-    .stab-nav {
+-      width:200px;min-width:160px;background:var(--bg);
+-      border-right:1px solid var(--border);
+-      display:flex;flex-direction:column;
+-      padding:.75rem .5rem;gap:.1rem;
+-      overflow-y:auto;flex-shrink:0;
+-    }
+-    .stab-nav::-webkit-scrollbar{width:3px;}
+-    .stab-nav::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+-    .stab-section-label {
+-      font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+-      color:var(--faint);padding:.55rem .65rem .25rem;
+-    }
+-    .stab-item {
+-      display:flex;align-items:center;gap:.55rem;
+-      padding:.42rem .65rem;border-radius:8px;cursor:pointer;
+-      background:none;border:none;
+-      font-family:var(--font);font-size:.82rem;font-weight:500;
+-      color:var(--muted);width:100%;text-align:left;
+-      transition:background .12s,color .12s;white-space:nowrap;
+-    }
+-    .stab-item:hover { background:var(--border); color:var(--text); }
+-    .stab-item.active { background:rgba(242,114,128,.13);color:var(--primary);font-weight:700; }
+-    .stab-content {
+-      flex:1;overflow-y:auto;padding:1.6rem 1.8rem;
+-      display:flex;flex-direction:column;gap:1.25rem;min-width:0;
+-    }
+-    .stab-content::-webkit-scrollbar{width:4px;}
+-    .stab-content::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
+-    .stab-panel { display:none; flex-direction:column; gap:1rem; }
+-    .stab-panel.active { display:flex; }
+-    .stab-panel-title {
+-      font-family:var(--display);font-size:1.15rem;font-weight:700;
+-      color:var(--text);letter-spacing:-.01em;
+-      border-bottom:1px solid var(--border);padding-bottom:.65rem;
+-    }
+-    .settings-close-btn {
+-      position:absolute;top:.75rem;right:.9rem;
+-      background:none;border:none;cursor:pointer;
+-      color:var(--faint);font-size:1.1rem;line-height:1;
+-      padding:.25rem .4rem;border-radius:6px;
+-      transition:color .15s,background .15s;z-index:10;
+-    }
+-    .settings-close-btn:hover{color:var(--text);background:var(--border);}
+-    .smod-field { display:flex;flex-direction:column;gap:.28rem; }
+-    .smod-label { font-size:.75rem;color:var(--faint); }
+-    .smod-input {
+-      background:var(--bg);border:1.5px solid var(--border);border-radius:10px;
+-      padding:.6rem 1rem;font-size:.88rem;color:var(--text);font-family:var(--font);
+-      outline:none;width:100%;transition:border-color .15s,box-shadow .15s;
+-    }
+-    .smod-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.12);}
+-    .smod-input[type=password]{letter-spacing:.1em;}
+-    .smod-input[readonly]{opacity:.6;cursor:default;}
+-    .smod-pass-wrap{position:relative;}
+-    .smod-pass-wrap .smod-input{padding-right:2.6rem;}
+-    .smod-btn-row{display:flex;gap:.6rem;align-items:center;margin-top:.1rem;}
+-    .smod-status{font-size:.72rem;color:var(--faint);min-height:1.1em;transition:color .2s;}
+-    .smod-status.ok {color:#6fcf97;}
+-    .smod-status.err{color:var(--coral);}
+-    .btn-unlock-spin::before {
+-      content:'';display:inline-block;
+-      width:.7em;height:.7em;
+-      border:2px solid rgba(255,255,255,.35);border-top-color:#fff;
+-      border-radius:50%;animation: spin 0.6s linear infinite;
+-      margin-right:.45rem;vertical-align:middle;
+-    }
+-    @keyframes spin { to { transform:rotate(360deg); } }
+-    .btn-ripple{position:relative;overflow:hidden;}
+-    .btn-ripple::after{
+-      content:'';position:absolute;inset:0;
+-      background:rgba(255,255,255,.18);border-radius:inherit;
+-      opacity:0;transform:scale(0);transition:opacity .4s,transform .4s;
+-    }
+-    .btn-ripple.rippling::after{opacity:1;transform:scale(1);}
+-
+-    /* ── Profile panel specific ── */
+-    .profile-avatar-large {
+-      width:56px;height:56px;border-radius:14px;flex-shrink:0;
+-      background:linear-gradient(135deg,var(--primary),var(--purple));
+-      color:white;display:grid;place-items:center;
+-      font-family:var(--display);font-size:1.3rem;font-weight:700;
+-    }
+-    .profile-header-row {
+-      display:flex;align-items:center;gap:1rem;
+-      padding:.75rem;background:var(--bg);border-radius:10px;
+-      border:1px solid var(--border);
+-    }
+-    .profile-header-info { display:flex;flex-direction:column;gap:.2rem;min-width:0; }
+-    .profile-header-name { font-weight:700;font-size:.95rem;color:var(--text); }
+-    .profile-header-sub  { font-size:.72rem;color:var(--faint); }
+-    .smod-copy-wrap { position:relative; }
+-    .smod-copy-btn {
+-      position:absolute;right:.6rem;top:50%;transform:translateY(-50%);
+-      background:none;border:1px solid var(--border);border-radius:6px;
+-      padding:.18rem .5rem;font-size:.68rem;font-weight:600;
+-      color:var(--faint);font-family:var(--font);cursor:pointer;
+-      transition:background .12s,color .12s;
+-    }
+-    .smod-copy-btn:hover { background:var(--border);color:var(--text); }
+-    .smod-copy-wrap .smod-input { padding-right:4.2rem; }
+-
+-    /* ── DHT / profiles-tab additions ── */
+-    .smod-divider { height:1px;background:var(--border);margin:.4rem 0 .1rem; }
+-    .smod-subsection-title { font-size:.82rem;font-weight:700;color:var(--text);margin-bottom:.1rem; }
+-    .smod-hint { font-size:.72rem;line-height:1.5;color:var(--faint);background:var(--bg);
+-                 border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem; }
+-    .smod-checkbox-row { display:flex;align-items:center;gap:.55rem;cursor:pointer;font-size:.85rem;color:var(--text); }
+-    .smod-checkbox-row input[type=checkbox] { width:16px;height:16px;accent-color:var(--primary);cursor:pointer; }
+-    .smod-textarea { resize:vertical;font-family:var(--font);line-height:1.5;min-height:4.4em; }
+-
+-    .profiles-list { display:flex;flex-direction:column;gap:.5rem; }
+-    .profile-row-item {
+-      display:flex;align-items:center;justify-content:space-between;gap:.75rem;
+-      padding:.65rem .8rem;background:var(--bg);border:1px solid var(--border);
+-      border-radius:10px;flex-wrap:wrap;
+-    }
+-    .profile-row-name { font-weight:600;font-size:.85rem;color:var(--text);display:flex;align-items:center;gap:.4rem; }
+-    .profile-active-badge {
+-      font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+-      background:rgba(111,207,151,.15);color:#6fcf97;border-radius:5px;padding:.12rem .4rem;
+-    }
+-    .profile-row-meta { font-size:.72rem;color:var(--faint);margin-top:.15rem; }
+-    .profile-row-meta a { color:var(--primary);text-decoration:none; }
+-    .profile-row-meta a:hover { text-decoration:underline; }
+-    .profile-row-actions { display:flex;gap:.4rem;flex-shrink:0; }
+-    .profile-row-actions button {
+-      background:none;border:1px solid var(--border);border-radius:7px;
+-      padding:.3rem .55rem;font-size:.7rem;font-weight:600;color:var(--faint);
+-      font-family:var(--font);cursor:pointer;transition:background .12s,color .12s;
+-    }
+-    .profile-row-actions button:hover { background:var(--border);color:var(--text); }
+-    .profile-row-actions button.danger:hover { background:rgba(242,114,128,.15);color:var(--coral); }
+-    .danger-zone {
+-      border:1px solid rgba(242,114,128,.25);border-radius:10px;
+-      padding:.85rem 1rem;display:flex;flex-direction:column;gap:.5rem;
+-    }
+-    .danger-zone-label {
+-      font-size:.68rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+-      color:var(--coral);
+-    }
+-    .danger-zone-desc { font-size:.78rem;color:var(--muted);line-height:1.45; }
+-    .btn-danger {
+-      padding:.42rem .9rem;border-radius:7px;font-size:.8rem;font-weight:700;
+-      cursor:pointer;font-family:var(--font);
+-      background:none;border:1px solid rgba(242,114,128,.4);color:var(--coral);
+-      transition:background .15s,border-color .15s,transform .1s;align-self:flex-start;
+-    }
+-    .btn-danger:hover { background:rgba(242,114,128,.1);border-color:var(--coral); }
+-    .btn-danger:active { transform:scale(.97); }
++    body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;overflow:hidden;}
++    button,input,textarea{font-family:var(--font);color:inherit;}
++    ::-webkit-scrollbar{width:8px;height:8px;}
++    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
+ 
+-    /* ── Sidebar ── */
++    /* ── Shell ───────────────────────────────────────────────────── */
++    #app{display:flex;height:100vh;}
+     .sidebar{
+-      width:300px;min-width:260px;display:flex;flex-direction:column;
+-      background:var(--surface);border-right:2px solid var(--border);height:100%;
+-    }
+-    .sidebar.animate-in {
+-      /* No fill-mode: this is a one-shot entrance animation. With
+-         fill-mode:both it would permanently pin transform/opacity via the
+-         animation cascade layer — which beats even higher-specificity
+-         normal rules — silently fighting the body.chat-open media-query
+-         rule below that needs to reposition .sidebar on mobile later. */
+-      animation: sidebarSlide 0.5s cubic-bezier(0.16,1,0.3,1);
+-    }
+-    @keyframes sidebarSlide {
+-      from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:translateX(0); }
+-    }
+-    .brand{
+-      padding:1.1rem 1.2rem .9rem;border-bottom:1px solid var(--border);
+-      display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;
+-    }
+-    .logo{font-family:var(--display);font-size:1.25rem;font-weight:700;color:var(--primary);letter-spacing:-.01em;text-align:center;}
+-    .logo span{color:var(--coral);}
+-    .theme-btn{
+-      position:absolute;right:1rem;background:none;border:1px solid var(--border);border-radius:6px;
+-      padding:.3rem .55rem;cursor:pointer;color:var(--muted);font-size:.7rem;
+-      font-family:var(--font);font-weight:600;transition:background .15s,color .15s,transform .15s;
+-    }
+-    .theme-btn:hover{background:var(--border);color:var(--text);transform:rotate(18deg);}
+-    .search-wrap{padding:.75rem 1rem;flex-shrink:0;}
+-    .search-wrap input{
+-      width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+-      padding:.5rem .85rem;font-size:.875rem;color:var(--text);font-family:var(--font);
+-      outline:none;transition:border-color .15s,box-shadow .15s;
+-    }
+-    .search-wrap input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.1);}
+-    .search-wrap input::placeholder{color:var(--faint);}
+-    .chat-list{flex:1;overflow-y:auto;padding:.25rem .5rem;min-height:0;}
+-    .chat-item{
+-      display:flex;align-items:center;gap:.75rem;padding:.7rem .8rem;border-radius:10px;cursor:pointer;
+-      transition:background .12s,transform .12s;
+-      animation: chatItemIn 0.3s cubic-bezier(0.16,1,0.3,1) both;
+-    }
+-    .chat-item:hover{background:var(--border);transform:translateX(3px);}
+-    .chat-item:active{transform:translateX(3px) scale(.98);}
+-    .chat-item.active{background:rgba(242,114,128,.13);border-left:3px solid var(--coral);}
+-    @keyframes chatItemIn { from { opacity:0; transform:translateX(-10px); } to { opacity:1; transform:translateX(0); } }
++      width:300px;flex-shrink:0;background:var(--surface);
++      border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0;
++    }
++    .side-head{
++      display:flex;align-items:center;justify-content:space-between;gap:.5rem;
++      padding:.9rem 1rem;border-bottom:1px solid var(--border);
++    }
++    .brand{font-family:var(--display);font-size:1.15rem;font-weight:700;}
++    .brand span{color:var(--primary);}
++    .icon-btn{
++      background:none;border:1px solid var(--border);border-radius:8px;
++      padding:.35rem .55rem;font-size:.75rem;color:var(--muted);cursor:pointer;
++      transition:background .15s,color .15s;
++    }
++    .icon-btn:hover{background:var(--border);color:var(--text);}
++
++    .tabs{display:flex;border-bottom:1px solid var(--border);}
++    .tab{
++      flex:1;background:none;border:none;padding:.6rem;font-size:.8rem;font-weight:600;
++      color:var(--faint);cursor:pointer;border-bottom:2px solid transparent;
++      transition:color .15s,border-color .15s;
++    }
++    .tab.active{color:var(--primary);border-bottom-color:var(--primary);}
++
++    .list{flex:1;overflow-y:auto;padding:.4rem;}
++    .row{display:flex;align-items:center;gap:.65rem;padding:.6rem .7rem;
++         border-radius:10px;cursor:pointer;transition:background .12s;}
++    .row:hover{background:var(--bg);}
++    .row.active{background:var(--bg);box-shadow:inset 2px 0 0 var(--primary);}
+     .avatar{
+-      width:42px;height:42px;border-radius:10px;
+-      background:linear-gradient(135deg,var(--primary),var(--purple));
+-      color:white;display:grid;place-items:center;font-weight:700;font-size:.95rem;flex-shrink:0;
+-      transition:transform .15s;
+-    }
+-    .chat-item:hover .avatar{transform:scale(1.06);}
+-    .chat-meta{min-width:0;flex:1;}
+-    .chat-name{font-weight:600;font-size:.9rem;}
+-    .chat-preview{color:var(--faint);font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
+-    .new-chat-btn{
+-      margin:.75rem;padding:.6rem;border:1px dashed var(--border);border-radius:10px;
+-      background:none;cursor:pointer;color:var(--muted);font-family:var(--font);font-size:.85rem;
+-      transition:background .12s,color .12s,transform .12s;flex-shrink:0;
+-    }
+-    .new-chat-btn:hover{background:var(--border);color:var(--text);transform:scale(1.02);}
+-    .sidebar-footer{
+-      border-top:2px solid var(--border);padding:.85rem 1rem;
+-      overflow-y:auto;flex-shrink:0;max-height:calc(100vh - 180px);
+-    }
+-    .sidebar-footer::-webkit-scrollbar{width:3px;}
+-    .sidebar-footer::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+-    .profile-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.65rem;}
+-    .profile-row .avatar{width:36px;height:36px;font-size:.8rem;}
+-    .profile-info .name{font-weight:600;font-size:.88rem;}
+-    .profile-info .uid{font-size:.72rem;color:var(--faint);word-break:break-all;}
+-    .node-status{font-size:.72rem;padding:.2rem .5rem;border-radius:4px;display:inline-block;margin-bottom:.4rem;}
+-    .node-status.on{background:rgba(80,200,120,.12);color:#6fcf97;}
+-    .node-status.off{background:rgba(242,114,128,.12);color:var(--coral);}
+-
+-    /* ── Accordion ── */
+-    .accordion { margin-bottom:.2rem; }
+-    .accordion-trigger {
+-      width:100%;background:none;border:none;cursor:pointer;
+-      color:var(--muted);font-size:.82rem;font-family:var(--font);
+-      display:flex;align-items:center;justify-content:space-between;
+-      padding:.35rem 0;transition:color .15s;user-select:none;
+-    }
+-    .accordion-trigger:hover { color:var(--text); }
+-    .accordion-arrow {
+-      display:inline-block;font-size:.65rem;
+-      transition:transform 0.32s cubic-bezier(0.34,1.1,0.64,1);color:var(--faint);
+-    }
+-    .accordion-trigger[aria-expanded="true"] .accordion-arrow { transform:rotate(180deg); }
+-    .accordion-body {
+-      overflow:hidden;max-height:0;opacity:0;transform:translateY(-8px);
+-      transition:
+-        max-height 0.4s cubic-bezier(0.16,1,0.3,1),
+-        opacity    0.3s cubic-bezier(0.16,1,0.3,1),
+-        transform  0.3s cubic-bezier(0.16,1,0.3,1);
+-    }
+-    .accordion-body.open { opacity:1;transform:translateY(0); }
+-    .settings-open-btn {
+-      width:100%;background:none;border:none;cursor:pointer;
+-      color:var(--muted);font-size:.82rem;font-family:var(--font);
+-      display:flex;align-items:center;justify-content:space-between;
+-      padding:.35rem 0;transition:color .15s;user-select:none;
+-    }
+-    .settings-open-btn:hover { color:var(--text); }
+-    .settings-open-btn-arrow { font-size:.65rem;color:var(--faint); }
+-
+-    /* ── Peers ── */
+-    .peers-body{padding:.5rem 0 .2rem;display:flex;flex-direction:column;gap:.4rem;}
+-    .peer-row{
+-      display:flex;align-items:center;gap:.6rem;padding:.35rem .5rem;
+-      border-radius:8px;cursor:pointer;transition:background .12s,transform .1s;
+-      opacity:0;transform:translateX(-10px);
+-    }
+-    .accordion-body.open .peer-row{opacity:1;transform:translateX(0);}
+-    .accordion-body.open .peer-row:nth-child(1){transition-delay:.06s}
+-    .accordion-body.open .peer-row:nth-child(2){transition-delay:.12s}
+-    .accordion-body.open .peer-row:nth-child(3){transition-delay:.18s}
+-    .accordion-body.open .peer-row:nth-child(4){transition-delay:.24s}
+-    .accordion-body.open .peer-row:nth-child(5){transition-delay:.30s}
+-    .peer-row:hover{background:var(--border);transform:translateX(3px);}
+-    .peer-avatar{
+-      width:26px;height:26px;border-radius:6px;flex-shrink:0;
+-      background:linear-gradient(135deg,var(--primary),var(--purple));
+-      color:white;display:grid;place-items:center;font-size:.65rem;font-weight:700;
+-    }
+-    .peer-info{flex:1;min-width:0;}
+-    .peer-name{font-size:.78rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+-    .peer-addr{font-size:.66rem;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+-    .peer-badge{font-size:.6rem;font-weight:700;letter-spacing:.03em;padding:.15rem .4rem;border-radius:4px;flex-shrink:0;}
+-    .peer-badge.online {background:rgba(80,200,120,.15);color:#6fcf97;}
+-    .peer-badge.offline{background:rgba(242,114,128,.1);color:var(--coral);}
+-    .peer-badge.bt     {background:rgba(160,120,255,.12);color:#b09af5;}
+-    .peers-empty{font-size:.75rem;color:var(--faint);padding:.3rem .5rem;}
+-    .scan-progress-wrap {
+-      height:2px;border-radius:2px;background:var(--border);overflow:hidden;
+-      margin-bottom:.35rem;max-height:0;opacity:0;
+-      transition:max-height .25s ease,opacity .25s ease;
+-    }
+-    .scan-progress-wrap.visible { max-height:4px;opacity:1; }
+-    .scan-progress-bar {
+-      height:100%;width:0%;border-radius:2px;
+-      background:linear-gradient(90deg,var(--primary),var(--coral));
+-      transition:width .4s cubic-bezier(0.16,1,0.3,1);
+-    }
+-    .scan-btn{
+-      margin-top:.3rem;padding:.38rem .7rem;
+-      background:none;border:1px solid var(--border);border-radius:7px;
+-      color:var(--muted);font-size:.75rem;font-family:var(--font);font-weight:600;
+-      cursor:pointer;transition:background .15s,color .15s,transform .15s;
+-      display:flex;align-items:center;gap:.4rem;
+-    }
+-    .scan-btn:hover{background:var(--border);color:var(--text);transform:scale(1.02);}
+-    .scan-btn.scanning { animation: scanPulse 0.9s ease-in-out infinite alternate; }
+-    @keyframes scanPulse { from{opacity:.6} to{opacity:1} }
+-    .scan-dot{width:6px;height:6px;border-radius:50%;background:var(--primary);transition:background .2s,transform .3s;}
+-    .scan-btn.scanning .scan-dot{background:var(--coral);animation:dotPing 0.7s ease-in-out infinite alternate;}
+-    @keyframes dotPing { from{transform:scale(1)} to{transform:scale(1.6)} }
+-    .peer-count-badge {
+-      display:inline-flex;align-items:center;justify-content:center;
+-      min-width:16px;height:16px;padding:0 4px;
+-      background:rgba(242,114,128,.18);color:var(--primary);
+-      border-radius:99px;font-size:.6rem;font-weight:700;
+-      opacity:0;transform:scale(0.6);
+-      transition:opacity .25s ease,transform .25s cubic-bezier(0.34,1.3,0.64,1);
+-      margin-left:.3rem;
+-    }
+-    .peer-count-badge.visible { opacity:1;transform:scale(1); }
+-
+-    /* ── Misc ── */
+-    .btn{padding:.45rem .9rem;border-radius:7px;font-size:.82rem;font-weight:600;cursor:pointer;font-family:var(--font);border:none;transition:background .15s,transform .1s;}
+-    .btn:active{transform:scale(.97);}
+-    .btn-primary{background:var(--primary);color:#fff9f7;}
+-    .btn-primary:hover{background:var(--coral);}
++      width:34px;height:34px;flex-shrink:0;border-radius:9px;background:var(--primary);
++      color:#fff;font-weight:700;font-size:.85rem;
++      display:flex;align-items:center;justify-content:center;
++    }
++    .row-main{flex:1;min-width:0;}
++    .row-title{font-size:.88rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
++    .row-sub{font-size:.72rem;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
++    .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--faint);}
++    .dot.on{background:var(--ok);}
++    .empty{padding:1.4rem .8rem;color:var(--faint);font-size:.8rem;text-align:center;line-height:1.6;}
++
++    .side-foot{border-top:1px solid var(--border);padding:.7rem 1rem;}
++    .me{display:flex;align-items:center;gap:.6rem;min-width:0;}
++    .me-id{font-size:.68rem;color:var(--faint);font-family:ui-monospace,monospace;
++           white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
++    .node-pill{display:inline-block;margin-top:.4rem;font-size:.65rem;font-weight:700;
++               padding:.15rem .45rem;border-radius:5px;text-transform:uppercase;letter-spacing:.03em;}
++    .node-pill.on{background:rgba(111,207,151,.15);color:var(--ok);}
++    .node-pill.off{background:rgba(242,114,128,.15);color:var(--coral);}
++
++    /* ── Chat panel ──────────────────────────────────────────────── */
++    .panel{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);}
++    .panel-head{display:flex;align-items:center;gap:.7rem;padding:.75rem 1rem;
++                border-bottom:1px solid var(--border);background:var(--surface);}
++    .back-btn{display:none;}
++    .panel-title{font-size:.95rem;font-weight:700;}
++    .panel-sub{font-size:.7rem;color:var(--faint);font-family:ui-monospace,monospace;
++               white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
++    .msgs{flex:1;overflow-y:auto;padding:1.1rem;display:flex;flex-direction:column;gap:.55rem;}
++    .bubble{max-width:72%;padding:.55rem .8rem;border-radius:14px;font-size:.9rem;
++            line-height:1.45;word-wrap:break-word;white-space:pre-wrap;}
++    .bubble.them{align-self:flex-start;background:var(--surface);border:1px solid var(--border);
++                 border-bottom-left-radius:5px;}
++    .bubble.me{align-self:flex-end;background:var(--primary);color:#fff;border-bottom-right-radius:5px;}
++    .bubble-meta{font-size:.62rem;opacity:.75;margin-top:.25rem;}
++    .bubble-author{font-size:.68rem;font-weight:700;color:var(--primary);margin-bottom:.15rem;}
++    .composer{display:flex;gap:.6rem;padding:.8rem 1rem;border-top:1px solid var(--border);
++              background:var(--surface);}
++    .composer input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;
++                    padding:.65rem .9rem;font-size:.9rem;outline:none;}
++    .composer input:focus{border-color:var(--primary);}
++    .send{background:var(--primary);color:#fff;border:none;border-radius:10px;
++          padding:.65rem 1.1rem;font-weight:700;font-size:.9rem;cursor:pointer;}
++    .send:disabled{opacity:.5;cursor:not-allowed;}
++    .placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
++                 gap:.4rem;color:var(--faint);text-align:center;padding:1rem;}
++    .placeholder .big{font-family:var(--display);font-size:1.6rem;color:var(--muted);}
++
++    /* ── Modals ──────────────────────────────────────────────────── */
++    .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;
++              display:flex;align-items:center;justify-content:center;padding:1rem;}
++    .backdrop.hidden{display:none;}
++    .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;
++           width:min(560px,100%);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;}
++    .modal-head{display:flex;align-items:center;justify-content:space-between;
++                padding:1rem 1.2rem;border-bottom:1px solid var(--border);}
++    .modal-title{font-family:var(--display);font-size:1.2rem;font-weight:700;}
++    .modal-body{padding:1.1rem 1.2rem;overflow-y:auto;display:flex;flex-direction:column;gap:.9rem;}
++    .field{display:flex;flex-direction:column;gap:.3rem;}
++    .label{font-size:.75rem;color:var(--faint);}
++    .input{background:var(--bg);border:1px solid var(--border);border-radius:10px;
++           padding:.6rem .85rem;font-size:.9rem;outline:none;width:100%;}
++    .input:focus{border-color:var(--primary);}
++    textarea.input{resize:vertical;min-height:4.2em;line-height:1.5;}
++    .btn{border:none;border-radius:10px;padding:.65rem 1rem;font-size:.9rem;
++         font-weight:700;cursor:pointer;transition:filter .15s;}
++    .btn:hover{filter:brightness(1.08);}
++    .btn-primary{background:var(--primary);color:#fff;}
+     .btn-ghost{background:none;border:1px solid var(--border);color:var(--muted);}
+-    .btn-ghost:hover{background:var(--border);color:var(--text);}
+-    .status-line{font-size:.72rem;color:var(--faint);margin-top:.2rem;min-height:1.2em;transition:color .2s;}
+-    .status-line.ok  {color:#6fcf97;}
+-    .status-line.err {color:var(--coral);}
+-
+-    /* ── Chat panel ── */
+-    .chat-panel{flex:1;display:flex;flex-direction:column;height:100%;min-width:0;}
+-    .chat-topbar{
+-      display:flex;align-items:center;gap:.85rem;padding:.9rem 1.4rem;
+-      border-bottom:2px solid var(--border);background:var(--surface);flex-shrink:0;
+-      animation: topbarIn 0.4s cubic-bezier(0.16,1,0.3,1) both;
+-    }
+-    @keyframes topbarIn { from { opacity:0;transform:translateY(-8px); } to { opacity:1;transform:translateY(0); } }
+-    .chat-topbar .avatar{width:36px;height:36px;font-size:.8rem;}
+-    .topbar-info .title{font-weight:700;font-size:1rem;}
+-    .topbar-info .sub{font-size:.75rem;color:var(--faint);}
+-    .topbar-actions{margin-left:auto;display:flex;gap:.5rem;}
+-    .topbar-actions button{
+-      background:none;border:1px solid var(--border);border-radius:7px;
+-      padding:.35rem .65rem;cursor:pointer;color:var(--muted);font-size:.75rem;
+-      font-family:var(--font);font-weight:600;transition:background .15s,color .15s,transform .15s;
+-    }
+-    .topbar-actions button:hover{background:var(--border);color:var(--text);}
+-    .messages-area{flex:1;overflow-y:auto;padding:1.2rem 1.4rem;display:flex;flex-direction:column;gap:.85rem;}
+-    .msg-row{
+-      display:flex;gap:.75rem;max-width:72%;align-items:flex-end;
+-      animation: bubbleIn 0.3s cubic-bezier(0.34,1.3,0.64,1) both;
+-    }
+-    .msg-row.me{margin-left:auto;flex-direction:row-reverse;}
+-    @keyframes bubbleIn {
+-      from { opacity:0;transform:scale(0.85) translateY(8px); } to { opacity:1;transform:scale(1) translateY(0); }
+-    }
+-    .bubble{
+-      padding:.1rem 1rem;border-radius:16px 16px 16px 5px;
+-      background:var(--surface);border:1px solid var(--border);
+-      font-size:.9rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;
+-      transition:box-shadow .15s;
+-    }
+-    .bubble:hover{box-shadow:0 4px 12px rgba(0,0,0,.12);}
+-    .msg-row.me .bubble{background:linear-gradient(135deg,var(--primary),var(--coral));color:white;border:none;border-radius:16px 16px 5px 16px;}
+-    .bubble-author{font-size:.72rem;font-weight:700;margin-bottom:.3rem;opacity:.7;}
+-    .bubble-time{font-size:.68rem;color:var(--faint);margin-top:.3rem;text-align:right;}
+-    .msg-row.me .bubble-time{color:rgba(255,255,255,.65);}
+-    .badge{font-size:.65rem;border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;font-weight:600;}
+-    .badge-enc{background:rgba(242,114,128,.15);color:var(--coral);}
+-    .badge-ok{background:rgba(80,200,120,.12);color:#6fcf97;}
+-    .badge-net{background:rgba(100,160,255,.12);color:#7ab4f5;}
+-    .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.6rem;color:var(--faint);font-size:.9rem;}
+-    .empty-state .big{font-family:var(--display);font-size:1.5rem;color:var(--border);}
+-    .sys-msg{text-align:center;font-size:.72rem;color:var(--faint);padding:.25rem 0;animation:fadeUp 0.3s ease both;}
+-    .composer-area{
+-      display:flex;align-items:center;gap:.65rem;padding:.85rem 1.2rem;
+-      border-top:2px solid var(--border);background:var(--surface);flex-shrink:0;
+-    }
+-    .composer-area input{
+-      flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;
+-      padding:.6rem 1rem;font-size:.9rem;color:var(--text);font-family:var(--font);
+-      outline:none;transition:border-color .15s,box-shadow .2s;
+-    }
+-    .composer-area input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(242,114,128,.15);}
+-    .composer-area input::placeholder{color:var(--faint);}
+-    .send-btn{
+-      padding:.6rem 1.2rem;background:var(--primary);color:white;border:none;border-radius:10px;
+-      cursor:pointer;font-family:var(--font);font-weight:600;font-size:.88rem;white-space:nowrap;
+-      transition:background .15s,transform .1s,box-shadow .15s;
++    .status{font-size:.76rem;color:var(--faint);min-height:1.2em;line-height:1.5;}
++    .status.ok{color:var(--ok);}
++    .status.err{color:var(--coral);}
++    .hint{font-size:.73rem;line-height:1.55;color:var(--faint);background:var(--bg);
++          border:1px solid var(--border);border-radius:10px;padding:.6rem .75rem;}
++    .divider{height:1px;background:var(--border);}
++    .sub-title{font-size:.82rem;font-weight:700;}
++    .check-row{display:flex;align-items:center;gap:.5rem;cursor:pointer;font-size:.88rem;}
++    .check-row input{width:16px;height:16px;accent-color:var(--primary);cursor:pointer;}
++
++    .stabs{display:flex;gap:.3rem;padding:.5rem 1.2rem;border-bottom:1px solid var(--border);
++           overflow-x:auto;}
++    .stab{background:none;border:none;padding:.4rem .7rem;border-radius:8px;font-size:.8rem;
++          font-weight:600;color:var(--faint);cursor:pointer;white-space:nowrap;}
++    .stab.active{background:var(--bg);color:var(--primary);}
++    .spanel{display:none;flex-direction:column;gap:.9rem;}
++    .spanel.active{display:flex;}
++
++    .plist{display:flex;flex-direction:column;gap:.5rem;}
++    .pitem{display:flex;align-items:center;justify-content:space-between;gap:.7rem;
++           padding:.6rem .8rem;background:var(--bg);border:1px solid var(--border);
++           border-radius:10px;flex-wrap:wrap;}
++    .pname{font-size:.85rem;font-weight:600;display:flex;align-items:center;gap:.4rem;}
++    .badge{font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
++           background:rgba(111,207,151,.15);color:var(--ok);border-radius:5px;padding:.1rem .4rem;}
++    .pmeta{font-size:.7rem;color:var(--faint);margin-top:.15rem;}
++    .pmeta a{color:var(--primary);}
++    .pacts button{background:none;border:1px solid var(--border);border-radius:7px;
++                  padding:.28rem .5rem;font-size:.68rem;font-weight:600;color:var(--faint);cursor:pointer;}
++    .pacts button:hover{background:var(--border);color:var(--text);}
++
++    .toast{position:fixed;bottom:1.2rem;left:50%;transform:translateX(-50%);
++           background:var(--surface);border:1px solid var(--border);border-radius:10px;
++           padding:.6rem 1rem;font-size:.82rem;z-index:100;box-shadow:0 6px 24px rgba(0,0,0,.25);
++           opacity:0;pointer-events:none;transition:opacity .2s;}
++    .toast.show{opacity:1;}
++
++    /* ── Responsive ──────────────────────────────────────────────── */
++    @media (max-width: 820px) {
++      .sidebar{position:absolute;inset:0;width:100%;z-index:5;border-right:none;}
++      .panel{position:absolute;inset:0;transform:translateX(100%);
++             transition:transform .24s cubic-bezier(.16,1,.3,1);}
++      body.chat-open .panel{transform:translateX(0);}
++      body.chat-open .sidebar{opacity:0;pointer-events:none;transition:opacity .2s;}
++      .back-btn{display:flex;align-items:center;justify-content:center;width:32px;height:32px;
++                flex-shrink:0;background:none;border:1px solid var(--border);border-radius:8px;
++                color:var(--muted);font-size:1rem;cursor:pointer;}
++      .bubble{max-width:85%;}
++      .composer input,.send{padding-top:.7rem;padding-bottom:.7rem;}
++    }
++    @media (prefers-reduced-motion: reduce){
++      *{animation-duration:.01ms !important;transition-duration:.01ms !important;}
+     }
+-    .send-btn:hover{background:var(--coral);box-shadow:0 4px 16px rgba(242,114,128,.4);}
+-    .send-btn:active{transform:scale(.95);}
+-    .send-btn:disabled{opacity:.5;cursor:not-allowed;}
+-    .no-chat{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.75rem;color:var(--muted);}
+-    .no-chat .big{font-family:var(--display);font-size:2rem;color:var(--border);}
+-    ::-webkit-scrollbar{width:4px;}
+-    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
+-    @media (prefers-reduced-motion: reduce) {
+-      *,*::before,*::after { animation-duration:0.01ms !important;transition-duration:0.01ms !important; }
+-    }
+-
+-    /* ── Responsive: tablet / mobile ──────────────────────────────────────
+-       Layout below ~860px switches from side-by-side (sidebar + chat-panel)
+-       to a single-pane, one-screen-at-a-time view — the chat list OR the
+-       open conversation, never both fighting for space on a phone-width
+-       screen. `body.chat-open` is toggled by openChat()/closeChat() in the
+-       script below and is the only thing driving which pane shows. */
+-    .back-btn{
+-      display:none;background:none;border:1px solid var(--border);border-radius:8px;
+-      width:34px;height:34px;flex-shrink:0;font-size:1.1rem;line-height:1;color:var(--muted);
+-      cursor:pointer;align-items:center;justify-content:center;
+-      transition:background .15s,color .15s,transform .1s;
+-    }
+-    .back-btn:hover{background:var(--border);color:var(--text);}
+-    .back-btn:active{transform:scale(.92);}
+-
+-    @media (max-width: 860px) {
+-      body{overflow:hidden;}
+-      .sidebar{
+-        width:100%;min-width:0;border-right:none;
+-        position:absolute;inset:0;z-index:5;
+-      }
+-      .chat-panel{
+-        position:absolute;inset:0;width:100%;
+-        transform:translateX(100%);transition:transform .25s cubic-bezier(0.16,1,0.3,1);
+-      }
+-      body.chat-open .chat-panel{transform:translateX(0);}
+-      body.chat-open .sidebar{
+-        transform:translateX(-8%);opacity:0;pointer-events:none;
+-        transition:transform .25s cubic-bezier(0.16,1,0.3,1),opacity .2s;
+-      }
+-      .back-btn{display:flex;}
+-
+-      /* Touch targets: bump the small icon/text buttons up to a comfortable
+-         44px minimum tap area without changing their look on desktop. */
+-      .theme-btn,.topbar-actions button{min-height:38px;padding-top:.5rem;padding-bottom:.5rem;}
+-      .chat-item{padding:.85rem .8rem;}
+-      .send-btn{padding:.75rem 1.1rem;}
+-      .composer-area input{padding:.75rem 1rem;}
+-
+-      /* Settings modal: side-nav becomes a horizontal scrollable tab strip
+-         instead of squeezing a 720px two-pane layout into a phone screen. */
+-      #settings-backdrop .settings-shell{
+-        flex-direction:column;width:min(480px,94vw);height:min(600px,90vh);
+-      }
+-      .stab-nav{
+-        width:100%;min-width:0;flex-direction:row;overflow-x:auto;
+-        border-right:none;border-bottom:1px solid var(--border);
+-        padding:.5rem;flex-shrink:0;
+-      }
+-      .stab-section-label{display:none;}
+-    }
+-
+-    @media (max-width: 420px) {
+-      .messages-area{padding:1rem .8rem;}
+-      .msg-row{max-width:86%;}
+-      .chat-topbar{padding:.75rem .9rem;}
+-      .composer-area{padding:.7rem .8rem;}
+-    }
+-
+-    /* ── Bluetooth panel ── */
+-    .bt-device-list { display:flex;flex-direction:column;gap:.5rem;margin-top:.25rem; }
+-    .bt-device-row {
+-      display:flex;align-items:center;justify-content:space-between;
+-      background:var(--bg);border:1px solid var(--border);border-radius:9px;
+-      padding:.55rem .85rem;font-size:.82rem;
+-    }
+-    .bt-device-info { display:flex;flex-direction:column;gap:.1rem; }
+-    .bt-device-name { font-weight:600;color:var(--text); }
+-    .bt-device-mac  { font-size:.68rem;color:var(--faint);font-family:monospace; }
+-    .bt-device-chat {
+-      background:none;border:1px solid var(--border);border-radius:6px;
+-      padding:.25rem .6rem;font-size:.72rem;font-weight:600;
+-      color:var(--muted);font-family:var(--font);cursor:pointer;
+-      transition:background .12s,color .12s;
+-    }
+-    .bt-device-chat:hover { background:var(--border);color:var(--text); }
+-    .bt-unavail { font-size:.8rem;color:var(--faint);padding:.5rem 0; }
+   </style>
+ </head>
+ <body>
+ 
+-<!-- splash -->
+-<div id="splash">
+-  <div class="splash-logo">
+-    <span class="splash-word-project">project enclave |</span>
+-    <span class="splash-word-enclave">| enclave messenger</span>
+-  </div>
+-  <div class="splash-sub">secure &middot; private &middot; encrypted</div>
+-  <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+-</div>
+-
+-<!-- unlock modal -->
+-<div class="modal-backdrop hidden" id="unlock-backdrop">
+-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+-    <div class="modal-title" id="modal-title">unlock enclave</div>
+-    <div class="modal-sub">enter your passphrase to start the node and decrypt messages</div>
+-    <div class="modal-input-wrap">
+-      <input id="modal-pass" type="password" placeholder="passphrase"
+-             autocomplete="current-password"
+-             onkeydown="if(event.key==='Enter') modalUnlock()"/>
+-      <button class="modal-eye" onclick="toggleModalEye()" id="modal-eye-btn" title="show/hide">show</button>
+-    </div>
+-    <div class="modal-error" id="modal-error"></div>
+-    <div style="display:flex;align-items:center;justify-content:center;gap:.6rem;margin-top:-.2rem;">
+-      <span style="font-size:.78rem;color:var(--faint);">connection mode</span>
+-      <div id="conn-toggle" onclick="toggleConnMode()"
+-           style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:9999px;padding:3px;gap:3px;cursor:pointer;user-select:none;">
+-        <span id="conn-ws"   class="conn-chip active">real-time</span>
+-        <span id="conn-poll" class="conn-chip">polling</span>
++<div class="backdrop" id="unlock-backdrop">
++  <div class="modal" style="max-width:420px;">
++    <div class="modal-head"><div class="modal-title" id="unlock-title">unlock</div></div>
++    <div class="modal-body">
++      <div class="hint" id="unlock-hint">enter your passphrase to start the node.</div>
++      <div class="field">
++        <div class="label">passphrase</div>
++        <input id="unlock-pass" class="input" type="password" autocomplete="current-password"
++               onkeydown="if(event.key==='Enter')doUnlock()"/>
++      </div>
++      <div class="field" id="unlock-confirm-field" style="display:none;">
++        <div class="label">confirm passphrase</div>
++        <input id="unlock-pass2" class="input" type="password" autocomplete="new-password"
++               onkeydown="if(event.key==='Enter')doUnlock()"/>
+       </div>
++      <button class="btn btn-primary" id="unlock-btn" onclick="doUnlock()">unlock &amp; start node</button>
++      <div class="status" id="unlock-status"></div>
+     </div>
+-    <button class="modal-unlock-btn" id="modal-unlock-btn" onclick="modalUnlock()">unlock &amp; start node</button>
+-    <button class="modal-skip" onclick="dismissModal()">skip for now &mdash; browse without decryption</button>
+   </div>
+ </div>
+ 
+-<!-- new chat modal — single smart input -->
+-<div class="modal-backdrop hidden" id="newchat-backdrop">
+-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="newchat-title">
+-    <div class="modal-title" id="newchat-title">new chat</div>
+-    <div class="modal-sub">enter a node id, phone number, IP:port, or bluetooth MAC</div>
+-    <div class="modal-field-group">
+-      <div class="modal-input-wrap">
+-        <input id="nc-smart" class="plain" type="text"
+-               placeholder="enc_a1b2c3... or +91... or 192.168.1.x:5001 or AA:BB:CC:DD:EE:FF"
+-               autocomplete="off" spellcheck="false"
+-               oninput="onSmartInput()"
+-               onkeydown="if(event.key==='Enter') submitNewChat()"/>
++<div class="backdrop hidden" id="newchat-backdrop" onclick="if(event.target===this)closeModal('newchat')">
++  <div class="modal" style="max-width:460px;">
++    <div class="modal-head">
++      <div class="modal-title">new chat</div>
++      <button class="icon-btn" onclick="closeModal('newchat')">close</button>
++    </div>
++    <div class="modal-body">
++      <div class="field">
++        <div class="label">address</div>
++        <input id="nc-input" class="input" type="text" autocomplete="off" spellcheck="false"
++               placeholder="node id, ip:port, phone, or bluetooth MAC"
++               oninput="onNewChatInput()" onkeydown="if(event.key==='Enter')submitNewChat()"/>
+       </div>
+-      <div style="display:flex;align-items:center;gap:.5rem;min-height:1.4em;">
+-        <span class="nc-type-badge" id="nc-type-badge"></span>
+-        <span class="field-hint" id="nc-hint"></span>
++      <div class="status" id="nc-type"></div>
++      <div class="hint">
++        A <strong>node id</strong> is the long code under someone&rsquo;s name.
++        <strong>ip:port</strong> connects straight to a device you know the address of &mdash;
++        useful when discovery can&rsquo;t reach them.
+       </div>
++      <button class="btn btn-primary" onclick="submitNewChat()">start chat</button>
++      <div class="status" id="nc-status"></div>
+     </div>
+-    <div class="modal-error" id="newchat-error"></div>
+-    <button class="modal-unlock-btn" onclick="submitNewChat()">open chat &rarr;</button>
+-    <button class="modal-skip" onclick="dismissNewChat()">cancel</button>
+   </div>
+ </div>
+ 
+-<!-- settings modal -->
+-<div class="modal-backdrop hidden" id="settings-backdrop">
+-  <div class="settings-shell" role="dialog" aria-modal="true" aria-label="Settings">
+-    <button class="settings-close-btn" onclick="closeSettingsModal()" title="close">&times;</button>
+-    <nav class="stab-nav" id="stab-nav">
+-      <div class="stab-section-label">core</div>
+-      <button class="stab-item" data-tab="profile" onclick="switchSettingsTab('profile')">Profile</button>
+-      <button class="stab-item" data-tab="profiles" onclick="switchSettingsTab('profiles')">Profiles</button>
+-      <button class="stab-item active" data-tab="node" onclick="switchSettingsTab('node')">Node</button>
+-      <button class="stab-item" data-tab="sms" onclick="switchSettingsTab('sms')">SMS Gateway</button>
+-      <div class="stab-section-label" id="stab-plugins-label" style="display:none;">plugins</div>
+-    </nav>
+-    <div class="stab-content" id="stab-content">
+-
+-      <!-- Profile panel -->
+-      <div class="stab-panel" id="stab-panel-profile">
+-        <div class="stab-panel-title">Profile</div>
+-
+-        <div class="profile-header-row">
+-          <div class="profile-avatar-large" id="prof-avatar-large">?</div>
+-          <div class="profile-header-info">
+-            <div class="profile-header-name" id="prof-header-name">&mdash;</div>
+-            <div class="profile-header-sub" id="prof-header-sub">no identity loaded</div>
+-          </div>
+-        </div>
+-
+-        <div class="smod-field">
+-          <div class="smod-label">display name</div>
+-          <input id="prof-username" class="smod-input" type="text"
+-                 placeholder="how others see you"
+-                 autocomplete="off" spellcheck="false"/>
+-        </div>
+-
+-        <div class="smod-field">
+-          <div class="smod-label">node id</div>
+-          <div class="smod-copy-wrap">
+-            <input id="prof-node-id" class="smod-input" type="text" readonly
+-                   placeholder="unlock node to reveal"/>
+-            <button class="smod-copy-btn" onclick="copyNodeId()" id="prof-copy-btn">copy</button>
+-          </div>
+-        </div>
+-
+-        <div class="smod-field">
+-          <div class="smod-label">active profile</div>
+-          <input id="prof-profile-name" class="smod-input" type="text" readonly
+-                 placeholder="default"/>
+-        </div>
++<div class="backdrop hidden" id="settings-backdrop" onclick="if(event.target===this)closeModal('settings')">
++  <div class="modal">
++    <div class="modal-head">
++      <div class="modal-title">settings</div>
++      <button class="icon-btn" onclick="closeModal('settings')">close</button>
++    </div>
++    <div class="stabs">
++      <button class="stab active" data-stab="identity" onclick="switchTab('identity')">identity</button>
++      <button class="stab" data-stab="profiles" onclick="switchTab('profiles')">profiles</button>
++      <button class="stab" data-stab="network" onclick="switchTab('network')">network</button>
++    </div>
++    <div class="modal-body">
+ 
+-        <div class="smod-btn-row">
+-          <button class="btn btn-primary btn-ripple" id="prof-save-btn"
+-                  onclick="saveProfile()" style="flex:1;">
+-            save changes
+-          </button>
++      <div class="spanel active" id="spanel-identity">
++        <div class="field">
++          <div class="label">display name</div>
++          <input id="set-username" class="input" type="text" autocomplete="off"/>
+         </div>
+-        <div class="smod-status" id="prof-status">&mdash;</div>
+-
+-        <div class="danger-zone">
+-          <div class="danger-zone-label">danger zone</div>
+-          <div class="danger-zone-desc">
+-            Generate a new identity keypair. Your current node ID will be lost and
+-            you will appear as a new peer to everyone.
+-          </div>
+-          <button class="btn-danger" onclick="generateNewIdentity()">regenerate identity</button>
++        <div class="field">
++          <div class="label">your node id &mdash; share this so people can message you</div>
++          <input id="set-nodeid" class="input" type="text" readonly
++                 style="font-family:ui-monospace,monospace;font-size:.78rem;"
++                 onclick="this.select();copyNodeId()"/>
+         </div>
++        <button class="btn btn-primary" onclick="saveUsername()">save</button>
++        <div class="status" id="set-identity-status"></div>
+       </div>
+ 
+-      <!-- Profiles panel (multiple identities, plural — distinct from
+-           the single "Profile" tab above, which is about THIS session's
+-           own display name/identity) -->
+-      <div class="stab-panel" id="stab-panel-profiles">
+-        <div class="stab-panel-title">Profiles</div>
+-        <div class="smod-hint">
+-          Each profile is a fully separate identity with its own keys,
+-          chats, and peers, on its own ports — that's what makes running
+-          more than one at the same time on this device actually work.
+-          Because of that, <strong>this browser tab is locked to the
+-          profile it's already connected to</strong> — "set as default"
+-          below only changes which profile a fresh command-line launch
+-          uses next time, it does not switch what you're looking at
+-          right now. To actually use a different profile, open its own
+-          address in a new tab (shown under each profile below) — that's
+-          a separate running instance, same as opening a second account
+-          in a different browser profile.
++      <div class="spanel" id="spanel-profiles">
++        <div class="hint">
++          Each profile is a separate identity with its own keys, chats and ports.
++          This tab is locked to the profile it&rsquo;s connected to &mdash; open a
++          profile&rsquo;s own link to use it, which is a separate running instance.
+         </div>
+-
+-        <div id="profiles-list" class="profiles-list">
+-          <div style="color:var(--faint);font-size:.8rem;">loading&hellip;</div>
++        <div class="plist" id="profiles-list"><div class="empty">loading&hellip;</div></div>
++        <div class="divider"></div>
++        <div class="sub-title">create a profile</div>
++        <div class="field">
++          <div class="label">name</div>
++          <input id="np-name" class="input" type="text" autocomplete="off" placeholder="e.g. work"/>
+         </div>
+-
+-        <div class="smod-divider"></div>
+-        <div class="smod-subsection-title">create a new profile</div>
+-        <div class="smod-field">
+-          <div class="smod-label">name</div>
+-          <input id="new-profile-name" class="smod-input" type="text"
+-                 placeholder="e.g. work, personal" autocomplete="off" spellcheck="false"/>
+-        </div>
+-        <div class="smod-field">
+-          <div class="smod-label">passphrase</div>
+-          <input id="new-profile-pass" class="smod-input" type="password"
+-                 placeholder="protects this profile's identity" autocomplete="new-password"/>
++        <div class="field">
++          <div class="label">passphrase</div>
++          <input id="np-pass" class="input" type="password" autocomplete="new-password"
++                 placeholder="protects this profile's identity"/>
+         </div>
+-        <div class="smod-btn-row">
+-          <button class="btn btn-ghost btn-ripple" onclick="createProfile()" style="flex:1;">
+-            + create profile
+-          </button>
+-        </div>
+-        <div class="smod-status" id="profiles-status">&mdash;</div>
++        <button class="btn btn-ghost" onclick="createProfile()">+ create profile</button>
++        <div class="status" id="profiles-status"></div>
+       </div>
+ 
+-      <!-- Node panel -->
+-      <div class="stab-panel active" id="stab-panel-node">
+-        <div class="stab-panel-title">Node</div>
+-        <div class="smod-field">
+-          <div class="smod-label">session passphrase</div>
+-          <div class="smod-pass-wrap">
+-            <input id="cfg-pass" class="smod-input" type="password"
+-                   placeholder="unlock identity + encrypt/decrypt"
+-                   oninput="onPassphraseChange()"/>
+-            <button class="modal-eye" onclick="toggleCfgEye()" id="cfg-eye-btn" title="show/hide">show</button>
+-          </div>
+-        </div>
+-        <div class="smod-btn-row">
+-          <button class="btn btn-primary btn-ripple" id="cfg-unlock-btn" onclick="startNode()" style="flex:1;">
+-            unlock &amp; start node
+-          </button>
++      <div class="spanel" id="spanel-network">
++        <div class="sub-title">DHT (internet discovery)</div>
++        <div class="hint">
++          Finds peers beyond your LAN. It does <strong>not</strong> punch through NAT by
++          itself, and there&rsquo;s no public bootstrap server &mdash; you need at least one
++          reachable peer below. Applies next time the node starts.
+         </div>
+-        <div class="smod-status" id="cfg-status">&mdash;</div>
+-
+-        <div class="smod-divider"></div>
+-        <div class="smod-subsection-title">DHT (internet discovery)</div>
+-        <div class="smod-hint">
+-          Finds peers over the internet, not just your LAN — same idea as
+-          BitTorrent's DHT. Two things worth knowing before turning this
+-          on: it does <strong>not</strong> get you through NAT/firewalls
+-          by itself, it only helps find a peer's last-known address; and
+-          there's no public bootstrap server — you need at least one
+-          already-reachable peer's address below to actually join a swarm.
+-          Changes here take effect next time you start the node, not live.
++        <label class="check-row"><input type="checkbox" id="dht-on"/><span>enable DHT</span></label>
++        <div class="field">
++          <div class="label">bootstrap nodes (host:port, one per line)</div>
++          <textarea id="dht-boot" class="input" rows="3" spellcheck="false"
++                    placeholder="203.0.113.5:51820"></textarea>
+         </div>
+-        <div class="smod-field">
+-          <label class="smod-checkbox-row">
+-            <input type="checkbox" id="cfg-dht-enabled"/>
+-            <span>enable DHT</span>
+-          </label>
++        <div class="field">
++          <div class="label">your reachable address (optional)</div>
++          <input id="dht-ip" class="input" type="text" autocomplete="off" spellcheck="false"/>
+         </div>
+-        <div class="smod-field">
+-          <div class="smod-label">bootstrap nodes (host:port, one per line)</div>
+-          <textarea id="cfg-dht-bootstrap" class="smod-input smod-textarea" rows="3"
+-                    placeholder="203.0.113.5:51820&#10;your-vps.example.com:51820"
+-                    spellcheck="false"></textarea>
+-        </div>
+-        <div class="smod-field">
+-          <div class="smod-label">your reachable address (optional — auto-detected if blank)</div>
+-          <input id="cfg-dht-public-ip" class="smod-input" type="text"
+-                 placeholder="e.g. a VPS's static IP" autocomplete="off" spellcheck="false"/>
+-        </div>
+-        <div class="smod-btn-row">
+-          <button class="btn btn-ghost btn-ripple" id="cfg-dht-save-btn" onclick="saveDhtConfig()" style="flex:1;">
+-            save DHT settings
+-          </button>
+-        </div>
+-        <div class="smod-status" id="cfg-dht-status">&mdash;</div>
+-      </div>
+-
+-      <!-- SMS Gateway panel -->
+-      <div class="stab-panel" id="stab-panel-sms">
+-        <div class="stab-panel-title">SMS Gateway</div>
+-        <div class="smod-field">
+-          <div class="smod-label">username</div>
+-          <input id="cfg-sms-user" class="smod-input" type="text" autocomplete="off"/>
+-        </div>
+-        <div class="smod-field">
+-          <div class="smod-label">password</div>
+-          <input id="cfg-sms-pass" class="smod-input" type="password"/>
+-        </div>
+-        <div class="smod-field">
+-          <div class="smod-label">device host (ip:port or cloud)</div>
+-          <input id="cfg-sms-host" class="smod-input" type="text" placeholder="192.168.1.x:8080"/>
+-        </div>
+-        <div class="smod-btn-row">
+-          <button class="btn btn-ghost btn-ripple" id="cfg-save-btn" onclick="saveConfig()" style="flex:1;">
+-            save sms config
+-          </button>
+-        </div>
+-        <div class="smod-status" id="cfg-sms-status"></div>
++        <button class="btn btn-ghost" onclick="saveDht()">save network settings</button>
++        <div class="status" id="dht-status"></div>
+       </div>
+ 
+     </div>
+   </div>
+ </div>
+ 
+-<!-- main layout -->
+-<aside class="sidebar">
+-  <div class="brand">
+-    <div class="logo">project <span>enclave</span></div>
+-    <button class="theme-btn" onclick="toggleTheme()">theme</button>
+-  </div>
+-  <div class="search-wrap">
+-    <input id="search" placeholder="Search chats&hellip;" oninput="filterChats(this.value)"/>
+-  </div>
+-  <div class="chat-list" id="chat-list">
+-    <div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">loading&hellip;</div>
+-  </div>
+-  <button class="new-chat-btn" onclick="newChat()">+ new chat</button>
+-  <div class="sidebar-footer">
+-    <div class="profile-row">
+-      <div class="avatar" id="me-avatar">?</div>
+-      <div class="profile-info">
+-        <div class="name" id="me-name">&mdash;</div>
+-        <div class="uid" id="me-uid">no identity</div>
++<div class="toast" id="toast"></div>
++
++<div id="app">
++  <aside class="sidebar">
++    <div class="side-head">
++      <div class="brand">project <span>enclave</span></div>
++      <div style="display:flex;gap:.35rem;">
++        <button class="icon-btn" onclick="toggleTheme()" title="theme">&#9680;</button>
++        <button class="icon-btn" onclick="openSettings()" title="settings">settings</button>
+       </div>
+     </div>
+-    <div id="node-status" class="node-status off">node offline</div>
+-
+-    <div class="accordion" id="peers-accordion">
+-      <button class="accordion-trigger" onclick="toggleAccordion('peers')" aria-expanded="false" id="peers-trigger">
+-        <span>peers <span id="peers-count" class="peer-count-badge"></span></span>
+-        <span class="accordion-arrow">&#9660;</span>
+-      </button>
+-      <div class="accordion-body" id="peers-body">
+-        <div class="peers-body" id="peers-list">
+-          <div class="peers-empty">no peers detected yet</div>
+-        </div>
+-        <div class="scan-progress-wrap" id="scan-progress-wrap">
+-          <div class="scan-progress-bar" id="scan-progress-bar"></div>
++
++    <div class="tabs">
++      <button class="tab active" data-tab="chats" onclick="switchView('chats')">chats</button>
++      <button class="tab" data-tab="peers" onclick="switchView('peers')">peers</button>
++    </div>
++
++    <div class="list" id="list"><div class="empty">loading&hellip;</div></div>
++
++    <div style="padding:.6rem;border-top:1px solid var(--border);display:flex;gap:.4rem;">
++      <button class="btn btn-ghost" style="flex:1;font-size:.8rem;padding:.5rem;"
++              onclick="openModal('newchat')">+ new chat</button>
++      <button class="btn btn-ghost" style="font-size:.8rem;padding:.5rem .7rem;"
++              onclick="scanPeers()" title="scan the LAN for peers">scan</button>
++    </div>
++
++    <div class="side-foot">
++      <div class="me">
++        <div class="avatar" id="me-avatar">?</div>
++        <div style="min-width:0;flex:1;">
++          <div class="row-title" id="me-name">&mdash;</div>
++          <div class="me-id" id="me-id" onclick="copyNodeId()" title="click to copy">no identity</div>
+         </div>
+-        <div class="status-line" id="scan-status" style="margin-bottom:.25rem;"></div>
+-        <button class="scan-btn" id="scan-btn" onclick="scanPeers()">
+-          <span class="scan-dot"></span><span id="scan-btn-label">scan network</span>
+-        </button>
+       </div>
++      <span class="node-pill off" id="node-pill">node offline</span>
+     </div>
++  </aside>
+ 
+-    <button class="settings-open-btn" onclick="openSettingsModal('profile')">
+-      <span>settings &amp; config</span>
+-      <span class="settings-open-btn-arrow">&#8599;</span>
+-    </button>
+-  </div>
+-</aside>
+-
+-<section class="chat-panel">
+-  <div class="no-chat" id="no-chat">
+-    <div class="big">enclave</div>
+-    <div>select a chat or create one</div>
+-    <div style="font-size:.78rem;color:var(--faint);">messages are end-to-end encrypted</div>
+-  </div>
+-  <div id="active-chat" style="display:none;flex-direction:column;height:100%;">
+-    <div class="chat-topbar">
+-      <button class="back-btn" id="chat-back-btn" onclick="closeChat()" title="back to chats" aria-label="back to chats">&larr;</button>
++  <main class="panel">
++    <div class="panel-head" id="panel-head" style="display:none;">
++      <button class="back-btn" onclick="closeChat()">&larr;</button>
+       <div class="avatar" id="chat-avatar">?</div>
+-      <div class="topbar-info">
+-        <div class="title" id="chat-title">&mdash;</div>
+-        <div class="sub" id="chat-sub">&mdash;</div>
+-      </div>
+-      <div class="topbar-actions">
+-        <button onclick="refreshMessages()" title="refresh">refresh</button>
+-        <button onclick="closeChat()" title="close">close</button>
++      <div style="min-width:0;flex:1;">
++        <div class="panel-title" id="chat-title">&mdash;</div>
++        <div class="panel-sub" id="chat-sub"></div>
+       </div>
++      <button class="icon-btn" onclick="refreshMessages()">refresh</button>
++    </div>
++
++    <div class="placeholder" id="placeholder">
++      <div class="big">enclave</div>
++      <div>select a chat, or start a new one</div>
++      <div style="font-size:.75rem;">messages are end-to-end encrypted</div>
+     </div>
+-    <div class="messages-area" id="messages-area"></div>
+-    <div class="composer-area">
+-      <input id="composer"
+-             placeholder="send a message&hellip;"
+-             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"/>
+-      <button class="send-btn" id="send-btn" onclick="sendMessage()">send &rarr;</button>
++
++    <div class="msgs" id="msgs" style="display:none;"></div>
++
++    <div class="composer" id="composer" style="display:none;">
++      <input id="compose" type="text" placeholder="send a message&hellip;" autocomplete="off"
++             onkeydown="if(event.key==='Enter')sendMessage()"/>
++      <button class="send" id="send-btn" onclick="sendMessage()">send</button>
+     </div>
+-  </div>
+-</section>
++  </main>
++</div>
+ 
+ <script>
+-// Same-origin only (Jinja renders this server-side) — required on every
+-// mutating request so cross-origin pages can't ride the user's session
+-// via a Content-Type-spoofed fetch(). See web.py for the full rationale.
+-const CSRF_TOKEN = "{{ csrf_token }}";
+-
+-// ── State ─────────────────────────────────────────────────────────────────
+-let currentChatId = null;
+-let allChats = [];
+-let knownPeers = {};
+-let connMode = 'ws'; // 'ws' | 'poll'
+-let wsConn = null;
+-let pollInterval = null;
+-
+-const $  = id => document.getElementById(id);
+-const pass = () => $('cfg-pass').value;
+-const isPhone = id => /^\+?[0-9]{7,15}$/.test((id||'').replace(/\s/g,''));
+-const isBT    = id => /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test((id||'').trim());
+-const isIP    = id => /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test((id||'').trim());
+-// Real user_ids (key_manager.py's get_user_id()) are unpadded base64url
+-// Ed25519 public keys with NO prefix — confirmed by every id this app has
+-// ever actually generated. This previously required an 'enc_' prefix that
+-// nothing in the backend has ever produced, so a real node id pasted here
+-// always fell through to "unrecognised format".
+-const isNode  = id => /^[A-Za-z0-9_-]{40,50}$/.test((id||'').trim());
+-
+-// ── API helper ────────────────────────────────────────────────────────────
+-async function api(url, body) {
+-  const opts = body
+-    ? {method:'POST', headers:{'Content-Type':'application/json', 'X-Enclave-CSRF': CSRF_TOKEN}, body:JSON.stringify(body)}
+-    : {};
++// Same-origin only; required on every mutating request. See web.py.
++const CSRF = "{{ csrf_token }}";
++
++let view = 'chats';
++let chats = [], peers = [];
++let currentChat = null;
++let passphrase = '';
++let ws = null;
++
++const $ = id => document.getElementById(id);
++const esc = s => String(s === null || s === undefined ? '' : s)
++  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
++
++// ── API helper ──────────────────────────────────────────────────────
++// Every URL below was verified against web.py's real url_map. The old
++// template called /api/send and /api/scan — neither exists (the real
++// routes are /api/message/send and /api/peers/scan) — and posted
++// {chat_id, text} where the backend reads {peer_id, plaintext}. That's
++// why sending, receiving and peer loading all silently did nothing
++// while settings and theme (which touch different routes) kept working.
++async function api(url, body, method) {
++  const opts = {headers: {}};
++  if (body !== undefined) {
++    opts.method = method || 'POST';
++    opts.headers['Content-Type'] = 'application/json';
++    opts.headers['X-Enclave-CSRF'] = CSRF;
++    opts.body = JSON.stringify(body);
++  } else if (method) {
++    opts.method = method;
++    opts.headers['X-Enclave-CSRF'] = CSRF;
++  }
+   try {
+     const r = await fetch(url, opts);
+-    return r.json();
+-  } catch(e) {
++    const text = await r.text();
++    let data = {};
++    try { data = text ? JSON.parse(text) : {}; } catch (e) { data = {error: text.slice(0,200)}; }
++    if (!r.ok && !data.error) data.error = 'HTTP ' + r.status;
++    return data;
++  } catch (e) {
+     return {error: e.message};
+   }
+ }
+ 
+-// ── Status helpers ────────────────────────────────────────────────────────
+-function setStatus(txt, type='') {
+-  const el = $('cfg-status');
+-  el.textContent = txt;
+-  el.className = 'smod-status' + (type ? ' '+type : '');
+-}
+-
+-function toggleTheme() {
+-  const h = document.documentElement;
+-  h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
+-}
+-
+-// ── Connection mode toggle ────────────────────────────────────────────────
+-function toggleConnMode() {
+-  connMode = connMode === 'ws' ? 'poll' : 'ws';
+-  $('conn-ws').classList.toggle('active', connMode === 'ws');
+-  $('conn-poll').classList.toggle('active', connMode === 'poll');
+-}
+-
+-// ── Accordion ─────────────────────────────────────────────────────────────
+-function toggleAccordion(name) {
+-  const trigger = $(name + '-trigger');
+-  const body    = $(name + '-body');
+-  const isOpen  = trigger.getAttribute('aria-expanded') === 'true';
+-  if (isOpen) {
+-    trigger.setAttribute('aria-expanded', 'false');
+-    body.style.maxHeight = body.scrollHeight + 'px';
+-    requestAnimationFrame(() => {
+-      body.style.maxHeight = '0';
+-      body.classList.remove('open');
+-    });
+-  } else {
+-    trigger.setAttribute('aria-expanded', 'true');
+-    body.classList.add('open');
+-    body.style.maxHeight = body.scrollHeight + 'px';
+-    body.addEventListener('transitionend', function onEnd(e) {
+-      if (e.propertyName === 'max-height') {
+-        body.style.maxHeight = 'none';
+-        body.removeEventListener('transitionend', onEnd);
+-        body.closest('.sidebar-footer').scrollTo({top: 99999, behavior: 'smooth'});
+-      }
+-    });
+-  }
+-}
+-
+-function ripple(btnId) {
+-  const btn = $(btnId);
+-  btn.classList.remove('rippling');
+-  void btn.offsetWidth;
+-  btn.classList.add('rippling');
+-  setTimeout(() => btn.classList.remove('rippling'), 420);
+-}
+-
+-// ── Splash ────────────────────────────────────────────────────────────────
+-function showSplash() {
+-  const splash = $('splash');
+-  setTimeout(() => {
+-    splash.classList.add('fade-out');
+-    setTimeout(() => {
+-      splash.style.display = 'none';
+-      document.querySelector('.sidebar').classList.add('animate-in');
+-      showUnlockModal();
+-    }, 600);
+-  }, 2400);
+-}
+-
+-function showUnlockModal() {
+-  const bd = $('unlock-backdrop');
+-  bd.style.display = 'flex';
+-  setTimeout(() => {
+-    bd.classList.remove('hidden');
+-    const passInput = $('modal-pass');
+-    if (passInput) setTimeout(() => passInput.focus(), 80);
+-  }, 20);
+-}
+-
+-// ── Unlock modal ──────────────────────────────────────────────────────────
+-function toggleModalEye() {
+-  const inp = $('modal-pass');
+-  const btn = $('modal-eye-btn');
+-  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'hide'; }
+-  else                         { inp.type = 'password'; btn.textContent = 'show'; }
+-}
+-
+-function toggleCfgEye() {
+-  const inp = $('cfg-pass');
+-  const btn = $('cfg-eye-btn');
+-  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = 'hide'; }
+-  else                         { inp.type = 'password'; btn.textContent = 'show'; }
++function toast(msg, isErr) {
++  const t = $('toast');
++  t.textContent = msg;
++  t.style.borderColor = isErr ? 'var(--coral)' : 'var(--border)';
++  t.classList.add('show');
++  clearTimeout(t._h);
++  t._h = setTimeout(function(){ t.classList.remove('show'); }, 2600);
+ }
+ 
+-function dismissModal() {
+-  const bd = $('unlock-backdrop');
+-  bd.classList.add('hidden');
+-  setTimeout(() => bd.style.display = 'none', 200);
++function fmtTime(ts) {
++  if (!ts) return '';
++  try {
++    const d = new Date(typeof ts === 'number' ? ts * 1000 : ts);
++    if (isNaN(d.getTime())) return '';
++    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
++  } catch (e) { return ''; }
+ }
+ 
+-function shakeError(id) {
+-  const el = $(id);
+-  el.style.animation = 'none';
+-  requestAnimationFrame(() => { el.style.animation = ''; });
++// ── Theme ───────────────────────────────────────────────────────────
++function toggleTheme() {
++  const root = document.documentElement;
++  const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
++  root.setAttribute('data-theme', next);
++  try { localStorage.setItem('enclave-theme', next); } catch (e) {}
+ }
++(function initTheme(){
++  try {
++    const saved = localStorage.getItem('enclave-theme');
++    if (saved) document.documentElement.setAttribute('data-theme', saved);
++  } catch (e) {}
++})();
+ 
+-async function modalUnlock() {
+-  const p   = $('modal-pass').value;
+-  const errEl = $('modal-error');
+-  const btn = $('modal-unlock-btn');
+-  if (!p) { errEl.textContent = 'passphrase cannot be empty'; shakeError('modal-error'); return; }
+-  btn.disabled = true;
+-  btn.textContent = 'unlocking\u2026';
+-  errEl.textContent = '';
+-  const d = await api('/api/node/start', {passphrase: p});
+-  if (d.error) {
+-    errEl.textContent = '\u26a0 ' + d.error;
+-    shakeError('modal-error');
+-    btn.disabled = false;
+-    btn.textContent = 'unlock & start node';
+-    return;
++// ── Unlock / node start ─────────────────────────────────────────────
++async function initUnlock() {
++  const d = await api('/api/identity');
++  const first = !d.has_identity;
++  $('unlock-title').textContent = first ? 'create identity' : 'unlock';
++  $('unlock-hint').textContent = first
++    ? 'no identity yet for this profile. choose a passphrase — it protects your keys and cannot be recovered.'
++    : 'enter your passphrase to start the node.';
++  $('unlock-confirm-field').style.display = first ? '' : 'none';
++  $('unlock-btn').textContent = first ? 'create & start node' : 'unlock & start node';
++  $('unlock-pass').focus();
++}
++
++async function doUnlock() {
++  const p = $('unlock-pass').value;
++  const st = $('unlock-status');
++  if (!p) { st.textContent = 'passphrase required'; st.className = 'status err'; return; }
++
++  const needsConfirm = $('unlock-confirm-field').style.display !== 'none';
++  if (needsConfirm) {
++    if (p !== $('unlock-pass2').value) {
++      st.textContent = 'passphrases do not match'; st.className = 'status err'; return;
++    }
++    st.textContent = 'creating identity…'; st.className = 'status';
++    const g = await api('/api/identity/generate', {passphrase: p});
++    if (g.error) { st.textContent = g.error; st.className = 'status err'; return; }
+   }
+-  $('cfg-pass').value = p;
+-  setStatus('node started', 'ok');
+-  dismissModal();
+-  await loadIdentity();
+-  await loadPeers();
+-  if (currentChatId) refreshMessages();
+-  await startRealtime();
+-}
+-
+-// ── Settings modal ────────────────────────────────────────────────────────
+-function switchSettingsTab(tabId) {
+-  document.querySelectorAll('.stab-item').forEach(el => {
+-    el.classList.toggle('active', el.dataset.tab === tabId);
+-  });
+-  document.querySelectorAll('.stab-panel').forEach(el => {
+-    el.classList.toggle('active', el.id === 'stab-panel-' + tabId);
+-  });
+-  if (tabId === 'profile') loadProfilePanel();
+-  if (tabId === 'profiles') loadProfilesTab();
+-  if (tabId === 'node') loadDhtConfig();
+-}
+ 
+-function openSettingsModal(tabId) {
+-  switchSettingsTab(tabId || 'node');
+-  const bd = $('settings-backdrop');
+-  bd.style.display = 'flex';
+-  requestAnimationFrame(() => bd.classList.remove('hidden'));
+-}
+-
+-function closeSettingsModal() {
+-  const bd = $('settings-backdrop');
+-  bd.classList.add('hidden');
+-  setTimeout(() => bd.style.display = 'none', 200);
+-}
+-
+-// ── Node / Settings panel actions ─────────────────────────────────────────
+-function onPassphraseChange() {
+-  // live feedback placeholder — extend as needed
+-}
+-
+-async function startNode() {
+-  const p = $('cfg-pass').value;
+-  const btn = $('cfg-unlock-btn');
+-  const status = $('cfg-status');
+-  if (!p) { setStatus('passphrase required', 'err'); return; }
+-  btn.disabled = true;
+-  btn.textContent = 'starting\u2026';
++  st.textContent = 'starting node…'; st.className = 'status';
+   const d = await api('/api/node/start', {passphrase: p});
+-  btn.disabled = false;
+-  btn.textContent = 'unlock & start node';
+-  if (d.error) { setStatus('\u26a0 ' + d.error, 'err'); return; }
+-  setStatus('node running', 'ok');
+-  $('node-status').textContent = 'node online';
+-  $('node-status').className = 'node-status on';
+-  await loadIdentity();
+-  await loadPeers();
+-  await startRealtime();
+-}
++  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
+ 
+-async function saveConfig() {
+-  const body = {
+-    sms_user: $('cfg-sms-user').value,
+-    sms_pass: $('cfg-sms-pass').value,
+-    sms_host: $('cfg-sms-host').value,
+-  };
+-  const d = await api('/api/config/save', body);
+-  const s = $('cfg-sms-status');
+-  if (d.error) { s.textContent = '\u26a0 ' + d.error; s.className = 'smod-status err'; }
+-  else         { s.textContent = 'saved';              s.className = 'smod-status ok';  }
++  passphrase = p;
++  $('unlock-backdrop').classList.add('hidden');
++  await loadAll();
++  startRealtime();
+ }
+ 
+-async function loadProfilePanel() {
++// ── Data loading ────────────────────────────────────────────────────
++async function loadIdentity() {
+   const d = await api('/api/identity');
+-  if (d.error || !d.node_id) return;
+-  $('prof-node-id').value      = d.node_id  || '';
+-  $('prof-username').value     = d.username || '';
+-  $('prof-profile-name').value = d.profile  || 'default';
+-  const initial = (d.username || d.node_id || '?')[0].toUpperCase();
+-  $('prof-avatar-large').textContent = initial;
+-  $('prof-header-name').textContent  = d.username || d.node_id;
+-  $('prof-header-sub').textContent   = d.node_id  || 'no identity';
++  if (d.error) return;
++  const name = d.username || (d.node_id ? d.node_id.slice(0, 12) : '—');
++  $('me-name').textContent = name;
++  $('me-id').textContent = d.node_id || 'no identity';
++  $('me-avatar').textContent = (name[0] || '?').toUpperCase();
++  const pill = $('node-pill');
++  pill.textContent = d.node_running ? 'node online' : 'node offline';
++  pill.className = 'node-pill ' + (d.node_running ? 'on' : 'off');
+ }
+ 
+-async function saveProfile() {
+-  const username = $('prof-username').value.trim();
+-  const s = $('prof-status');
+-  const d = await api('/api/identity/update', {username});
+-  if (d.error) { s.textContent = '\u26a0 ' + d.error; s.className = 'smod-status err'; }
+-  else         { s.textContent = 'saved';              s.className = 'smod-status ok';
+-                 $('me-name').textContent = username || d.node_id; }
++async function loadChats() {
++  const d = await api('/api/chats');
++  chats = d.error ? [] : (d.chats || []);
++  if (view === 'chats') renderList();
+ }
+ 
+-function copyNodeId() {
+-  const val = $('prof-node-id').value;
+-  if (!val) return;
+-  navigator.clipboard.writeText(val).then(() => {
+-    const btn = $('prof-copy-btn');
+-    btn.textContent = 'copied!';
+-    setTimeout(() => btn.textContent = 'copy', 1500);
+-  });
++async function loadPeers() {
++  const d = await api('/api/peers');
++  peers = d.error ? [] : (d.peers || []);
++  if (view === 'peers') renderList();
+ }
+ 
+-async function generateNewIdentity() {
+-  if (!confirm('This will replace your current identity keypair. Your current node ID will be gone. Continue?')) return;
+-  const d = await api('/api/identity/regenerate', {});
+-  if (d.error) { $('prof-status').textContent = '\u26a0 ' + d.error; $('prof-status').className = 'smod-status err'; return; }
+-  await loadProfilePanel();
+-  await loadIdentity();
+-  $('prof-status').textContent = 'new identity generated';
+-  $('prof-status').className = 'smod-status ok';
++async function loadAll() {
++  await Promise.all([loadIdentity(), loadChats(), loadPeers()]);
+ }
+ 
+-// ── Profiles (plural — multiple identities) ─────────────────────────────────
+-async function loadProfilesTab() {
+-  const list = $('profiles-list');
+-  const [profilesRes, activeRes] = await Promise.all([
+-    fetch('/api/profiles').then(r => r.json()),
+-    fetch('/api/profiles/active').then(r => r.json()),
+-  ]);
+-  if (profilesRes.error) {
+-    list.innerHTML = `<div style="color:var(--coral);font-size:.8rem;">${escHtml(profilesRes.error)}</div>`;
+-    return;
++// ── Sidebar list ────────────────────────────────────────────────────
++function switchView(v) {
++  view = v;
++  const tabs = document.querySelectorAll('.tab');
++  for (let i = 0; i < tabs.length; i++) {
++    tabs[i].classList.toggle('active', tabs[i].dataset.tab === v);
+   }
+-  const profiles = profilesRes.profiles || [];
+-  const currentHost = location.hostname;
+-  list.innerHTML = profiles.map(p => {
+-    const isDefault = p.is_active;
+-    const url = `http://${currentHost}:${p.web_port}`;
+-    return `
+-      <div class="profile-row-item">
+-        <div class="profile-row-main">
+-          <div class="profile-row-name">
+-            ${escHtml(p.name)}
+-            ${isDefault ? '<span class="profile-active-badge">default</span>' : ''}
+-          </div>
+-          <div class="profile-row-meta">
+-            open: <a href="${escAttr(url)}" target="_blank" rel="noopener">${escHtml(url)}</a>
+-            &middot; transport port ${p.transport_port}
+-          </div>
+-        </div>
+-        <div class="profile-row-actions">
+-          ${!isDefault ? `<button onclick="setDefaultProfile('${escAttr(p.name)}')">set default</button>` : ''}
+-          <button onclick="renameProfilePrompt('${escAttr(p.name)}')">rename</button>
+-          <button class="danger" onclick="deleteProfileConfirm('${escAttr(p.name)}')">delete</button>
+-        </div>
+-      </div>`;
+-  }).join('') || '<div style="color:var(--faint);font-size:.8rem;">no profiles yet</div>';
++  renderList();
++  // Fetch fresh data on every switch. Rendering straight from the
++  // in-memory array meant clicking "peers" showed whatever was last
++  // cached — which is empty on first load, so the tab looked broken
++  // even when peers had genuinely been discovered.
++  if (v === 'peers') loadPeers(); else loadChats();
+ }
+ 
+-async function createProfile() {
+-  const nameInput = $('new-profile-name');
+-  const passInput = $('new-profile-pass');
+-  const name = nameInput.value.trim();
+-  const passphrase = passInput.value;
+-  const status = $('profiles-status');
+-  if (!name) { status.textContent = 'name required'; status.className = 'smod-status err'; return; }
+-  if (!passphrase) { status.textContent = 'passphrase required — this protects the new profile\u2019s identity'; status.className = 'smod-status err'; return; }
+-  const d = await api('/api/profiles', {name, passphrase});
+-  if (d.error) {
+-    status.textContent = '\u26a0 ' + d.error;
+-    status.className = 'smod-status err';
+-    return;
++function peerName(id) {
++  for (let i = 0; i < peers.length; i++) {
++    if (peers[i].user_id === id && peers[i].username) return peers[i].username;
+   }
+-  const url = `http://${location.hostname}:${d.web_port}`;
+-  status.textContent = d.process_started
+-    ? `created and running — open ${url} to use it`
+-    : `created, but couldn\u2019t start automatically (${d.process_error || 'unknown error'}) — start it yourself, then open ${url}`;
+-  status.className = d.process_started ? 'smod-status ok' : 'smod-status err';
+-  nameInput.value = '';
+-  passInput.value = '';
+-  await loadProfilesTab();
+-}
+-
+-async function setDefaultProfile(name) {
+-  const status = $('profiles-status');
+-  const d = await api(`/api/profiles/${encodeURIComponent(name)}/activate`, {});
+-  if (d.error) { status.textContent = '\u26a0 ' + d.error; status.className = 'smod-status err'; return; }
+-  status.textContent = `"${name}" set as default for new command-line launches — this tab is unaffected`;
+-  status.className = 'smod-status ok';
+-  await loadProfilesTab();
+-}
+-
+-async function renameProfilePrompt(oldName) {
+-  const newName = prompt(`Rename profile "${oldName}" to:`, oldName);
+-  if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
+-  const status = $('profiles-status');
+-  const r = await fetch(`/api/profiles/${encodeURIComponent(oldName)}`, {
+-    method: 'PATCH',
+-    headers: {'Content-Type': 'application/json', 'X-Enclave-CSRF': CSRF_TOKEN},
+-    body: JSON.stringify({name: newName.trim()}),
+-  });
+-  const d = await r.json();
+-  if (!r.ok) { status.textContent = '\u26a0 ' + (d.error || 'rename failed'); status.className = 'smod-status err'; return; }
+-  status.textContent = 'renamed';
+-  status.className = 'smod-status ok';
+-  await loadProfilesTab();
+-}
+-
+-async function deleteProfileConfirm(name) {
+-  if (!confirm(`Delete profile "${name}"? This removes its registry entry — its identity and chat data on disk are not touched.`)) return;
+-  const status = $('profiles-status');
+-  const r = await fetch(`/api/profiles/${encodeURIComponent(name)}`, {
+-    method: 'DELETE',
+-    headers: {'X-Enclave-CSRF': CSRF_TOKEN},
+-  });
+-  const d = await r.json();
+-  if (!r.ok) { status.textContent = '\u26a0 ' + (d.error || 'delete failed'); status.className = 'smod-status err'; return; }
+-  status.textContent = 'deleted';
+-  status.className = 'smod-status ok';
+-  await loadProfilesTab();
+-}
+-
+-// ── DHT config ───────────────────────────────────────────────────────────────
+-async function loadDhtConfig() {
+-  const d = await fetch('/api/config/dht').then(r => r.json());
+-  if (d.error) return;
+-  $('cfg-dht-enabled').checked = !!d.dht_enabled;
+-  $('cfg-dht-bootstrap').value = (d.dht_bootstrap || []).join('\n');
+-  $('cfg-dht-public-ip').value = d.dht_public_ip || '';
+-}
+-
+-async function saveDhtConfig() {
+-  const status = $('cfg-dht-status');
+-  const d = await api('/api/config/dht', {
+-    dht_enabled: $('cfg-dht-enabled').checked,
+-    dht_bootstrap: $('cfg-dht-bootstrap').value,
+-    dht_public_ip: $('cfg-dht-public-ip').value.trim(),
+-  });
+-  if (d.error) { status.textContent = '\u26a0 ' + d.error; status.className = 'smod-status err'; return; }
+-  status.textContent = 'saved — ' + d.note;
+-  status.className = 'smod-status ok';
+-}
+-
+-// ── Identity ──────────────────────────────────────────────────────────────
+-async function loadIdentity() {
+-  const d = await api('/api/identity');
+-  if (d.error || !d.node_id) return;
+-  const name = d.username || d.node_id;
+-  $('me-name').textContent = name;
+-  $('me-uid').textContent  = d.node_id;
+-  $('me-avatar').textContent = name[0].toUpperCase();
+-  if (d.node_running) {
+-    $('node-status').textContent = 'node online';
+-    $('node-status').className   = 'node-status on';
++  return null;
++}
++
++function renderList() {
++  const el = $('list');
++
++  if (view === 'peers') {
++    if (!peers.length) {
++      el.innerHTML = '<div class="empty">no peers found yet.<br/>peers on your network appear automatically &mdash; or press &ldquo;scan&rdquo;.</div>';
++      return;
++    }
++    el.innerHTML = peers.map(function(p){
++      const name = p.username || String(p.user_id || '').slice(0, 12);
++      const addr = (p.ip || '') + (p.port ? ':' + p.port : '');
++      return '<div class="row" onclick="startChatWithPeer(\'' + esc(p.user_id) + '\')">' +
++        '<div class="avatar">' + esc((name[0] || '?').toUpperCase()) + '</div>' +
++        '<div class="row-main">' +
++          '<div class="row-title">' + esc(name) + '</div>' +
++          '<div class="row-sub">' + esc(addr) + '</div>' +
++        '</div>' +
++        '<div class="dot' + (p.online ? ' on' : '') + '"></div>' +
++      '</div>';
++    }).join('');
++    return;
+   }
+-}
+-
+-// ── Chats ─────────────────────────────────────────────────────────────────
+-async function loadChats() {
+-  const d = await api('/api/chats');
+-  if (d.error) { $('chat-list').innerHTML = '<div style="color:var(--coral);font-size:.8rem;padding:.5rem .8rem;">' + d.error + '</div>'; return; }
+-  allChats = d.chats || [];
+-  renderChatList(allChats);
+-}
+ 
+-function renderChatList(chats) {
+-  const list = $('chat-list');
+   if (!chats.length) {
+-    list.innerHTML = '<div style="color:var(--faint);font-size:.8rem;padding:.5rem .8rem;">no chats yet</div>';
++    el.innerHTML = '<div class="empty">no chats yet.<br/>start one with &ldquo;+ new chat&rdquo;.</div>';
+     return;
+   }
+-  list.innerHTML = chats.map((c, i) => {
+-    const active = c.id === currentChatId ? ' active' : '';
+-    const initial = (c.name || c.peer_id || '?')[0].toUpperCase();
+-    const preview = escHtml(c.last_message || '\u2026');
+-    return `<div class="chat-item${active}" style="animation-delay:${i*0.04}s" onclick="openChat('${escAttr(c.id)}')">
+-      <div class="avatar">${initial}</div>
+-      <div class="chat-meta">
+-        <div class="chat-name">${escHtml(c.name || c.peer_id)}</div>
+-        <div class="chat-preview">${preview}</div>
+-      </div>
+-    </div>`;
++  el.innerHTML = chats.map(function(c){
++    const name = peerName(c.id) || String(c.id).slice(0, 16);
++    const active = c.id === currentChat ? ' active' : '';
++    return '<div class="row' + active + '" onclick="openChat(\'' + esc(c.id) + '\')">' +
++      '<div class="avatar">' + esc((name[0] || '?').toUpperCase()) + '</div>' +
++      '<div class="row-main">' +
++        '<div class="row-title">' + esc(name) + '</div>' +
++        '<div class="row-sub">' + c.count + ' message' + (c.count === 1 ? '' : 's') + '</div>' +
++      '</div>' +
++    '</div>';
+   }).join('');
+ }
+ 
+-function filterChats(q) {
+-  const filtered = q
+-    ? allChats.filter(c => (c.name||'').toLowerCase().includes(q.toLowerCase()) || (c.peer_id||'').toLowerCase().includes(q.toLowerCase()))
+-    : allChats;
+-  renderChatList(filtered);
+-}
+-
+-// ── Open / close chat ─────────────────────────────────────────────────────
++// ── Chat ────────────────────────────────────────────────────────────
+ async function openChat(chatId) {
+-  currentChatId = chatId;
+-  const chat = allChats.find(c => c.id === chatId) || {id: chatId, name: chatId, peer_id: chatId};
+-  $('no-chat').style.display = 'none';
+-  const ac = $('active-chat');
+-  ac.style.display = 'flex';
+-  document.body.classList.add('chat-open'); // mobile: slide chat-panel over the sidebar
+-  $('chat-avatar').textContent = (chat.name || chat.peer_id || '?')[0].toUpperCase();
+-  $('chat-title').textContent  = chat.name || chat.peer_id;
+-  $('chat-sub').textContent    = chat.peer_id || '';
+-  renderChatList(allChats); // re-render to update active state
++  currentChat = chatId;
++  const name = peerName(chatId) || String(chatId).slice(0, 16);
++  $('placeholder').style.display = 'none';
++  $('panel-head').style.display = 'flex';
++  $('msgs').style.display = 'flex';
++  $('composer').style.display = 'flex';
++  $('chat-avatar').textContent = (name[0] || '?').toUpperCase();
++  $('chat-title').textContent = name;
++  $('chat-sub').textContent = chatId;
++  document.body.classList.add('chat-open');
++  renderList();
+   await refreshMessages();
++  $('compose').focus();
+ }
+ 
+ function closeChat() {
+-  currentChatId = null;
+-  $('no-chat').style.display = '';
+-  $('active-chat').style.display = 'none';
+-  document.body.classList.remove('chat-open'); // mobile: slide back to the chat list
+-  renderChatList(allChats);
++  currentChat = null;
++  $('placeholder').style.display = 'flex';
++  $('panel-head').style.display = 'none';
++  $('msgs').style.display = 'none';
++  $('composer').style.display = 'none';
++  document.body.classList.remove('chat-open');
++  renderList();
+ }
+ 
+-// ── Messages ──────────────────────────────────────────────────────────────
+ async function refreshMessages() {
+-  if (!currentChatId) return;
+-  const d = await api('/api/messages/' + encodeURIComponent(currentChatId) + '?passphrase=' + encodeURIComponent(pass()));
+-  if (d.error) { appendSysMsg('\u26a0 ' + d.error); return; }
+-  renderMessages(d.messages || []);
+-}
+-
+-function renderMessages(msgs) {
+-  const area = $('messages-area');
++  if (!currentChat) return;
++  const url = '/api/messages/' + encodeURIComponent(currentChat) +
++              '?passphrase=' + encodeURIComponent(passphrase);
++  const d = await api(url);
++  const el = $('msgs');
++  if (d.error) {
++    el.innerHTML = '<div class="empty" style="color:var(--coral);">' + esc(d.error) + '</div>';
++    return;
++  }
++  const msgs = d.messages || [];
+   if (!msgs.length) {
+-    area.innerHTML = '<div class="empty-state"><div class="big">&#128274;</div><div>no messages yet</div></div>';
++    el.innerHTML = '<div class="empty">no messages yet &mdash; say something.</div>';
+     return;
+   }
+-  area.innerHTML = msgs.map(m => {
+-    const me = m.direction === 'out' || m.sender === 'me';
+-    const rowClass = me ? 'msg-row me' : 'msg-row';
+-    const author   = !me && m.sender ? `<div class="bubble-author">${escHtml(m.author || m.sender)}</div>` : '';
+-    const enc      = m.encrypted  ? '<span class="badge badge-enc">enc</span>' : '';
+-    const verified = m.verified   ? '<span class="badge badge-ok">&#10003;</span>' : '';
+-    const net      = m.transport  ? `<span class="badge badge-net">${escHtml(m.transport)}</span>` : '';
+-    const ts       = m.timestamp  ? `<div class="bubble-time">${fmtTime(m.timestamp)}${enc}${verified}${net}</div>` : '';
+-    return `<div class="${rowClass}">
+-      <div class="bubble">${author}<div>${escHtml(m.text || m.body || '')}</div>${ts}</div>
+-    </div>`;
++  el.innerHTML = msgs.map(function(m){
++    const mine = m.sender === 'me';
++    const who = m.author || m.sender;
++    const author = (!mine && who) ? '<div class="bubble-author">' + esc(who) + '</div>' : '';
++    const verified = m.verified ? ' &#10003;' : '';
++    return '<div class="bubble ' + (mine ? 'me' : 'them') + '">' +
++      author + esc(m.text) +
++      '<div class="bubble-meta">' + esc(fmtTime(m.timestamp)) + verified + '</div>' +
++    '</div>';
+   }).join('');
+-  area.scrollTop = area.scrollHeight;
+-}
+-
+-function appendSysMsg(txt) {
+-  const area = $('messages-area');
+-  const el   = document.createElement('div');
+-  el.className = 'sys-msg';
+-  el.textContent = txt;
+-  area.appendChild(el);
+-  area.scrollTop = area.scrollHeight;
++  el.scrollTop = el.scrollHeight;
+ }
+ 
+-// ── Send ──────────────────────────────────────────────────────────────────
+ async function sendMessage() {
+-  if (!currentChatId) return;
+-  const inp  = $('composer');
+-  const text = inp.value.trim();
+-  if (!text) return;
+-  const btn  = $('send-btn');
++  const input = $('compose');
++  const text = input.value.trim();
++  if (!text || !currentChat) return;
++  const btn = $('send-btn');
+   btn.disabled = true;
+-  inp.value = '';
+-  const d = await api('/api/send', {chat_id: currentChatId, text, passphrase: pass()});
++  input.value = '';
++  const d = await api('/api/message/send', {peer_id: currentChat, plaintext: text});
+   btn.disabled = false;
+-  if (d.error) { appendSysMsg('\u26a0 ' + d.error); inp.value = text; return; }
++  if (d.error) {
++    toast(d.error, true);
++    input.value = text;            // don't silently eat what they typed
++  } else if (d.ok === false) {
++    toast('could not deliver — peer may be offline', true);
++  }
+   await refreshMessages();
+   await loadChats();
++  input.focus();
+ }
+ 
+-// ── Peers ─────────────────────────────────────────────────────────────────
+-async function loadPeers() {
+-  const d = await api('/api/peers');
+-  if (d.error) return;
+-  knownPeers = {};
+-  (d.peers || []).forEach(p => knownPeers[p.id] = p);
+-  renderPeers(d.peers || []);
++async function startChatWithPeer(userId) {
++  switchView('chats');
++  await openChat(userId);
+ }
+ 
+-function renderPeers(peers) {
+-  const list  = $('peers-list');
+-  const badge = $('peers-count');
+-  if (!peers.length) {
+-    list.innerHTML = '<div class="peers-empty">no peers detected yet</div>';
+-    badge.classList.remove('visible');
+-    return;
+-  }
+-  badge.textContent = peers.length;
+-  badge.classList.add('visible');
+-  list.innerHTML = peers.map(p => {
+-    const statusCls = p.online ? 'online' : 'offline';
+-    const statusTxt = p.transport === 'bt' ? 'BT' : (p.online ? 'online' : 'offline');
+-    const badgeCls  = p.transport === 'bt' ? 'bt' : statusCls;
+-    const initial   = (p.name || p.id || '?')[0].toUpperCase();
+-    return `<div class="peer-row" onclick="startChatWith('${escAttr(p.id)}','${escAttr(p.name||p.id)}')">
+-      <div class="peer-avatar">${initial}</div>
+-      <div class="peer-info">
+-        <div class="peer-name">${escHtml(p.name || p.id)}</div>
+-        <div class="peer-addr">${escHtml(p.address || p.id)}</div>
+-      </div>
+-      <span class="peer-badge ${badgeCls}">${statusTxt}</span>
+-    </div>`;
+-  }).join('');
++// ── New chat ────────────────────────────────────────────────────────
++function isNodeId(v){ return /^[A-Za-z0-9_-]{40,50}$/.test(v); }
++function isPhoneNo(v){ return /^\+?[0-9][0-9\-\s]{6,14}[0-9]$/.test(v); }
++function isIpPort(v){ return /^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$/.test(v); }
++function isBtMac(v){ return /^(BT:)?([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/i.test(v); }
++
++function onNewChatInput() {
++  const v = $('nc-input').value.trim();
++  const el = $('nc-type');
++  if (!v) { el.textContent = ''; el.className = 'status'; return; }
++  let kind = null;
++  if (isBtMac(v)) kind = 'bluetooth MAC';
++  else if (isIpPort(v)) kind = 'ip:port — connects directly';
++  else if (isNodeId(v)) kind = 'enclave node id';
++  else if (isPhoneNo(v)) kind = 'phone number (SMS)';
++  el.textContent = kind ? '\u2192 ' + kind : 'unrecognised format';
++  el.className = 'status ' + (kind ? 'ok' : 'err');
++}
++
++async function submitNewChat() {
++  const v = $('nc-input').value.trim();
++  const st = $('nc-status');
++  if (!v) { st.textContent = 'address required'; st.className = 'status err'; return; }
++  st.textContent = 'connecting…'; st.className = 'status';
++  const d = await api('/api/chats/new', {address: v});
++  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
++  closeModal('newchat');
++  $('nc-input').value = '';
++  $('nc-type').textContent = '';
++  st.textContent = '';
++  await loadAll();
++  if (d.chat_id) openChat(d.chat_id);
+ }
+ 
+ async function scanPeers() {
+-  const btn   = $('scan-btn');
+-  const label = $('scan-btn-label');
+-  const prog  = $('scan-progress-wrap');
+-  const bar   = $('scan-progress-bar');
+-  const stat  = $('scan-status');
+-  btn.classList.add('scanning');
+-  label.textContent = 'scanning\u2026';
+-  prog.classList.add('visible');
+-  bar.style.width = '0%';
+-  stat.textContent = '';
+-  // animate progress bar
+-  let pct = 0;
+-  const tick = setInterval(() => {
+-    pct = Math.min(pct + Math.random() * 18, 90);
+-    bar.style.width = pct + '%';
+-  }, 300);
+-  const d = await api('/api/scan', {});
+-  clearInterval(tick);
+-  bar.style.width = '100%';
+-  setTimeout(() => { prog.classList.remove('visible'); bar.style.width = '0%'; }, 800);
+-  btn.classList.remove('scanning');
+-  label.textContent = 'scan network';
+-  if (d.error) { stat.textContent = '\u26a0 ' + d.error; stat.className = 'status-line err'; return; }
+-  stat.textContent = (d.found || 0) + ' peer(s) found';
+-  stat.className = 'status-line ok';
++  toast('scanning the network…');
++  const d = await api('/api/peers/scan');
++  if (d.error) { toast(d.error, true); return; }
+   await loadPeers();
++  switchView('peers');
++  toast('scan done — ' + (d.count || 0) + ' peer' + (d.count === 1 ? '' : 's') + ' found');
+ }
+ 
+-// ── New chat ──────────────────────────────────────────────────────────────
+-function newChat() {
+-  $('nc-smart').value = '';
+-  $('nc-hint').textContent = '';
+-  $('nc-hint').className = 'field-hint';
+-  $('newchat-error').textContent = '';
+-  const badge = $('nc-type-badge');
+-  badge.textContent = '';
+-  badge.className = 'nc-type-badge';
+-  const bd = $('newchat-backdrop');
+-  bd.style.display = 'flex';
+-  setTimeout(() => { bd.classList.remove('hidden'); $('nc-smart').focus(); }, 20);
+-}
++// ── Modals / settings ───────────────────────────────────────────────
++function openModal(n){ $(n + '-backdrop').classList.remove('hidden'); }
++function closeModal(n){ $(n + '-backdrop').classList.add('hidden'); }
+ 
+-function dismissNewChat() {
+-  const bd = $('newchat-backdrop');
+-  bd.classList.add('hidden');
+-  setTimeout(() => bd.style.display = 'none', 200);
+-}
++function openSettings(){ openModal('settings'); switchTab('identity'); }
+ 
+-function onSmartInput() {
+-  const val   = $('nc-smart').value.trim();
+-  const badge = $('nc-type-badge');
+-  const hint  = $('nc-hint');
+-  if (!val) {
+-    badge.textContent = ''; badge.className = 'nc-type-badge';
+-    hint.textContent  = ''; hint.className  = 'field-hint';
+-    return;
+-  }
+-  if (isNode(val))  { badge.textContent = 'node id'; badge.className = 'nc-type-badge node visible'; hint.textContent = 'enclave node'; hint.className = 'field-hint ok'; }
+-  else if (isPhone(val)) { badge.textContent = 'phone'; badge.className = 'nc-type-badge phone visible'; hint.textContent = 'sms gateway'; hint.className = 'field-hint ok'; }
+-  else if (isIP(val))    { badge.textContent = 'ip:port'; badge.className = 'nc-type-badge ip visible'; hint.textContent = 'direct tcp'; hint.className = 'field-hint ok'; }
+-  else if (isBT(val))    { badge.textContent = 'bluetooth'; badge.className = 'nc-type-badge bt visible'; hint.textContent = 'bluetooth mac'; hint.className = 'field-hint ok'; }
+-  else { badge.textContent = ''; badge.className = 'nc-type-badge'; hint.textContent = 'unrecognised format'; hint.className = 'field-hint err'; }
++function switchTab(t) {
++  const tabs = document.querySelectorAll('.stab');
++  for (let i = 0; i < tabs.length; i++) tabs[i].classList.toggle('active', tabs[i].dataset.stab === t);
++  const panels = document.querySelectorAll('.spanel');
++  for (let i = 0; i < panels.length; i++) panels[i].classList.toggle('active', panels[i].id === 'spanel-' + t);
++  if (t === 'identity') loadIdentityTab();
++  if (t === 'profiles') loadProfiles();
++  if (t === 'network')  loadDht();
+ }
+ 
+-async function submitNewChat() {
+-  const val = $('nc-smart').value.trim();
+-  const errEl = $('newchat-error');
+-  if (!val) { errEl.textContent = 'enter an address'; return; }
+-  errEl.textContent = '';
+-  const d = await api('/api/chats/new', {address: val});
+-  if (d.error) { errEl.textContent = '\u26a0 ' + d.error; return; }
+-  dismissNewChat();
+-  await loadChats();
+-  if (d.chat_id) openChat(d.chat_id);
++async function loadIdentityTab() {
++  const d = await api('/api/identity');
++  $('set-username').value = d.username || '';
++  $('set-nodeid').value = d.node_id || '';
+ }
+ 
+-async function startChatWith(peerId, peerName) {
+-  const d = await api('/api/chats/new', {address: peerId, name: peerName});
+-  if (!d.error) {
+-    await loadChats();
+-    if (d.chat_id) openChat(d.chat_id);
+-  }
++async function saveUsername() {
++  const st = $('set-identity-status');
++  const d = await api('/api/identity/update', {username: $('set-username').value.trim()});
++  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
++  st.textContent = 'saved'; st.className = 'status ok';
++  loadIdentity();
+ }
+ 
+-// ── Realtime ──────────────────────────────────────────────────────────────
+-async function startRealtime() {
+-  if (connMode === 'ws') {
+-    startWebSocket();
+-  } else {
+-    startPolling();
++function copyNodeId() {
++  const id = $('me-id').textContent;
++  if (!id || id === 'no identity') return;
++  if (navigator.clipboard) {
++    navigator.clipboard.writeText(id).then(
++      function(){ toast('node id copied'); },
++      function(){ toast('could not copy', true); }
++    );
+   }
+ }
+ 
+-function startWebSocket() {
+-  if (wsConn) { try { wsConn.close(); } catch(e) {} }
+-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+-  const url   = `${proto}://${location.host}/ws`;
+-  try {
+-    wsConn = new WebSocket(url);
+-    wsConn.onmessage = e => {
+-      const msg = JSON.parse(e.data);
+-      if (msg.type === 'new_message' && msg.chat_id === currentChatId) refreshMessages();
+-      if (msg.type === 'new_message') loadChats();
+-      if (msg.type === 'peer_update') loadPeers();
+-    };
+-    wsConn.onerror = () => { wsConn = null; startPolling(); }; // fallback to polling
+-  } catch(e) {
+-    startPolling();
+-  }
++async function loadProfiles() {
++  const el = $('profiles-list');
++  const d = await api('/api/profiles');
++  if (d.error) { el.innerHTML = '<div class="empty" style="color:var(--coral);">' + esc(d.error) + '</div>'; return; }
++  const list = d.profiles || [];
++  if (!list.length) { el.innerHTML = '<div class="empty">no profiles</div>'; return; }
++  el.innerHTML = list.map(function(p){
++    const url = 'http://' + location.hostname + ':' + p.web_port;
++    return '<div class="pitem">' +
++      '<div style="min-width:0;">' +
++        '<div class="pname">' + esc(p.name) + (p.is_active ? '<span class="badge">default</span>' : '') + '</div>' +
++        '<div class="pmeta">open: <a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(url) + '</a></div>' +
++      '</div>' +
++      '<div class="pacts"><button onclick="deleteProfile(\'' + esc(p.name) + '\')">delete</button></div>' +
++    '</div>';
++  }).join('');
+ }
+ 
+-function startPolling() {
+-  if (pollInterval) clearInterval(pollInterval);
+-  pollInterval = setInterval(async () => {
+-    if (currentChatId) await refreshMessages();
+-    await loadChats();
+-  }, 4000);
++async function createProfile() {
++  const name = $('np-name').value.trim();
++  const pass = $('np-pass').value;
++  const st = $('profiles-status');
++  if (!name) { st.textContent = 'name required'; st.className = 'status err'; return; }
++  if (!pass) { st.textContent = 'passphrase required'; st.className = 'status err'; return; }
++  st.textContent = 'creating…'; st.className = 'status';
++  const d = await api('/api/profiles', {name: name, passphrase: pass});
++  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
++  const url = 'http://' + location.hostname + ':' + d.web_port;
++  st.textContent = d.process_started
++    ? 'created and running (pid ' + d.pid + ') — open ' + url
++    : 'created, but not started: ' + (d.process_error || 'unknown error');
++  st.className = d.process_started ? 'status ok' : 'status err';
++  $('np-name').value = ''; $('np-pass').value = '';
++  loadProfiles();
++}
++
++async function deleteProfile(name) {
++  if (!confirm('Delete profile "' + name + '"? Its registry entry is removed; data on disk is left alone.')) return;
++  const st = $('profiles-status');
++  const d = await api('/api/profiles/' + encodeURIComponent(name), undefined, 'DELETE');
++  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
++  st.textContent = 'deleted'; st.className = 'status ok';
++  loadProfiles();
++}
++
++async function loadDht() {
++  const d = await api('/api/config/dht');
++  if (d.error) return;
++  $('dht-on').checked = !!d.dht_enabled;
++  $('dht-boot').value = (d.dht_bootstrap || []).join('\n');
++  $('dht-ip').value = d.dht_public_ip || '';
+ }
+ 
+-// ── Utilities ─────────────────────────────────────────────────────────────
+-function escHtml(s) {
+-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+-}
+-function escAttr(s) {
+-  // Escape backslashes FIRST — otherwise a value ending in a raw backslash
+-  // (e.g. an attacker-controlled peer username from an unauthenticated UDP
+-  // discovery broadcast) turns the following escaped quote back into a
+-  // literal string terminator once the browser HTML-decodes the attribute,
+-  // breaking out of the onclick='...' JS string context.
+-  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
++async function saveDht() {
++  const st = $('dht-status');
++  const d = await api('/api/config/dht', {
++    dht_enabled: $('dht-on').checked,
++    dht_bootstrap: $('dht-boot').value,
++    dht_public_ip: $('dht-ip').value.trim()
++  });
++  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
++  st.textContent = 'saved — ' + (d.note || 'applies on next node start');
++  st.className = 'status ok';
+ }
+-function fmtTime(ts) {
++
++// ── Realtime ────────────────────────────────────────────────────────
++// WebSocket when available, with an unconditional polling fallback: if
++// flask_sock isn't installed the /ws route doesn't exist at all, and the
++// UI still has to update rather than silently going stale.
++function startRealtime() {
+   try {
+-    const d = new Date(typeof ts === 'number' ? ts * 1000 : ts);
+-    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+-  } catch(e) { return ''; }
++    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
++    ws = new WebSocket(proto + '://' + location.host + '/ws');
++    ws.onmessage = function(ev) {
++      let f;
++      try { f = JSON.parse(ev.data); } catch (e) { return; }
++      if (f.event === 'init') {
++        if (f.chats) chats = f.chats;
++        if (f.peers) peers = f.peers;
++        renderList();
++      } else if (f.event === 'new_message') {
++        loadChats();
++        if (currentChat && f.chat_id === currentChat) {
++          refreshMessages();
++        } else if (f.sender_id) {
++          toast('new message from ' + (peerName(f.sender_id) || String(f.sender_id).slice(0,12)));
++        }
++      } else if (f.event === 'peer_update') {
++        loadPeers();
++      }
++    };
++    ws.onclose = function(){ ws = null; };
++    ws.onerror = function(){ ws = null; };
++  } catch (e) { ws = null; }
++
++  // Poll regardless of visibility. An earlier version skipped polling
++  // whenever document.hidden was true, which silently froze the whole UI
++  // in a background tab (and in headless browsers, where hidden is
++  // always true) — the app would look connected but never update.
++  setInterval(function(){
++    loadChats();
++    loadPeers();
++    if (!ws && currentChat) refreshMessages();
++  }, 4000);
+ }
+ 
+-// ── Boot ──────────────────────────────────────────────────────────────────
+-document.addEventListener('DOMContentLoaded', () => {
+-  $('settings-backdrop').addEventListener('click', e => {
+-    if (e.target === $('settings-backdrop')) closeSettingsModal();
+-  });
+-  // Pre-load chats and identity in the background while splash plays
+-  Promise.all([loadChats(), loadIdentity()]);
+-  showSplash();
+-});
++// ── Boot ────────────────────────────────────────────────────────────
++(async function boot(){
++  const d = await api('/api/identity');
++  await loadIdentity();
++  if (d.node_running) {
++    $('unlock-backdrop').classList.add('hidden');
++    await loadAll();
++    startRealtime();
++  } else {
++    await initUnlock();
++  }
++})();
+ </script>
+ </body>
+ </html>
+diff --git a/test_profile_creation.py b/test_profile_creation.py
+index f6cc672..a560bce 100644
+--- a/test_profile_creation.py
++++ b/test_profile_creation.py
+@@ -59,7 +59,7 @@ def main():
+         check("parent web.py came up", up)
+ 
+         r = requests.get(f"{base}/")
+-        token = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r.text).group(1)
++        token = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r.text).group(1)
+         headers = {"X-Enclave-CSRF": token}
+ 
+         # --- Reproduce the exact original bug: no passphrase field ---
+@@ -95,7 +95,7 @@ def main():
+         # --- Can the passphrase we gave it actually unlock it? ---
+         if child_up:
+             r2 = requests.get(f"{child_base}/")
+-            child_token = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r2.text).group(1)
++            child_token = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r2.text).group(1)
+             r3 = requests.post(f"{child_base}/api/node/start",
+                                json={"passphrase": "testpass456"},
+                                headers={"X-Enclave-CSRF": child_token})
+diff --git a/test_security_fixes.py b/test_security_fixes.py
+index d91b924..9e06f9d 100644
+--- a/test_security_fixes.py
++++ b/test_security_fixes.py
+@@ -343,9 +343,16 @@ def main():
+             check("new-chat: phone number accepted as-is",
+                   r.status_code == 200 and r.get_json()["chat_id"] == "+919876543210")
+ 
++            # ip:port used to be rejected outright (no handshake existed, so
++            # a chat_id couldn't be derived). There's now a real one — GET
++            # /identity on the transport server. With no node running in
++            # this test, the route should say so (409) rather than pretend
++            # it worked or fall back to the old "not implemented" 400.
++            # The full working path is covered in test_tui.py's
++            # test_ip_port_connect(), which uses two live nodes.
+             r = new_chat("192.168.1.50:5001")
+-            check("new-chat: IP:port honestly rejected, not faked",
+-                  r.status_code == 400)
++            check("new-chat: ip:port is accepted as a form, and reports the node isn't running",
++                  r.status_code == 409)
+ 
+             r = new_chat("garbage!!")
+             check("new-chat: unrecognised format rejected", r.status_code == 400)
+diff --git a/test_tui.py b/test_tui.py
+index a7efefd..0cc63ed 100644
+--- a/test_tui.py
++++ b/test_tui.py
+@@ -216,6 +216,9 @@ def test_pty_integration():
+ 
+ def main():
+     test_pure_logic()
++    test_new_command_parsing()
++    test_overlay_state()
++    test_ip_port_connect()
+     test_pty_integration()
+     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+     if FAIL:
+@@ -223,5 +226,143 @@ def main():
+     return 0 if not FAIL else 1
+ 
+ 
++
++
++# ---------------------------------------------------------------------------
++# Additions: command parsing for the new screens, and the ip:port handshake.
++# ---------------------------------------------------------------------------
++
++def test_new_command_parsing():
++    from tui import parse_command
++    check(":profiles parses", parse_command("profiles") == ("profiles", None))
++    check(":settings parses", parse_command("settings") == ("settings", None))
++    check(":help parses", parse_command("help") == ("help", None))
++    check(":? parses as help", parse_command("?") == ("help", None))
++    check(":new-profile with a name parses",
++          parse_command("new-profile work") == ("new_profile", "work"))
++    check(":new-profile with no name parses (prompts interactively)",
++          parse_command("new-profile") == ("new_profile", ""))
++    # Ordering trap: ":new-profile x" must NOT be read as new_chat("-profile x").
++    check(":new-profile is not mis-parsed as :new",
++          parse_command("new-profile x")[0] == "new_profile")
++    check(":new still parses as new_chat",
++          parse_command("new abc123") == ("new_chat", "abc123"))
++
++
++def test_overlay_state():
++    from tui import AppState, SETTINGS_FIELDS
++    s = AppState()
++    check("no overlay by default", s.overlay is None)
++    s.open_overlay("settings")
++    check("open_overlay sets the overlay and resets index",
++          s.overlay == "settings" and s.overlay_idx == 0)
++    s.move_overlay_selection(1, len(SETTINGS_FIELDS))
++    check("overlay selection moves", s.overlay_idx == 1)
++    s.move_overlay_selection(-99, len(SETTINGS_FIELDS))
++    check("overlay selection clamps at 0", s.overlay_idx == 0)
++    s.move_overlay_selection(99, len(SETTINGS_FIELDS))
++    check("overlay selection clamps at the end", s.overlay_idx == len(SETTINGS_FIELDS) - 1)
++    s.move_overlay_selection(1, 0)
++    check("empty overlay list doesn't crash", s.overlay_idx == 0)
++    s.close_overlay()
++    check("close_overlay clears it", s.overlay is None)
++
++    # Opening an overlay must not disturb the chat view underneath.
++    s2 = AppState()
++    s2.chats = [{"id": "a"}, {"id": "b"}]
++    s2.selected_idx = 1
++    s2.current_chat_id = "b"
++    s2.open_overlay("help")
++    s2.close_overlay()
++    check("underlying chat state survives an overlay round trip",
++          s2.selected_idx == 1 and s2.current_chat_id == "b")
++
++
++def test_ip_port_connect():
++    """
++    Manual ip:port peering. Deliberately run with network_bind=host on
++    both nodes so LAN discovery is fully disabled — if this passes, the
++    connection genuinely came from the /identity handshake and not from
++    discovery quietly finding them anyway.
++    """
++    import tempfile as _tf
++    from core.identity.key_manager import IdentityManager
++    from core.storage import ConfigStore, ChatStore, PeerStore
++    from core.network.router import Node
++    from main import classify_address
++
++    check("classify_address now recognises ip:port",
++          classify_address("192.168.0.5:4000") == ("192.168.0.5:4000", "ip"))
++
++    tmp = _tf.mkdtemp()
++
++    def mk(label, tport):
++        d = os.path.join(tmp, label)
++        os.makedirs(d)
++        im = IdentityManager(storage_dir=os.path.join(d, "identity"))
++        im.generate_new_identity()
++        cfg = ConfigStore(base_dir=d)
++        cfg.set_setting("network_port", tport)
++        cfg.set_setting("network_bind", "host")
++        return Node(im, cfg, PeerStore(base_dir=d), ChatStore(base_dir=d))
++
++    alice = mk("ipc_alice", 62101)
++    bob = mk("ipc_bob", 62102)
++    alice.start()
++    bob.start()
++    time.sleep(0.5)
++
++    try:
++        check("alice starts knowing nobody (discovery is off)", len(alice._peers.all()) == 0)
++
++        peer = alice.connect_to_address("127.0.0.1:62102")
++        check("connect_to_address resolves a peer", peer is not None)
++        check("it resolved the right identity",
++              peer and peer["user_id"] == bob._identity["user_id"])
++        check("it stored the real x25519 key (so encryption can work)",
++              peer and peer["x25519_pub"] == bob._identity["x25519_pub"])
++        check("an http:// prefix is tolerated",
++              alice.connect_to_address("http://127.0.0.1:62102") is not None)
++
++        bob._peers.upsert(user_id=alice._identity["user_id"], username="alice",
++                          ed25519_pub=alice._identity["ed25519_pub"],
++                          x25519_pub=alice._identity["x25519_pub"],
++                          ip="127.0.0.1", port=62101)
++        sent = alice.send(bob._identity["user_id"], "hello via manual ip:port")
++        time.sleep(0.4)
++        check("a message actually sends to a manually-added peer", sent)
++        check("and the peer receives it",
++              len(bob._chats.load_messages(alice._identity["user_id"])) == 1)
++
++        try:
++            alice.connect_to_address("not-an-address")
++            check("a malformed address raises", False)
++        except ValueError:
++            check("a malformed address raises", True)
++
++        check("an address with nothing listening returns None",
++              alice.connect_to_address("127.0.0.1:62999") is None)
++
++        try:
++            alice.connect_to_address("127.0.0.1:62101")
++            check("connecting to yourself is rejected", False)
++        except ValueError as e:
++            check("connecting to yourself is rejected", "itself" in str(e))
++
++        # Same key-pinning rule discovery uses: typed by hand is not more
++        # trustworthy than broadcast.
++        alice._peers.upsert(user_id=bob._identity["user_id"], username="bob",
++                            ed25519_pub="DIFFERENT", x25519_pub="DIFFERENT",
++                            ip="9.9.9.9", port=1)
++        try:
++            alice.connect_to_address("127.0.0.1:62102")
++            check("a key change at a manual address is refused", False)
++        except ValueError as e:
++            check("a key change at a manual address is refused", "different keys" in str(e))
++    finally:
++        alice.stop()
++        bob.stop()
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/test_web_multi_profile.py b/test_web_multi_profile.py
+index a7fdc91..6890b08 100644
+--- a/test_web_multi_profile.py
++++ b/test_web_multi_profile.py
+@@ -60,7 +60,7 @@ for name, tport, wport, pw in [("alice", 59961, 59971, "p1"), ("bob", 59962, 599
+ 
+             base = f"http://127.0.0.1:{port}"
+             r = requests.get(f"{base}/")
+-            match = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r.text)
++            match = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r.text)
+             if not match:
+                 ids[name] = None
+                 continue
+diff --git a/test_ws_push.py b/test_ws_push.py
+index 51e114a..0c5cb5c 100644
+--- a/test_ws_push.py
++++ b/test_ws_push.py
+@@ -75,7 +75,7 @@ print(im.get_user_id())
+         check("web.py server came up", up)
+ 
+         r = requests.get(f"{base}/")
+-        token = re.search(r'CSRF_TOKEN\s*=\s*"([^"]+)"', r.text).group(1)
++        token = re.search(r'CSRF(?:_TOKEN)?\s*=\s*"([^"]+)"', r.text).group(1)
+ 
+         r = requests.post(f"{base}/api/node/start", json={"passphrase": "alicepass123"},
+                            headers={"X-Enclave-CSRF": token})
+diff --git a/tui.py b/tui.py
+index 1021319..92272df 100644
+--- a/tui.py
++++ b/tui.py
+@@ -42,23 +42,96 @@ Command mode (:):
+     :peers                     peers view
+     :chats                      chats view
+     :new <address>                start/open a chat — accepts a node id,
+-                                   phone number, or bluetooth MAC (same
+-                                   classification web.py's "+ new chat"
+-                                   modal uses, see main.py's
++                                   phone number, bluetooth MAC, or a raw
++                                   ip:port (same classification web.py's
++                                   "+ new chat" modal uses, see main.py's
+                                    classify_address())
++    :profiles                      list profiles on this device
++    :new-profile <name>              create a profile: prompts for a
++                                      passphrase, creates its identity, and
++                                      starts its web UI in the background
++    :settings                          view/edit this profile's settings
++    :help  :?                           key reference
++
++Press ? in normal mode for the same help screen.
+ """
+ 
+ import argparse
+ import curses
+ import getpass
++import logging
++import os
++import subprocess
+ import sys
+ import time
+ 
+ import main as app_core
++from core import profiles as _profiles
+ 
+ REFRESH_INTERVAL = 2.0  # seconds between background polls for new messages/peers
+ 
+ 
++def _silence_console_logging():
++    """
++    core/storage/log_store.py attaches a console StreamHandler (WARNING+)
++    to the root logger. That's correct for main.py/web.py — stderr output
++    there is harmless. It is NOT harmless here: curses owns the whole
++    terminal, so anything else writing to stdout/stderr corrupts the
++    display outright.
++
++    This was a real reported bug, not a hypothetical: a single failed
++    send printed "[transport] send failed to ... Connection refused"
++    straight into the middle of the chat input line. Mute the console
++    handler only — the file handler stays, so logs are still on disk for
++    debugging.
++    """
++    for h in logging.getLogger().handlers:
++        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
++            h.setLevel(logging.CRITICAL + 1)
++
++
++# Editable settings, rendered by the :settings screen. "kind" drives how
++# Enter behaves: text prompts for a value, bool toggles immediately.
++SETTINGS_FIELDS = [
++    {"key": "username",      "label": "display name",             "kind": "text"},
++    {"key": "network_bind",  "label": "LAN mode (lan / host)",    "kind": "text"},
++    {"key": "dht_enabled",   "label": "DHT (internet discovery)", "kind": "bool"},
++    {"key": "dht_bootstrap", "label": "DHT bootstrap nodes",      "kind": "list"},
++    {"key": "dht_public_ip", "label": "DHT public IP override",   "kind": "text"},
++]
++
++HELP_TEXT = [
++    "NORMAL mode",
++    "  j / k / Down / Up    move selection",
++    "  Enter                 open chat  (peers view: start a chat)",
++    "  Tab                   switch focus: list <-> messages",
++    "  i                     compose a message (needs an open chat)",
++    "  p / c                 peers view / chats view",
++    "  r                     refresh now",
++    "  ?                     this help",
++    "  :                     command mode",
++    "  q                     quit",
++    "",
++    "INSERT mode",
++    "  type, Enter sends, Esc cancels (discards the draft)",
++    "",
++    "COMMAND mode  (:)",
++    "  :q  :quit             quit",
++    "  :refresh              refresh chats/peers/messages now",
++    "  :peers  :chats        switch views",
++    "  :new <address>        start/open a chat. accepts a node id, a",
++    "                        phone number, a bluetooth MAC, or ip:port",
++    "  :profiles             list every profile on this device",
++    "  :new-profile <name>   create another profile — prompts for a",
++    "                        passphrase, creates its identity, and starts",
++    "                        its web UI in the background",
++    "  :settings             view and edit this profile's settings",
++    "  :help  :?             this help",
++    "",
++    "press any key to close",
++]
++
++
+ # ---------------------------------------------------------------------------
+ # Pure formatting helpers — no curses, no I/O, unit-testable directly.
+ # ---------------------------------------------------------------------------
+@@ -135,6 +208,29 @@ class AppState:
+         self.passphrase = ""
+         self.running = True
+ 
++        # Full-screen overlays: None | "help" | "profiles" | "settings".
++        # These take over both drawing and key handling while open, so the
++        # underlying chat/peer navigation state is left completely alone
++        # and is exactly as it was when the overlay closes.
++        self.overlay = None
++        self.overlay_idx = 0
++        self.profiles: list = []
++        self.settings_values: dict = {}
++
++    def open_overlay(self, name: str):
++        self.overlay = name
++        self.overlay_idx = 0
++
++    def close_overlay(self):
++        self.overlay = None
++        self.overlay_idx = 0
++
++    def move_overlay_selection(self, delta: int, length: int):
++        if length <= 0:
++            self.overlay_idx = 0
++            return
++        self.overlay_idx = max(0, min(length - 1, self.overlay_idx + delta))
++
+     def visible_list(self) -> list:
+         return self.peers if self.view == "peers" else self.chats
+ 
+@@ -205,7 +301,12 @@ class AppState:
+ def parse_command(cmd: str):
+     """
+     Returns (action, arg). action is one of:
+-    "quit", "refresh", "view_chats", "view_peers", "new_chat", "unknown"
++    "quit", "refresh", "view_chats", "view_peers", "new_chat",
++    "profiles", "new_profile", "settings", "help", "unknown"
++
++    NOTE on ordering: "new-profile" must be checked before "new ", or
++    ":new-profile foo" would parse as new_chat("-profile foo"). Tested
++    for explicitly in test_tui.py rather than left to reviewer vigilance.
+     """
+     cmd = cmd.strip()
+     if cmd in ("q", "quit"):
+@@ -216,6 +317,14 @@ def parse_command(cmd: str):
+         return ("view_chats", None)
+     if cmd == "peers":
+         return ("view_peers", None)
++    if cmd == "profiles":
++        return ("profiles", None)
++    if cmd == "settings":
++        return ("settings", None)
++    if cmd in ("help", "?"):
++        return ("help", None)
++    if cmd.startswith("new-profile"):
++        return ("new_profile", cmd[len("new-profile"):].strip())
+     if cmd.startswith("new "):
+         return ("new_chat", cmd[4:].strip())
+     return ("unknown", cmd)
+@@ -258,29 +367,43 @@ class TUIApp:
+ 
+     # ---- masked passphrase prompt (used before the main loop starts) ----
+ 
+-    def _prompt_passphrase(self, label: str):
++    def _prompt_text(self, label: str, mask: bool = False, initial: str = ""):
++        """
++        Modal single-line input. Returns the string, or None if cancelled
++        with Esc. mask=True renders asterisks (passphrases); everything
++        else shows what you typed, which matters for settings where you
++        need to see the value you're editing.
++        """
+         h, w = self.scr.getmaxyx()
+-        box = curses.newwin(3, min(60, w - 4), h // 2 - 1, max(0, (w - 60) // 2))
++        box_w = min(70, max(20, w - 4))
++        box = curses.newwin(3, box_w, h // 2 - 1, max(0, (w - box_w) // 2))
+         box.keypad(True)
+-        buf = ""
++        buf = initial
+         curses.curs_set(1)
+-        while True:
+-            box.erase()
+-            box.border()
+-            box.addstr(0, 2, f" {label} ")
+-            box.addstr(1, 2, "*" * len(buf))
+-            box.refresh()
+-            ch = box.getch()
+-            if ch in (curses.KEY_ENTER, 10, 13):
+-                curses.curs_set(0)
+-                return buf
+-            if ch == 27:  # Esc
+-                curses.curs_set(0)
+-                return None
+-            if ch in (curses.KEY_BACKSPACE, 127, 8):
+-                buf = buf[:-1]
+-            elif 32 <= ch <= 126:
+-                buf += chr(ch)
++        try:
++            while True:
++                box.erase()
++                box.border()
++                box.addstr(0, 2, f" {truncate(label, box_w - 6)} ")
++                shown = "*" * len(buf) if mask else buf
++                # Keep the tail visible when the value is longer than the box.
++                shown = shown[-(box_w - 4):]
++                box.addstr(1, 2, shown)
++                box.refresh()
++                ch = box.getch()
++                if ch in (curses.KEY_ENTER, 10, 13):
++                    return buf
++                if ch == 27:  # Esc
++                    return None
++                if ch in (curses.KEY_BACKSPACE, 127, 8):
++                    buf = buf[:-1]
++                elif 32 <= ch <= 126:
++                    buf += chr(ch)
++        finally:
++            curses.curs_set(0)
++
++    def _prompt_passphrase(self, label: str):
++        return self._prompt_text(label, mask=True)
+ 
+     def _message(self, text: str, pair=0, pause=1.2):
+         h, w = self.scr.getmaxyx()
+@@ -348,12 +471,140 @@ class TUIApp:
+         self.state.set_messages(chat_id, msgs)
+         self.state.status = ""
+ 
++    # ---- profiles / settings data ----
++
++    def _load_profiles(self):
++        try:
++            self.state.profiles = _profiles.list_profiles()
++        except Exception as e:
++            self.state.profiles = []
++            self.state.status = f"could not read profiles: {e}"
++
++    def _load_settings(self):
++        cfg = app_core.config
++        self.state.settings_values = {
++            "username":      cfg.username or "",
++            "network_bind":  cfg.get_setting("network_bind", "lan"),
++            "dht_enabled":   bool(cfg.get_setting("dht_enabled", False)),
++            "dht_bootstrap": cfg.get_setting("dht_bootstrap", []) or [],
++            "dht_public_ip": cfg.get_setting("dht_public_ip", "") or "",
++        }
++
++    def _edit_selected_setting(self):
++        field = SETTINGS_FIELDS[self.state.overlay_idx]
++        key, kind = field["key"], field["kind"]
++        cfg = app_core.config
++
++        if kind == "bool":
++            new_value = not self.state.settings_values.get(key)
++            cfg.set_setting(key, new_value)
++            self.state.status = f"{field['label']}: {'on' if new_value else 'off'} (applies on next node start)"
++        else:
++            current = self.state.settings_values.get(key)
++            initial = ", ".join(current) if kind == "list" and current else (str(current) if current else "")
++            entered = self._prompt_text(field["label"], initial=initial)
++            if entered is None:
++                return  # cancelled — leave the stored value untouched
++            entered = entered.strip()
++            if kind == "list":
++                items = [x.strip() for x in entered.replace("\n", ",").split(",") if x.strip()]
++                cfg.set_setting(key, items)
++            elif key == "username":
++                cfg.username = entered
++            else:
++                cfg.set_setting(key, entered or None)
++            self.state.status = f"{field['label']} updated (applies on next node start)"
++
++        self._load_settings()
++
++    def _create_profile_interactive(self, name: str):
++        """
++        :new-profile — the TUI counterpart to the web UI's profile
++        creation. Same shared backend call (create_profile_with_identity),
++        so both surfaces create profiles identically, and same follow-up:
++        actually start the new profile's web UI so it's usable
++        immediately rather than just being a registry entry.
++        """
++        name = (name or "").strip()
++        if not name:
++            entered = self._prompt_text("new profile name")
++            if entered is None:
++                return
++            name = entered.strip()
++        if not name:
++            self.state.status = "profile name required"
++            return
++
++        p1 = self._prompt_passphrase(f"passphrase for '{name}'")
++        if p1 is None:
++            return
++        if not p1:
++            self.state.status = "passphrase required — a profile with no identity can't be unlocked"
++            return
++        p2 = self._prompt_passphrase("confirm passphrase")
++        if p2 is None:
++            return
++        if p1 != p2:
++            self.state.status = "passphrases did not match — profile not created"
++            return
++
++        try:
++            profile = app_core.create_profile_with_identity(name=name, passphrase=p1)
++        except ValueError as e:
++            self.state.status = str(e)
++            return
++        except Exception as e:
++            self.state.status = f"profile registered but identity creation failed: {e}"
++            return
++
++        pid, err = self._spawn_profile_web(name, profile.get("web_port"))
++        if pid:
++            self.state.status = (f"created '{name}' — web UI on :{profile.get('web_port')} "
++                                  f"(pid {pid})")
++        else:
++            self.state.status = (f"created '{name}', but couldn't start it: {err} — "
++                                  f"run: python3 web.py --profile {name} "
++                                  f"--port {profile.get('web_port')}")
++        self._load_profiles()
++
++    def _spawn_profile_web(self, name: str, web_port):
++        """
++        Starts a profile's web UI as a detached background process.
++        Returns (pid, None) or (None, error_string).
++
++        The PID is also printed to the ORIGINAL terminal's stdout (the one
++        that launched this TUI) so there's a record of it after the TUI
++        exits and the curses screen is gone — you need that pid to stop
++        the thing later, and a status line that disappears on the next
++        keypress is no use for that.
++        """
++        try:
++            repo_dir = os.path.dirname(os.path.abspath(__file__))
++            proc = subprocess.Popen(
++                [sys.executable, os.path.join(repo_dir, "web.py"),
++                 "--profile", name, "--port", str(web_port)],
++                cwd=repo_dir,
++                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
++                start_new_session=True,
++            )
++            try:
++                # Goes to the real terminal, not the curses screen. Harmless
++                # here because curses redraws the full screen every loop
++                # iteration anyway, and this lands in the scrollback that
++                # survives after the TUI exits.
++                print(f"[enclave] started profile '{name}' on port {web_port} — pid {proc.pid}",
++                      file=sys.__stdout__, flush=True)
++            except Exception:
++                pass
++            return proc.pid, None
++        except OSError as e:
++            return None, str(e)
++
+     # ---- rendering ----
+ 
+     def _draw(self):
+         self.scr.erase()
+         h, w = self.scr.getmaxyx()
+-        list_w = max(20, min(32, w // 3))
+ 
+         status = app_core.get_identity_status()
+         header = f" project enclave — {status.get('username') or status.get('node_id', '')[:12]} "
+@@ -363,14 +614,81 @@ class TUIApp:
+             self.scr.addstr(0, max(0, w - len(mode_tag) - 1), mode_tag, self._c(5) | curses.A_BOLD)
+         self.scr.hline(1, 0, curses.ACS_HLINE, w)
+ 
+-        self._draw_list(1, 0, h - 3, list_w)
+-        self.scr.vline(2, list_w, curses.ACS_VLINE, h - 4)
+-        self._draw_main(2, list_w + 1, h - 4, w - list_w - 1)
++        if self.state.overlay:
++            self._draw_overlay(2, h - 4, w)
++        else:
++            list_w = max(20, min(32, w // 3))
++            self._draw_list(1, 0, h - 3, list_w)
++            self.scr.vline(2, list_w, curses.ACS_VLINE, h - 4)
++            self._draw_main(2, list_w + 1, h - 4, w - list_w - 1)
+ 
+         self.scr.hline(h - 2, 0, curses.ACS_HLINE, w)
+         self._draw_bottom(h - 1, w)
+         self.scr.refresh()
+ 
++    # ---- overlays: help / profiles / settings ----
++
++    def _draw_overlay(self, top, height, width):
++        name = self.state.overlay
++        if name == "help":
++            self._draw_help(top, height, width)
++        elif name == "profiles":
++            self._draw_profiles(top, height, width)
++        elif name == "settings":
++            self._draw_settings(top, height, width)
++
++    def _draw_help(self, top, height, width):
++        self.scr.addstr(top, 1, " help ", self._c(2) | curses.A_BOLD)
++        for i, line in enumerate(HELP_TEXT):
++            row = top + 2 + i
++            if row >= top + height:
++                break
++            # Section headers (no leading spaces, non-empty) get the accent
++            # colour so the three modes are scannable at a glance.
++            attr = self._c(1) | curses.A_BOLD if line and not line.startswith(" ") else self._c(0)
++            self.scr.addstr(row, 2, truncate(line, width - 3), attr)
++
++    def _draw_profiles(self, top, height, width):
++        self.scr.addstr(top, 1, " profiles ", self._c(2) | curses.A_BOLD)
++        hint = "Enter: copy launch command   n: new profile   Esc: close"
++        self.scr.addstr(top + 1, 2, truncate(hint, width - 3), self._c(2))
++
++        if not self.state.profiles:
++            self.scr.addstr(top + 3, 2, "(no profiles found)", self._c(2))
++            return
++
++        active = app_core.get_identity_status().get("profile")
++        for i, p in enumerate(self.state.profiles):
++            row = top + 3 + i
++            if row >= top + height:
++                break
++            name = p.get("name", "?")
++            mark = " (this one)" if name == active else ""
++            label = (f" {name}{mark}   web :{p.get('web_port', '?')}"
++                      f"   transport :{p.get('transport_port', '?')}")
++            attr = curses.A_REVERSE if i == self.state.overlay_idx else self._c(0)
++            self.scr.addstr(row, 1, truncate(label, width - 2).ljust(width - 2), attr)
++
++    def _draw_settings(self, top, height, width):
++        self.scr.addstr(top, 1, " settings ", self._c(2) | curses.A_BOLD)
++        hint = "Enter: edit / toggle   Esc: close   (applies on next node start)"
++        self.scr.addstr(top + 1, 2, truncate(hint, width - 3), self._c(2))
++
++        for i, field in enumerate(SETTINGS_FIELDS):
++            row = top + 3 + i
++            if row >= top + height:
++                break
++            raw = self.state.settings_values.get(field["key"])
++            if field["kind"] == "bool":
++                shown = "on" if raw else "off"
++            elif field["kind"] == "list":
++                shown = ", ".join(raw) if raw else "(none)"
++            else:
++                shown = str(raw) if raw else "(not set)"
++            label = f" {field['label']:<32} {shown}"
++            attr = curses.A_REVERSE if i == self.state.overlay_idx else self._c(0)
++            self.scr.addstr(row, 1, truncate(label, width - 2).ljust(width - 2), attr)
++
+     def _draw_list(self, top, left, height, width):
+         items = self.state.visible_list()
+         title = "peers" if self.state.view == "peers" else "chats"
+@@ -429,14 +747,44 @@ class TUIApp:
+         elif self.state.status:
+             self.scr.addstr(row, 0, truncate(self.state.status, w - 1), self._c(3))
+         else:
+-            hint = "j/k move  Enter open  i compose  p peers  c chats  : cmd  q quit"
++            hint = "j/k move  Enter open  i compose  p peers  c chats  ? help  : cmd  q quit"
+             self.scr.addstr(row, 0, truncate(hint, w - 1), self._c(2))
+ 
+     # ---- input handling ----
+ 
++    def _handle_overlay(self, ch):
++        """
++        Overlays own all key input while open, so normal-mode navigation
++        can't fire underneath them. Esc (and q) always closes.
++        """
++        s = self.state
++        if s.overlay == "help":
++            s.close_overlay()  # help closes on any key, as its footer says
++            return
++
++        length = (len(s.profiles) if s.overlay == "profiles" else len(SETTINGS_FIELDS))
++
++        if ch in (27, ord("q")):
++            s.close_overlay()
++        elif ch in (ord("j"), curses.KEY_DOWN):
++            s.move_overlay_selection(1, length)
++        elif ch in (ord("k"), curses.KEY_UP):
++            s.move_overlay_selection(-1, length)
++        elif ch in (curses.KEY_ENTER, 10, 13):
++            if s.overlay == "settings":
++                self._edit_selected_setting()
++            elif s.overlay == "profiles" and s.profiles:
++                p = s.profiles[s.overlay_idx]
++                s.status = (f"python3 web.py --profile {p.get('name')} "
++                             f"--port {p.get('web_port')}")
++        elif ch == ord("n") and s.overlay == "profiles":
++            self._create_profile_interactive("")
++
+     def _handle_normal(self, ch):
+         s = self.state
+-        if ch in (ord("j"), curses.KEY_DOWN):
++        if ch == ord("?"):
++            s.open_overlay("help")
++        elif ch in (ord("j"), curses.KEY_DOWN):
+             if s.focus == "messages":
+                 s.scroll_messages(1)
+             else:
+@@ -517,18 +865,54 @@ class TUIApp:
+             s.set_view("peers")
+         elif action == "new_chat":
+             try:
+-                chat_id, _type = app_core.classify_address(arg)
+-                self._open_chat(chat_id)
+-                s.view = "chats"
+-                s.status = ""
++                chat_id, addr_type = app_core.classify_address(arg)
++                if addr_type == "ip":
++                    # ip:port needs a live round trip to learn who's there
++                    # before a chat means anything — see _connect_by_address.
++                    self._connect_by_address(chat_id)
++                else:
++                    self._open_chat(chat_id)
++                    s.view = "chats"
++                    s.status = ""
+             except ValueError as e:
+                 s.status = str(e)
++        elif action == "profiles":
++            self._load_profiles()
++            s.open_overlay("profiles")
++        elif action == "new_profile":
++            self._create_profile_interactive(arg)
++        elif action == "settings":
++            self._load_settings()
++            s.open_overlay("settings")
++        elif action == "help":
++            s.open_overlay("help")
+         else:
+             s.status = f"unknown command: {cmd}"
+ 
++    def _connect_by_address(self, address: str):
++        """:new <ip:port> — resolve a manual address into a real peer."""
++        s = self.state
++        node = app_core.get_node()
++        if node is None:
++            s.status = "node isn't running — can't connect to an address yet"
++            return
++        try:
++            peer = node.connect_to_address(address)
++        except Exception as e:
++            s.status = f"could not connect to {address}: {e}"
++            return
++        if not peer:
++            s.status = f"no enclave node answered at {address}"
++            return
++        self._refresh(force=True)
++        self._open_chat(peer["user_id"])
++        s.view = "chats"
++        s.status = f"connected to {peer.get('username') or peer['user_id'][:12]}"
++
+     # ---- main loop ----
+ 
+     def run(self):
++        _silence_console_logging()
+         curses.curs_set(0)
+         self._setup_colors()
+         self.scr.keypad(True)
+@@ -545,7 +929,11 @@ class TUIApp:
+                 if ch == curses.KEY_RESIZE:
+                     continue
+                 if ch != -1:
+-                    if self.state.mode == "normal":
++                    # Overlays intercept everything so the chat view
++                    # underneath can't react to keys meant for them.
++                    if self.state.overlay:
++                        self._handle_overlay(ch)
++                    elif self.state.mode == "normal":
+                         self._handle_normal(ch)
+                     elif self.state.mode == "insert":
+                         self._handle_insert(ch)
+diff --git a/web.py b/web.py
+index 39a0c67..cc87078 100644
+--- a/web.py
++++ b/web.py
+@@ -349,6 +349,24 @@ def new_chat():
+     except ValueError as e:
+         return err(str(e), 400)
+ 
++    if addr_type == "ip":
++        # An ip:port isn't a chat_id — we have to ask that address who it
++        # is first (GET /identity), then chat with whatever identity comes
++        # back. Needs a running node, since it's a live network round trip.
++        node = app_core.get_node()
++        if node is None:
++            return err("start the node first — connecting to an address needs it running", 409)
++        try:
++            peer = node.connect_to_address(address)
++        except ValueError as e:
++            return err(str(e), 400)
++        except Exception as e:
++            return err(f"could not connect to {address}: {e}", 502)
++        if not peer:
++            return err(f"no enclave node answered at {address}", 404)
++        return jsonify({"chat_id": peer["user_id"], "type": "ip",
++                        "username": peer.get("username", "")})
++
+     if addr_type == "node" and name:
+         existing = app_core.peers.get(chat_id)
+         if existing and not existing.get("username"):
+@@ -585,9 +603,10 @@ def profiles_create():
+ 
+     process_started = False
+     process_error = None
++    process_pid = None
+     try:
+         repo_dir = os.path.dirname(os.path.abspath(__file__))
+-        subprocess.Popen(
++        proc = subprocess.Popen(
+             [sys.executable, os.path.join(repo_dir, "web.py"),
+              "--profile", name, "--port", str(profile["web_port"])],
+             cwd=repo_dir,
+@@ -596,10 +615,18 @@ def profiles_create():
+                                       # keep running long after this response returns
+         )
+         process_started = True
++        process_pid = proc.pid
++        # Print to the terminal that launched THIS server, so there's a
++        # durable record of the child's pid: the browser status line is
++        # gone on the next page load, and you need that pid to stop the
++        # profile later. Same behaviour as tui.py's :new-profile.
++        print(f"[enclave] started profile '{name}' on port {profile['web_port']} "
++              f"— pid {proc.pid}", flush=True)
+     except OSError as e:
+         process_error = str(e)
+ 
+     profile["process_started"] = process_started
++    profile["pid"] = process_pid
+     if not process_started:
+         profile["process_error"] = (
+             f"{process_error} — identity was created successfully, but you'll need "
+-- 
+2.43.0
+

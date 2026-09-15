@@ -295,7 +295,7 @@ class TUIApp:
     def _startup(self) -> bool:
         """Returns True if the node started successfully."""
         if not app_core.identity.has_identity():
-            self._message("No identity for this profile — creating one.", pause=1.0)
+            self._message("No identity for this profile — creating one.", pause=5.0)
             p1 = self._prompt_passphrase("choose a passphrase")
             if p1 is None:
                 return False
