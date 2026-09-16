@@ -319,6 +319,58 @@ def classify_address(address: str) -> tuple[str, str]:
                       "number, bluetooth MAC, or ip:port")
 
 
+def create_profile_with_identity(name: str, passphrase: str, username: str = None,
+                                   transport_port: int = None, web_port: int = None) -> dict:
+    """
+    Creates a profile registry entry AND a real identity for it in one
+    step. Shared by web.py's POST /api/profiles route and tui.py's
+    :new-profile command, so there's exactly one place that knows how to
+    do this correctly — tui.py already called this function by name
+    before it actually existed here, which would have crashed with
+    AttributeError the moment :new-profile was used. That happened
+    because the refactor to introduce this shared function got lost
+    across a container reset earlier in this session: web.py kept its
+    own working inline copy (which is why profile creation via the web
+    UI kept passing its own tests), while tui.py's newer code assumed the
+    shared version existed. Two surfaces silently expecting different
+    things is exactly the drift this function exists to prevent — so
+    it's being added for real this time, and web.py is being pointed at
+    it instead of its own copy.
+
+    Also fixes a second bug found while tracing this: _profiles.create_profile()
+    below only writes the username into the profiles REGISTRY (profiles.json)
+    — that's separate bookkeeping used just to label the profile in the
+    Profiles list UI. It is NOT the ConfigStore a profile's own Node reads
+    from once it actually starts — Node._build_identity() reads
+    config.username directly — and nothing was ever setting that for a
+    freshly created profile. So every profile made through the web UI or
+    TUI broadcast an empty username via Discovery, and every peer that
+    found them showed a bare node id instead of a name. Confirmed
+    directly: a profile created with username="bob" showed username: ""
+    in the discovering side's peer_store.
+
+    Raises ValueError if the profile name already exists (from
+    core.profiles.create_profile), or any other Exception if identity
+    creation itself fails after the registry entry was already written
+    — callers should treat that case as "registered but not yet usable"
+    and tell the user to delete and retry.
+    """
+    profile = _profiles.create_profile(
+        name=name, username=username,
+        transport_port=transport_port, web_port=web_port,
+    )
+    data_dir = _profiles.get_profile_data_dir(name)
+
+    im = IdentityManager(storage_dir=os.path.join(data_dir, "identity"))
+    im.generate_new_identity()
+    im.save_identity(passphrase=passphrase)
+
+    cfg = ConfigStore(base_dir=data_dir)
+    cfg.username = username or name
+
+    return profile
+
+
 def get_identity_status() -> dict:
     has = identity.has_identity()
     node_id = ""

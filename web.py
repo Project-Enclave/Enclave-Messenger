@@ -565,12 +565,14 @@ def profiles_create():
     # port. The profile showed up in the list with a URL that just
     # connection-refused, because nothing was running there, and even
     # if something had been, there was no identity to unlock. Now:
-    # create the registry entry, generate + save a real identity for it
-    # (same generate_new_identity() + save_identity() pattern
-    # /api/identity/generate uses for the active profile, just pointed
-    # at the new profile's own data_dir), then spawn an actual `web.py
-    # --profile <name>` process for it so the URL shown in the UI is
-    # real the moment this call returns.
+    # create the registry entry, generate + save a real identity for it,
+    # and set its username so it's not blank when discovered — all via
+    # app_core.create_profile_with_identity(), the ONE place that knows
+    # how to do this correctly. (This route used to have its own inline
+    # copy of that logic. Duplicating it was exactly how tui.py's
+    # :new-profile ended up calling a function that didn't exist yet —
+    # two surfaces with two different ideas of "how to create a
+    # profile." Not duplicating it anymore.)
     data = request.get_json(force=True)
     name = data.get("name", "").strip()
     passphrase = data.get("passphrase", "")
@@ -580,21 +582,14 @@ def profiles_create():
         return err("passphrase required — a profile with no identity can't be unlocked later", 400)
 
     try:
-        profile = _profiles.create_profile(
-            name=name,
+        profile = app_core.create_profile_with_identity(
+            name=name, passphrase=passphrase,
             username=data.get("username"),
             transport_port=data.get("transport_port"),
             web_port=data.get("web_port"),
         )
     except ValueError as e:
         return err(str(e), 409)
-
-    try:
-        from core.identity.key_manager import IdentityManager
-        data_dir = _profiles.get_profile_data_dir(name)
-        im = IdentityManager(storage_dir=os.path.join(data_dir, "identity"))
-        im.generate_new_identity()
-        im.save_identity(passphrase=passphrase)
     except Exception as e:
         return err(
             f"profile registered but identity creation failed: {e}. "
