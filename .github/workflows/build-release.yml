@@ -1,0 +1,112 @@
+name: Build release executables
+
+# Builds a standalone, no-install-required executable for Windows, macOS,
+# and Linux, and attaches them to a GitHub Release — so a reviewer (or
+# anyone else) can just download and run, no `git clone` / `pip install`
+# needed. Runs automatically whenever you push a version tag like v1.0.0:
+#
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# You can also trigger it manually from the Actions tab (workflow_dispatch)
+# to test a build without cutting a real release/tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the Release and upload assets
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: enclave-messenger-linux
+          - os: windows-latest
+            asset_name: enclave-messenger-windows.exe
+          - os: macos-latest
+            asset_name: enclave-messenger-macos
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # Windows curses TUI needs its own wheel — harmless to skip if the
+      # TUI isn't part of what you're shipping, but included here so the
+      # same command line works on every platform.
+      - name: Install windows-curses (Windows only)
+        if: runner.os == 'Windows'
+        run: pip install windows-curses
+
+      - name: Build executable (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          pyinstaller --onefile --name enclave-messenger \
+            --hidden-import=flask_sock \
+            --hidden-import=websockets \
+            --collect-submodules core \
+            --add-data "templates:templates" \
+            launch_desktop.py
+
+      - name: Build executable (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --onefile --name enclave-messenger `
+            --hidden-import=flask_sock `
+            --hidden-import=websockets `
+            --collect-submodules core `
+            --add-data "templates;templates" `
+            launch_desktop.py
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp dist/enclave-messenger.exe "out/${{ matrix.asset_name }}"
+          else
+            cp dist/enclave-messenger "out/${{ matrix.asset_name }}"
+            chmod +x "out/${{ matrix.asset_name }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: out/${{ matrix.asset_name }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p out
+          find artifacts -type f -exec cp {} out/ \;
+          ls -la out
+
+      - name: Create GitHub Release with binaries attached
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
