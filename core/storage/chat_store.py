@@ -59,6 +59,12 @@ class ChatStore:
             "ts":        entry.get("ts"),
             "verified":  entry.get("verified"),
             "plaintext": entry.get("plaintext", False),
+            # True while this message's sender is an un-accepted contact
+            # (see core/network/contacts.py) — the UI can use it to show
+            # a "message request" style preview instead of a normal
+            # conversation. Defaults False so every existing call site
+            # (own local echo, bluetooth/legacy appends) is unaffected.
+            "pending_contact": entry.get("pending_contact", False),
         }
         with open(self._path(chat_id), "a", encoding="utf-8") as f:
             f.write(json.dumps(record, separators=(',', ':')) + "\n")
@@ -78,12 +84,29 @@ class ChatStore:
                 try:
                     rec = json.loads(line)
                     rec.setdefault("plaintext", False)
+                    rec.setdefault("pending_contact", False)
                     entries.append(rec)
                 except json.JSONDecodeError:
                     # bare token written directly (shouldn't happen after migration)
                     entries.append({"token": line, "sender": None, "ts": None,
-                                     "verified": None, "plaintext": False})
+                                     "verified": None, "plaintext": False,
+                                     "pending_contact": False})
         return entries
+
+    def clear_pending_contact(self, chat_id: str):
+        """Flip pending_contact off for every stored message in this
+        thread. Called once a contact request is accepted, so a "message
+        request" thread becomes a normal conversation as a single step
+        instead of the UI having to special-case old vs new messages
+        forever. Silently does nothing if the chat doesn't exist yet.
+        """
+        msgs = self.load_messages(chat_id)
+        if not msgs:
+            return
+        with open(self._path(chat_id), "w", encoding="utf-8") as f:
+            for m in msgs:
+                m["pending_contact"] = False
+                f.write(json.dumps(m, separators=(',', ':')) + "\n")
 
     def delete_chat(self, chat_id: str) -> bool:
         for p in (self._path(chat_id), self._legacy_path(chat_id)):

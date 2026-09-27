@@ -251,8 +251,12 @@ def get_messages_decrypted(chat_id: str, passphrase: str = "") -> list[dict]:
                 encrypted_ok = False
         sender = m.get("sender")
         author = sender
-        if sender and sender != "me" and peer_meta.get("username"):
-            author = peer_meta["username"]
+        if sender and sender != "me":
+            # Local nickname wins over the peer's own broadcast username
+            # (see PeerStore.set_nickname()) — that's the whole point of a
+            # nickname being local-only rather than something they set for
+            # themselves.
+            author = peer_meta.get("nickname") or peer_meta.get("username") or sender
         out.append({
             "text":      text,
             "sender":    sender,
@@ -260,6 +264,7 @@ def get_messages_decrypted(chat_id: str, passphrase: str = "") -> list[dict]:
             "timestamp": m.get("ts"),
             "verified":  m.get("verified"),
             "encrypted": encrypted_ok,
+            "pending_contact": m.get("pending_contact", False),
         })
     return out
 
@@ -273,6 +278,98 @@ def get_chats() -> list:
 
 def get_peers() -> list:
     return peers.all()
+
+
+# ---------------------------------------------------------------------------
+# Contacts (handshake) API — used by web.py and tui.py
+# ---------------------------------------------------------------------------
+
+def get_pending_contact_requests() -> list:
+    if _node is None:
+        return []
+    return _node.pending_contact_requests()
+
+
+def get_contact_status(peer_user_id: str) -> str | None:
+    if _node is None:
+        return None
+    return _node.contact_status(peer_user_id)
+
+
+def send_contact_request(peer_user_id: str, greeting: str = "") -> bool:
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    return _node.request_contact(peer_user_id, greeting)
+
+
+def accept_contact_request(peer_user_id: str) -> bool:
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    return _node.accept_contact(peer_user_id)
+
+
+def reject_contact_request(peer_user_id: str) -> None:
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    _node.reject_contact(peer_user_id)
+
+
+def set_contact_nickname(peer_user_id: str, nickname: str) -> bool:
+    """Local-only rename — never broadcast, never touched by discovery
+    (see PeerStore.upsert()'s docstring)."""
+    return peers.set_nickname(peer_user_id, (nickname or "").strip())
+
+
+# ---------------------------------------------------------------------------
+# Profile customization API — used by web.py and tui.py
+# ---------------------------------------------------------------------------
+
+def get_profile() -> dict:
+    prof = dict(config.get("profile", {}))
+    prof["username"] = config.username or ""
+    return prof
+
+
+def set_profile_status(text: str) -> None:
+    text = (text or "").strip()[:120]
+    if _node is not None:
+        _node.set_status(text)
+    else:
+        config.set_profile(status=text)
+
+
+def set_profile_bio(text: str) -> None:
+    text = (text or "").strip()[:280]
+    if _node is not None:
+        _node.set_bio(text)
+    else:
+        config.set_profile(bio=text)
+
+
+# ---------------------------------------------------------------------------
+# Relay (store-and-forward) API — used by web.py and tui.py
+# ---------------------------------------------------------------------------
+
+def get_relay_status() -> dict:
+    stats = {}
+    if _node is not None:
+        stats = _node._relay_store.stats()
+    cfg = config.get("relay", {})
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "ttl_hours": cfg.get("ttl_hours", 48),
+        "max_total_mb": cfg.get("max_total_mb", 20),
+        "queued_recipients": stats.get("queued_recipients", 0),
+        "queued_envelopes": stats.get("queued_envelopes", 0),
+        "total_bytes": stats.get("total_bytes", 0),
+    }
+
+
+def set_relay_enabled(enabled: bool) -> None:
+    if _node is not None:
+        _node.set_relay_enabled(bool(enabled))
+    else:
+        config.set_relay_config(enabled=bool(enabled))
 
 
 # Shared by web.py's /api/chats/new and tui.py's :new command — one place

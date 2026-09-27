@@ -42,7 +42,8 @@ class _SilentHandler(WSGIRequestHandler):
 
 
 class Transport:
-    def __init__(self, host: str, port: int, on_message, identity_provider=None):
+    def __init__(self, host: str, port: int, on_message, identity_provider=None,
+                 on_relay=None):
         """
         host: bind address for inbound server, e.g. '0.0.0.0'
         port: listen port
@@ -54,11 +55,22 @@ class Transport:
             has to be a real user_id for encryption to work. Only public
             material is ever exposed here — the same fields already
             broadcast to the whole LAN by discovery.
+        on_relay: optional callback(envelope: dict) -> (accepted: bool,
+            reason: str), called for POST /relay — a request from another
+            node asking THIS node to hold an envelope on behalf of a
+            THIRD party (see core/network/relay.py). Distinct from
+            on_message/POST /inbound, which is for envelopes addressed
+            to this node itself: conflating the two would mean anyone
+            could get their own messages stored in a stranger's regular
+            chat history just by POSTing to /inbound with a mismatched
+            chat_id. If omitted, POST /relay answers 404 — same as if
+            this node doesn't support relaying at all.
         """
         self._host = host
         self._port = port
         self._on_message = on_message
         self._identity_provider = identity_provider
+        self._on_relay = on_relay
         self._server = None
         self._thread = threading.Thread(target=self._serve, daemon=True)
 
@@ -129,6 +141,34 @@ class Transport:
                 log.warning("[transport] inbound error: %s", e)
                 status = "400 Bad Request"
                 resp   = json.dumps({"error": str(e)}).encode()
+        elif method == "POST" and path == "/relay":
+            try:
+                length = int(environ.get("CONTENT_LENGTH") or 0)
+                if length > _MAX_BODY_BYTES:
+                    log.warning("[transport] relay rejected: body too large (%d bytes)", length)
+                    resp = json.dumps({"error": "payload too large"}).encode()
+                    start_response("413 Payload Too Large", [
+                        ("Content-Type", "application/json"),
+                        ("Content-Length", str(len(resp))),
+                    ])
+                    return [resp]
+                body     = environ["wsgi.input"].read(length)
+                envelope = json.loads(body.decode("utf-8"))
+                if self._on_relay is None:
+                    status = "404 Not Found"
+                    resp   = json.dumps({"error": "this node doesn't relay"}).encode()
+                else:
+                    accepted, reason = self._on_relay(envelope)
+                    if accepted:
+                        status = "200 OK"
+                        resp   = b'{"ok": true}'
+                    else:
+                        status = "403 Forbidden"
+                        resp   = json.dumps({"error": reason or "relay rejected"}).encode()
+            except Exception as e:
+                log.warning("[transport] relay error: %s", e)
+                status = "400 Bad Request"
+                resp   = json.dumps({"error": str(e)}).encode()
         else:
             status = "404 Not Found"
             resp   = b"not found"
@@ -157,6 +197,26 @@ class Transport:
                 return resp.status == 200
         except URLError as e:
             log.warning("[transport] send failed to %s: %s", url, e)
+            return False
+
+    def send_relay(self, relay_address: str, envelope: dict) -> bool:
+        """
+        Ask relay_address to hold envelope on behalf of whichever peer
+        envelope["chat_id"] names (store-and-forward — see
+        core/network/relay.py). Returns True only if the relay actually
+        accepted it (200), not merely if the HTTP request itself
+        succeeded — a relay can and does say no (not relaying, over
+        capacity, etc.), which is a 403, not a delivery success.
+        """
+        url  = f"{relay_address}/relay"
+        body = json.dumps(envelope).encode("utf-8")
+        req  = Request(url, data=body, headers={"Content-Type": "application/json"})
+        try:
+            with urlopen(req, timeout=5) as resp:
+                log.debug("[transport] relayed via %s -> %d", url, resp.status)
+                return resp.status == 200
+        except URLError as e:
+            log.warning("[transport] relay send failed to %s: %s", url, e)
             return False
 
     def fetch_identity(self, peer_address: str) -> dict | None:

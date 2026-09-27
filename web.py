@@ -270,8 +270,12 @@ def _register_node_callbacks():
         peer_data["last_seen"] = datetime.now(timezone.utc).isoformat()
         _ws_broadcast("peer_update", {"peer": peer_data})
 
+    def _ws_contact_request(info: dict):
+        _ws_broadcast("contact_request", info)
+
     node.on_inbound_callbacks.append(_ws_inbound)
     node.on_peer_found_callbacks.append(_ws_peer)
+    node.on_contact_request_callbacks.append(_ws_contact_request)
     _callbacks_registered = True
 
 # -- Peers -------------------------------------------------------------------
@@ -287,6 +291,98 @@ def scan_peers_route():
     try:
         found = scan_lan_peers(app_core.peers)
         return jsonify({"peers": found, "count": len(found)})
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+# -- Contacts (handshake) -----------------------------------------------
+
+@app.route("/api/contacts/requests")
+def contacts_requests():
+    return jsonify({"requests": app_core.get_pending_contact_requests()})
+
+
+@app.route("/api/contacts/request", methods=["POST"])
+def contacts_request():
+    data = request.get_json(force=True) or {}
+    peer_id  = data.get("peer_id", "")
+    greeting = data.get("greeting", "")
+    if not peer_id:
+        return err("peer_id required", 400)
+    try:
+        ok = app_core.send_contact_request(peer_id, greeting)
+        return jsonify({"ok": ok})
+    except RuntimeError as e:
+        return err(str(e), 503)
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+
+@app.route("/api/contacts/<path:peer_id>/accept", methods=["POST"])
+def contacts_accept(peer_id):
+    try:
+        ok = app_core.accept_contact_request(peer_id)
+        return jsonify({"ok": ok})
+    except RuntimeError as e:
+        return err(str(e), 503)
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+
+@app.route("/api/contacts/<path:peer_id>/reject", methods=["POST"])
+def contacts_reject(peer_id):
+    try:
+        app_core.reject_contact_request(peer_id)
+        return jsonify({"ok": True})
+    except RuntimeError as e:
+        return err(str(e), 503)
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+
+@app.route("/api/contacts/<path:peer_id>/nickname", methods=["POST"])
+def contacts_nickname(peer_id):
+    data = request.get_json(force=True) or {}
+    ok = app_core.set_contact_nickname(peer_id, data.get("nickname", ""))
+    if not ok:
+        return err("unknown peer — discover or connect to them first", 404)
+    return jsonify({"ok": True})
+
+
+# -- Profile customization -----------------------------------------------
+
+@app.route("/api/profile")
+def profile_get():
+    return jsonify(app_core.get_profile())
+
+
+@app.route("/api/profile", methods=["POST"])
+def profile_update():
+    data = request.get_json(force=True) or {}
+    try:
+        if "status" in data:
+            app_core.set_profile_status(data["status"])
+        if "bio" in data:
+            app_core.set_profile_bio(data["bio"])
+        return jsonify(app_core.get_profile())
+    except Exception as e:
+        return err(str(e), 500, exc=e)
+
+
+# -- Relay (store-and-forward) -------------------------------------------
+
+@app.route("/api/relay/status")
+def relay_status():
+    return jsonify(app_core.get_relay_status())
+
+
+@app.route("/api/relay/config", methods=["POST"])
+def relay_config():
+    data = request.get_json(force=True) or {}
+    if "enabled" not in data:
+        return err("enabled required", 400)
+    try:
+        app_core.set_relay_enabled(bool(data["enabled"]))
+        return jsonify(app_core.get_relay_status())
     except Exception as e:
         return err(str(e), 500, exc=e)
 
@@ -707,6 +803,7 @@ if _SOCK_AVAILABLE:
                 "peers":    _stamp_online(app_core.get_peers()),
                 "chats":    app_core.get_chats(),
                 "identity": app_core.get_identity_status(),
+                "contact_requests": app_core.get_pending_contact_requests(),
             }))
             while True:
                 msg = ws.receive(timeout=30)

@@ -54,8 +54,24 @@ class PeerStore:
 
     def upsert(self, user_id: str, *, username: str = "",
                ed25519_pub: str = "", x25519_pub: str = "",
-               ip: str = "", port: int = 0) -> dict:
-        """Insert or update a peer. Returns the stored entry."""
+               ip: str = "", port: int = 0,
+               relay: bool | None = None,
+               status: str | None = None,
+               bio: str | None = None) -> dict:
+        """Insert or update a peer. Returns the stored entry.
+
+        relay/status/bio are the PEER's own self-reported profile fields
+        (broadcast via discovery or /identity) — None means "not included
+        in this update", which preserves whatever was already on file,
+        same convention as the older str fields defaulting to "".
+
+        'nickname' is deliberately NOT a parameter here: it's a LOCAL-only
+        label the user sets for this contact (see set_nickname()) and must
+        never be overwritten by data a peer broadcasts about themselves —
+        so every code path that upserts here (discovery, manual connect,
+        contact requests) automatically preserves it just by never
+        mentioning it.
+        """
         now = datetime.now(timezone.utc).isoformat()
         existing = self._peers.get(user_id, {})
         entry = {
@@ -66,10 +82,23 @@ class PeerStore:
             "ip":          ip          or existing.get("ip", ""),
             "port":        port        or existing.get("port", 0),
             "last_seen":   now,
+            "nickname":    existing.get("nickname", ""),
+            "relay":       relay  if relay  is not None else existing.get("relay", False),
+            "status":      status if status is not None else existing.get("status", ""),
+            "bio":         bio    if bio    is not None else existing.get("bio", ""),
         }
         self._peers[user_id] = entry
         self._save()
         return entry
+
+    def set_nickname(self, user_id: str, nickname: str) -> bool:
+        """Local-only rename of a contact — never broadcast, never
+        overwritten by upsert() (see its docstring)."""
+        if user_id in self._peers:
+            self._peers[user_id]["nickname"] = nickname
+            self._save()
+            return True
+        return False
 
     def get(self, user_id: str) -> dict | None:
         return self._peers.get(user_id)

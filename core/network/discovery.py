@@ -95,6 +95,15 @@ class Discovery:
             "ed25519_pub": self._identity["ed25519_pub"],
             "x25519_pub":  self._identity["x25519_pub"],
             "port":        self._transport_port,
+            # Self-reported profile fields (see core/storage/config_store.py's
+            # "profile" section) and relay capability. self._identity is the
+            # SAME dict object Node holds (passed by reference, not copied),
+            # so Node.set_status()/set_bio()/set_relay_enabled() mutating it
+            # in place is picked up on the very next announce cycle without
+            # Discovery needing to know any of that happened.
+            "status":      self._identity.get("status", ""),
+            "bio":         self._identity.get("bio", ""),
+            "relay":       bool(self._identity.get("relay", False)),
         }
         return json.dumps(payload).encode("utf-8")
 
@@ -214,6 +223,9 @@ class Discovery:
             x25519_pub=new_x,
             ip=src_ip,
             port=msg.get("port", 0),
+            relay=bool(msg.get("relay", False)),
+            status=msg.get("status", ""),
+            bio=msg.get("bio", ""),
         )
         log.info("[discovery] saw peer %s @ %s", peer_id[:12], src_ip)
 

@@ -21,4 +21,15 @@ htmlcov/
 
 .DS_Store
 Thumbs.db
-storage/
+# Anchored to the repo root (leading /) — an unanchored "storage/" also
+# matches core/storage/, which is source code (peer_store.py, chat_store.py,
+# etc.), not runtime data, and would silently gitignore it. This only
+# ignores the top-level runtime data directory main.py writes chats/keys/
+# config into.
+/storage/
+
+# PyInstaller build output (built by CI, not committed — see
+# .github/workflows/build-release.yml)
+build/
+dist/
+*.spec

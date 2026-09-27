@@ -19,6 +19,23 @@ DEFAULTS = {
         "theme": "dark",
     },
     "plugins": {},
+    # Self-reported profile info, broadcast to peers via discovery (see
+    # core/network/discovery.py) and returned by GET /identity — the
+    # same public-material trust level as username already had.
+    "profile": {
+        "status": "",        # short free-text status ("away", "on call", ...)
+        "bio": "",            # short about-text
+        "avatar_color": "",   # hex color for a placeholder avatar, e.g. "#4f7cff"
+        "accent": "",         # UI accent color override
+    },
+    # Store-and-forward relay: whether this node agrees to hold queued
+    # envelopes on behalf of OTHER peers while they're offline. Opt-in,
+    # same reasoning as dht_enabled — see core/network/relay.py.
+    "relay": {
+        "enabled": False,
+        "ttl_hours": 48,
+        "max_total_mb": 20,
+    },
 }
 
 
@@ -30,15 +47,30 @@ class ConfigStore:
         self._data = self._load()
 
     def _load(self) -> dict:
+        saved = {}
         if os.path.exists(self.config_file):
             with open(self.config_file, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-            merged = {**DEFAULTS, **saved}
-            merged["sms_gateway"] = {**DEFAULTS["sms_gateway"], **saved.get("sms_gateway", {})}
-            merged["settings"] = {**DEFAULTS["settings"], **saved.get("settings", {})}
-            merged["plugins"] = saved.get("plugins", {})
-            return merged
-        return dict(DEFAULTS)
+        # Every nested section is rebuilt via {**DEFAULTS[...], **saved.get(...)}
+        # rather than reused by reference — dict-unpacking always produces a
+        # brand-new dict, so no ConfigStore instance (including this "no file
+        # yet" case) ever shares a nested dict with DEFAULTS or with any other
+        # instance. Previously the no-file branch returned `dict(DEFAULTS)`,
+        # a SHALLOW copy: the top-level dict was new, but nested dicts like
+        # DEFAULTS["settings"] were the exact same object DEFAULTS itself
+        # holds — so set_setting() on one profile silently mutated
+        # DEFAULTS["settings"] in place, which every OTHER ConfigStore
+        # created afterward (in the same process, before ever writing its
+        # own file) would then inherit as if it were their own setting. One
+        # profile's dht_port ended up leaking into a second, unrelated
+        # profile's "defaults" this way.
+        merged = {**DEFAULTS, **saved}
+        merged["sms_gateway"] = {**DEFAULTS["sms_gateway"], **saved.get("sms_gateway", {})}
+        merged["settings"] = {**DEFAULTS["settings"], **saved.get("settings", {})}
+        merged["plugins"] = saved.get("plugins", {})
+        merged["profile"] = {**DEFAULTS["profile"], **saved.get("profile", {})}
+        merged["relay"] = {**DEFAULTS["relay"], **saved.get("relay", {})}
+        return merged
 
     def save(self):
         with open(self.config_file, "w", encoding="utf-8") as f:
@@ -56,6 +88,34 @@ class ConfigStore:
 
     def set_setting(self, key, value):
         self._data["settings"][key] = value
+        self.save()
+
+    def set_profile(self, status: str = None, bio: str = None,
+                     avatar_color: str = None, accent: str = None):
+        """Only the fields actually passed (non-None) are changed — same
+        partial-update convention as PeerStore.upsert()."""
+        prof = dict(self._data.get("profile", {}))
+        if status is not None:
+            prof["status"] = status
+        if bio is not None:
+            prof["bio"] = bio
+        if avatar_color is not None:
+            prof["avatar_color"] = avatar_color
+        if accent is not None:
+            prof["accent"] = accent
+        self._data["profile"] = prof
+        self.save()
+
+    def set_relay_config(self, enabled: bool = None, ttl_hours: int = None,
+                          max_total_mb: int = None):
+        rc = dict(self._data.get("relay", {}))
+        if enabled is not None:
+            rc["enabled"] = bool(enabled)
+        if ttl_hours is not None:
+            rc["ttl_hours"] = ttl_hours
+        if max_total_mb is not None:
+            rc["max_total_mb"] = max_total_mb
+        self._data["relay"] = rc
         self.save()
 
     def get_sms_gateway(self) -> dict:

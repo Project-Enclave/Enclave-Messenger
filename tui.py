@@ -126,6 +126,14 @@ HELP_TEXT = [
     "                        passphrase, creates its identity, and starts",
     "                        its web UI in the background",
     "  :settings             view and edit this profile's settings",
+    "  :requests             pending contact requests (a: accept, r: reject)",
+    "  :accept <id-prefix>   accept a pending contact request",
+    "  :reject <id-prefix>   reject/block a pending contact request",
+    "  :relay                show store-and-forward relay status",
+    "  :relay on|off         hold messages for offline peers on this device",
+    "  :nick <id-prefix> <name>   set a local nickname for a contact",
+    "  :status <text>        set your status message (shown to peers)",
+    "  :bio <text>           set your bio (shown to peers)",
     "  :help  :?             this help",
     "",
     "press any key to close",
@@ -208,14 +216,15 @@ class AppState:
         self.passphrase = ""
         self.running = True
 
-        # Full-screen overlays: None | "help" | "profiles" | "settings".
-        # These take over both drawing and key handling while open, so the
-        # underlying chat/peer navigation state is left completely alone
-        # and is exactly as it was when the overlay closes.
+        # Full-screen overlays: None | "help" | "profiles" | "settings" |
+        # "requests". These take over both drawing and key handling while
+        # open, so the underlying chat/peer navigation state is left
+        # completely alone and is exactly as it was when the overlay closes.
         self.overlay = None
         self.overlay_idx = 0
         self.profiles: list = []
         self.settings_values: dict = {}
+        self.contact_requests: list = []
 
     def open_overlay(self, name: str):
         self.overlay = name
@@ -327,6 +336,22 @@ def parse_command(cmd: str):
         return ("new_profile", cmd[len("new-profile"):].strip())
     if cmd.startswith("new "):
         return ("new_chat", cmd[4:].strip())
+    if cmd == "requests":
+        return ("requests", None)
+    if cmd.startswith("accept "):
+        return ("accept", cmd[len("accept "):].strip())
+    if cmd.startswith("reject "):
+        return ("reject", cmd[len("reject "):].strip())
+    if cmd == "relay":
+        return ("relay_status", None)
+    if cmd.startswith("relay "):
+        return ("relay_toggle", cmd[len("relay "):].strip())
+    if cmd.startswith("nick "):
+        return ("nick", cmd[len("nick "):].strip())
+    if cmd.startswith("status "):
+        return ("status", cmd[len("status "):].strip())
+    if cmd.startswith("bio "):
+        return ("bio", cmd[len("bio "):].strip())
     return ("unknown", cmd)
 
 
@@ -490,6 +515,51 @@ class TUIApp:
             "dht_public_ip": cfg.get_setting("dht_public_ip", "") or "",
         }
 
+    # ---- contact requests (handshake) ----
+
+    def _load_contact_requests(self):
+        try:
+            self.state.contact_requests = app_core.get_pending_contact_requests()
+        except Exception as e:
+            self.state.contact_requests = []
+            self.state.status = f"could not load contact requests: {e}"
+
+    def _accept_contact(self, peer_id: str):
+        if not peer_id:
+            return
+        try:
+            app_core.accept_contact_request(peer_id)
+            self.state.status = "contact accepted"
+        except Exception as e:
+            self.state.status = f"accept failed: {e}"
+        self._load_contact_requests()
+        self._refresh(force=True)
+
+    def _reject_contact(self, peer_id: str):
+        if not peer_id:
+            return
+        try:
+            app_core.reject_contact_request(peer_id)
+            self.state.status = "contact rejected"
+        except Exception as e:
+            self.state.status = f"reject failed: {e}"
+        self._load_contact_requests()
+
+    def _resolve_peer_prefix(self, prefix: str) -> str | None:
+        """Matches a typed-in prefix against known peers first, then
+        pending contact requests (covers a stranger who's messaged us but
+        that discovery hasn't independently seen yet)."""
+        prefix = (prefix or "").strip()
+        if not prefix:
+            return None
+        for p in self.state.peers:
+            if p.get("user_id", "").startswith(prefix):
+                return p["user_id"]
+        for req in self.state.contact_requests:
+            if req.get("peer_id", "").startswith(prefix):
+                return req["peer_id"]
+        return None
+
     def _edit_selected_setting(self):
         field = SETTINGS_FIELDS[self.state.overlay_idx]
         key, kind = field["key"], field["kind"]
@@ -636,6 +706,8 @@ class TUIApp:
             self._draw_profiles(top, height, width)
         elif name == "settings":
             self._draw_settings(top, height, width)
+        elif name == "requests":
+            self._draw_requests(top, height, width)
 
     def _draw_help(self, top, height, width):
         self.scr.addstr(top, 1, " help ", self._c(2) | curses.A_BOLD)
@@ -686,6 +758,25 @@ class TUIApp:
             else:
                 shown = str(raw) if raw else "(not set)"
             label = f" {field['label']:<32} {shown}"
+            attr = curses.A_REVERSE if i == self.state.overlay_idx else self._c(0)
+            self.scr.addstr(row, 1, truncate(label, width - 2).ljust(width - 2), attr)
+
+    def _draw_requests(self, top, height, width):
+        self.scr.addstr(top, 1, " contact requests ", self._c(2) | curses.A_BOLD)
+        hint = "a: accept   r: reject   Esc: close"
+        self.scr.addstr(top + 1, 2, truncate(hint, width - 3), self._c(2))
+
+        reqs = self.state.contact_requests
+        if not reqs:
+            self.scr.addstr(top + 3, 2, "(no pending requests)", self._c(2))
+            return
+        for i, req in enumerate(reqs):
+            row = top + 3 + i
+            if row >= top + height:
+                break
+            name = req.get("username") or req.get("peer_id", "?")[:12]
+            greeting = req.get("greeting", "")
+            label = f" {name}   {truncate(greeting, 40)}" if greeting else f" {name}"
             attr = curses.A_REVERSE if i == self.state.overlay_idx else self._c(0)
             self.scr.addstr(row, 1, truncate(label, width - 2).ljust(width - 2), attr)
 
@@ -762,7 +853,12 @@ class TUIApp:
             s.close_overlay()  # help closes on any key, as its footer says
             return
 
-        length = (len(s.profiles) if s.overlay == "profiles" else len(SETTINGS_FIELDS))
+        if s.overlay == "profiles":
+            length = len(s.profiles)
+        elif s.overlay == "requests":
+            length = len(s.contact_requests)
+        else:
+            length = len(SETTINGS_FIELDS)
 
         if ch in (27, ord("q")):
             s.close_overlay()
@@ -779,6 +875,12 @@ class TUIApp:
                              f"--port {p.get('web_port')}")
         elif ch == ord("n") and s.overlay == "profiles":
             self._create_profile_interactive("")
+        elif ch == ord("a") and s.overlay == "requests" and s.contact_requests:
+            req = s.contact_requests[s.overlay_idx]
+            self._accept_contact(req.get("peer_id"))
+        elif ch == ord("r") and s.overlay == "requests" and s.contact_requests:
+            req = s.contact_requests[s.overlay_idx]
+            self._reject_contact(req.get("peer_id"))
 
     def _handle_normal(self, ch):
         s = self.state
@@ -886,6 +988,58 @@ class TUIApp:
             s.open_overlay("settings")
         elif action == "help":
             s.open_overlay("help")
+        elif action == "requests":
+            self._load_contact_requests()
+            s.open_overlay("requests")
+        elif action == "accept":
+            peer_id = self._resolve_peer_prefix(arg)
+            if peer_id:
+                self._accept_contact(peer_id)
+            else:
+                s.status = f"no known peer/request matching {arg!r}"
+        elif action == "reject":
+            peer_id = self._resolve_peer_prefix(arg)
+            if peer_id:
+                self._reject_contact(peer_id)
+            else:
+                s.status = f"no known peer/request matching {arg!r}"
+        elif action == "relay_status":
+            try:
+                st = app_core.get_relay_status()
+                s.status = (f"relay: {'on' if st['enabled'] else 'off'} — "
+                             f"{st.get('queued_envelopes', 0)} queued for "
+                             f"{st.get('queued_recipients', 0)} peer(s)")
+            except Exception as e:
+                s.status = f"relay status error: {e}"
+        elif action == "relay_toggle":
+            val = arg.strip().lower()
+            if val in ("on", "true", "1", "enable", "enabled"):
+                app_core.set_relay_enabled(True)
+                s.status = "relay enabled — this device will hold messages for offline peers"
+            elif val in ("off", "false", "0", "disable", "disabled"):
+                app_core.set_relay_enabled(False)
+                s.status = "relay disabled"
+            else:
+                s.status = "usage: :relay on|off"
+        elif action == "nick":
+            parts = arg.split(None, 1)
+            if not parts:
+                s.status = "usage: :nick <peer-id-prefix> <nickname>"
+            else:
+                peer_id = self._resolve_peer_prefix(parts[0])
+                nickname = parts[1] if len(parts) > 1 else ""
+                if peer_id:
+                    app_core.set_contact_nickname(peer_id, nickname)
+                    self._refresh(force=True)
+                    s.status = "nickname set" if nickname else "nickname cleared"
+                else:
+                    s.status = f"no known peer matching {parts[0]!r}"
+        elif action == "status":
+            app_core.set_profile_status(arg)
+            s.status = "status updated"
+        elif action == "bio":
+            app_core.set_profile_bio(arg)
+            s.status = "bio updated"
         else:
             s.status = f"unknown command: {cmd}"
 
