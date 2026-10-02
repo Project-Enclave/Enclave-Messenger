@@ -4,6 +4,23 @@ Part of [Project Enclave](https://projectenclave.dev/)
 
 ## Get Started!
 
+### Download a prebuilt executable (no install needed)
+
+Grab the latest build for your OS from the [Releases page](https://github.com/Project-Enclave/Enclave-Messenger/releases/latest) — no `git clone`, no Python, no dependencies.
+
+**Linux / macOS**
+
+```
+chmod +x enclave-messenger-linux   # or enclave-messenger-macos
+./enclave-messenger-linux
+```
+
+**Windows**
+
+Just double-click `enclave-messenger-windows.exe`, or run it from a terminal.
+
+> macOS may warn the file is from an "unidentified developer" — right-click → Open the first time to bypass Gatekeeper.
+
 ### For linux or macOS,
 ```bash
 curl -sL https://raw.githubusercontent.com/Project-Enclave/setup/main/messenger.sh -o /tmp/enclave-setup.sh && bash /tmp/enclave-setup.sh
@@ -99,4 +116,21 @@ Please note that this is a hobby project by a teen, it will have problems and yo
 - This project is also on [Stardance!](https://stardance.hackclub.com) by [hackclub](https://hackclub.com)
 - Install scripts live in [Project-Enclave/setup](https://github.com/Project-Enclave/setup)
 
+## Security notes
+
+- **LAN mode (`python web.py --host lan`)** exposes the UI to your whole network.
+  Other devices must enter a one-time access code printed in the terminal; the
+  machine running it (127.0.0.1) is never asked. Debug mode is forced off in
+  LAN mode. Only use it on networks you trust.
+- **Plugins are not sandboxed.** A plugin is Python code running as you; manifest
+  `permissions` only control which helper objects it is handed. User plugins in
+  `~/.enclave-messenger/plugins` are therefore *not loaded* until you explicitly
+  trust them (`POST /api/plugins/<id>/trust`), and trust is pinned to the exact
+  `main.py` hash, so editing the file revokes it. Only trust code you have read.
+- **Passphrases never go in URLs.** The web UI sends it in the
+  `X-Enclave-Passphrase` header (percent-encoded).
+- **Peer addresses are validated** before any outbound request: plain `http(s)://host:port`
+  only, no path/query/credentials, link-local (incl. cloud metadata), multicast and
+  unspecified addresses refused, redirects never followed. LAN/loopback peers are
+  still allowed, since that is where real peers live.
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import importlib.util
 import sys
 from typing import TYPE_CHECKING
@@ -121,7 +122,56 @@ class PluginManager:
             self._log.warning(f"[plugins] Skipping {folder}: missing main.py")
             return
 
-        # Import the plugin module
+        # SECURITY: importing a plugin executes its top-level code with the
+        # full privileges of this process. Manifest "permissions" only
+        # control which helper objects are handed to the plugin; they do
+        # NOT sandbox it (it can still import os/socket and read your
+        # identity key directly). So user-supplied plugins are never
+        # imported until the user has explicitly trusted this exact
+        # version of main.py. Changing the file revokes that trust.
+        sha = ""
+        if not builtin:
+            sha = self._file_sha256(main_path)
+            trusted = (self._config.get("trusted_plugins", {}) or {})
+            if trusted.get(plugin_id) != sha:
+                self._registry[plugin_id] = {
+                    "manifest": manifest,
+                    "instance": None,
+                    "builtin": False,
+                    "folder": folder,
+                    "trusted": False,
+                    "sha256": sha,
+                }
+                self._log.warning(
+                    f"[plugins] User plugin '{plugin_id}' is NOT trusted — not loaded. "
+                    f"It can run arbitrary code as you; review it, then trust it explicitly."
+                )
+                return
+
+        instance = self._import_plugin(plugin_id, main_path)
+        if instance is None:
+            self._log.error(f"[plugins] Failed to load {folder}")
+            return
+
+        self._registry[plugin_id] = {
+            "manifest": manifest,
+            "instance": instance,
+            "builtin": builtin,
+            "folder": folder,
+            "trusted": True,
+            "sha256": sha,
+        }
+        self._log.info(f"[plugins] Registered {'builtin' if builtin else 'user'} plugin: {plugin_id}")
+
+    @staticmethod
+    def _file_sha256(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _import_plugin(self, plugin_id: str, main_path: str):
         try:
             spec = importlib.util.spec_from_file_location(f"enclave_plugin_{plugin_id}", main_path)
             mod = importlib.util.module_from_spec(spec)
@@ -130,18 +180,43 @@ class PluginManager:
             plugin_class = getattr(mod, "Plugin", None)
             if plugin_class is None or not issubclass(plugin_class, EnclavePlugin):
                 raise ValueError("main.py must define a class Plugin(EnclavePlugin)")
-            instance = plugin_class()
+            return plugin_class()
         except Exception as e:
-            self._log.error(f"[plugins] Failed to load {folder}: {e}")
-            return
+            self._log.error(f"[plugins] Failed to import {plugin_id}: {e}")
+            return None
 
-        self._registry[plugin_id] = {
-            "manifest": manifest,
-            "instance": instance,
-            "builtin": builtin,
-            "folder": folder,
-        }
-        self._log.info(f"[plugins] Registered {'builtin' if builtin else 'user'} plugin: {plugin_id}")
+    def trust(self, plugin_id: str) -> dict:
+        """
+        Mark the plugin's CURRENT main.py as trusted and load it.
+        The caller (UI) must have shown the user a warning that the plugin
+        can run arbitrary code with their privileges.
+        """
+        entry = self._registry.get(plugin_id)
+        if entry is None:
+            return {"ok": False, "error": "Plugin not found"}
+        if entry.get("builtin"):
+            return {"ok": True}
+        main_path = os.path.join(entry["folder"], "main.py")
+        sha = self._file_sha256(main_path)
+        instance = self._import_plugin(plugin_id, main_path)
+        if instance is None:
+            return {"ok": False, "error": "Plugin failed to load"}
+        trusted = dict(self._config.get("trusted_plugins", {}) or {})
+        trusted[plugin_id] = sha
+        self._config.set("trusted_plugins", trusted)
+        entry.update({"instance": instance, "trusted": True, "sha256": sha})
+        self._log.warning(f"[plugins] User trusted plugin: {plugin_id} (sha256 {sha[:12]}…)")
+        return {"ok": True}
+
+    def untrust(self, plugin_id: str) -> dict:
+        self.disable(plugin_id)
+        trusted = dict(self._config.get("trusted_plugins", {}) or {})
+        trusted.pop(plugin_id, None)
+        self._config.set("trusted_plugins", trusted)
+        entry = self._registry.get(plugin_id)
+        if entry and not entry.get("builtin"):
+            entry.update({"instance": None, "trusted": False})
+        return {"ok": True}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -159,6 +234,14 @@ class PluginManager:
         entry = self._registry.get(plugin_id)
         if entry is None:
             return {"ok": False, "error": "Plugin not found"}
+
+        if entry.get("instance") is None:
+            return {
+                "ok": False,
+                "needs_trust": True,
+                "error": "Plugin is not trusted. Plugins run arbitrary code with "
+                         "your privileges; review it and trust it explicitly first.",
+            }
 
         manifest = entry["manifest"]
         instance: EnclavePlugin = entry["instance"]
@@ -189,8 +272,9 @@ class PluginManager:
             return {"ok": False, "error": "Plugin not found"}
 
         instance: EnclavePlugin = entry["instance"]
-        safe_disable = self._security.wrap(plugin_id, instance.disable, "disable")
-        safe_disable()
+        if instance is not None:
+            safe_disable = self._security.wrap(plugin_id, instance.disable, "disable")
+            safe_disable()
 
         self._set_enabled(plugin_id, False)
         self._log.info(f"[plugins] Disabled: {plugin_id}")
@@ -199,7 +283,7 @@ class PluginManager:
     def _auto_disable(self, plugin_id: str, reason: str):
         """Called by PluginSecurity watchdog on threshold breach."""
         entry = self._registry.get(plugin_id)
-        if entry:
+        if entry and entry.get("instance") is not None:
             try:
                 entry["instance"].disable()
             except Exception:
@@ -213,6 +297,8 @@ class PluginManager:
         if entry is None:
             return {"ok": False, "error": "Plugin not found"}
         instance: EnclavePlugin = entry["instance"]
+        if instance is None:
+            return {"ok": False, "needs_trust": True, "error": "Plugin is not trusted"}
         safe_configure = self._security.wrap(plugin_id, instance.configure, "configure")
         safe_configure(settings)
         # Persist settings
@@ -243,8 +329,11 @@ class PluginManager:
             instance: EnclavePlugin = entry["instance"]
             state = plugins_cfg.get(plugin_id, {})
             security_info = self._security.get_security_info(plugin_id)
-            safe_status = self._security.wrap(plugin_id, instance.get_status, "get_status")
-            status = safe_status() or {"ok": False}
+            if instance is None:
+                status = {"ok": False, "error": "not trusted - not loaded"}
+            else:
+                safe_status = self._security.wrap(plugin_id, instance.get_status, "get_status")
+                status = safe_status() or {"ok": False}
             result.append({
                 "id": plugin_id,
                 "display_name": manifest.get("display_name", plugin_id),
@@ -255,7 +344,9 @@ class PluginManager:
                 "builtin": entry["builtin"],
                 "enabled": bool(state.get("enabled")) and not security_info["auto_disabled"],
                 "settings": state.get("settings", {}),
-                "schema": instance.get_settings_schema(),
+                "schema": instance.get_settings_schema() if instance is not None else {},
+                "trusted": bool(entry.get("trusted", True)),
+                "sha256": entry.get("sha256", ""),
                 "status": status,
                 "security": security_info,
             })

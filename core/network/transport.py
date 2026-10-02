@@ -25,7 +25,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from wsgiref.simple_server import make_server, WSGIRequestHandler
-from urllib.request import urlopen, Request
+from urllib.request import urlopen, Request, build_opener, HTTPRedirectHandler
 from urllib.error import URLError
 from urllib.parse import urlencode
 
@@ -33,6 +33,103 @@ log = logging.getLogger("network")
 
 _HEALTH_RESP = b'{"ok": true}'
 _MAX_BODY_BYTES = 256 * 1024  # reject anything bigger — a text envelope has no business being large
+
+
+
+# ----------------------------------------------------------------------
+# Outbound address validation
+# ----------------------------------------------------------------------
+# Peer addresses are built from "ip" / "port" values that other peers
+# (via the DHT, discovery packets, relays) hand us, so they are
+# attacker-influenced. Without checks, a malicious peer can make this
+# node fire requests at arbitrary hosts, other URL schemes (file://,
+# ftp://), cloud metadata endpoints (169.254.169.254), or smuggle a
+# path/query into the URL we build.
+#
+# LAN / loopback / private addresses are deliberately still allowed:
+# that is where legitimate peers live. What we do is shrink the
+# attack surface to "one of four fixed paths (/inbound, /relay,
+# /identity, /health) on a plain http(s) host:port" and block the
+# ranges that are never a legitimate peer.
+
+import ipaddress
+import socket
+import re as _re
+from urllib.parse import urlsplit
+
+_HOSTNAME_RE = _re.compile(
+    r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
+    r"(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
+
+
+def _ip_is_blocked(ip) -> bool:
+    """True for addresses that can never be a legitimate peer."""
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    if (ip.is_unspecified or ip.is_multicast or ip.is_link_local
+            or ip.is_reserved):
+        return True
+    # 0.0.0.0/8 ("this network") — is_unspecified only covers 0.0.0.0
+    if ip.version == 4 and int(ip) >> 24 == 0:
+        return True
+    return False
+
+
+def validate_peer_address(address: str) -> bool:
+    """
+    True only if `address` is exactly http(s)://host:port with a
+    non-blocked host. No credentials, path, query or fragment.
+    """
+    if not isinstance(address, str) or len(address) > 300:
+        return False
+    try:
+        parts = urlsplit(address)
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    if parts.username or parts.password:
+        return False
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        return False
+    host = parts.hostname
+    if not host or port is None or not (0 < port < 65536):
+        return False
+
+    try:
+        return not _ip_is_blocked(ipaddress.ip_address(host))
+    except ValueError:
+        pass  # not an IP literal — treat as a hostname
+
+    if not _HOSTNAME_RE.match(host):
+        return False
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            if _ip_is_blocked(ipaddress.ip_address(info[4][0].split("%")[0])):
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """A peer must not be able to bounce us to somewhere else."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = build_opener(_NoRedirect)
+
+
+def _open(req, timeout):
+    return _opener.open(req, timeout=timeout)
 
 
 class _SilentHandler(WSGIRequestHandler):
@@ -188,11 +285,14 @@ class Transport:
         POST envelope to peer_address/inbound.
         Returns True on success, False on failure.
         """
-        url  = f"{peer_address}/inbound"
+        if not validate_peer_address(peer_address):
+            log.warning("[transport] refusing send to invalid peer address %r", peer_address)
+            return False
+        url  = f"{peer_address.rstrip('/')}/inbound"
         body = json.dumps(envelope).encode("utf-8")
         req  = Request(url, data=body, headers={"Content-Type": "application/json"})
         try:
-            with urlopen(req, timeout=5) as resp:
+            with _open(req, 5) as resp:
                 log.debug("[transport] sent to %s -> %d", url, resp.status)
                 return resp.status == 200
         except URLError as e:
@@ -208,11 +308,14 @@ class Transport:
         succeeded — a relay can and does say no (not relaying, over
         capacity, etc.), which is a 403, not a delivery success.
         """
-        url  = f"{relay_address}/relay"
+        if not validate_peer_address(relay_address):
+            log.warning("[transport] refusing relay to invalid address %r", relay_address)
+            return False
+        url  = f"{relay_address.rstrip('/')}/relay"
         body = json.dumps(envelope).encode("utf-8")
         req  = Request(url, data=body, headers={"Content-Type": "application/json"})
         try:
-            with urlopen(req, timeout=5) as resp:
+            with _open(req, 5) as resp:
                 log.debug("[transport] relayed via %s -> %d", url, resp.status)
                 return resp.status == 200
         except URLError as e:
@@ -230,9 +333,12 @@ class Transport:
         rather report "no enclave node there" than half-register a peer
         we can't actually encrypt to.
         """
-        url = f"{peer_address}/identity"
+        if not validate_peer_address(peer_address):
+            log.info("[transport] refusing identity fetch from invalid address %r", peer_address)
+            return None
+        url = f"{peer_address.rstrip('/')}/identity"
         try:
-            with urlopen(Request(url), timeout=5) as resp:
+            with _open(Request(url), 5) as resp:
                 if resp.status != 200:
                     return None
                 data = json.loads(resp.read(65536).decode("utf-8"))
@@ -254,10 +360,12 @@ class Transport:
         Quick liveness check against peer_address/health.
         Returns True if the peer's transport server responds 200.
         """
-        url = f"{peer_address}/health"
+        if not validate_peer_address(peer_address):
+            return False
+        url = f"{peer_address.rstrip('/')}/health"
         req = Request(url)
         try:
-            with urlopen(req, timeout=3) as resp:
+            with _open(req, 3) as resp:
                 return resp.status == 200
         except URLError:
             return False

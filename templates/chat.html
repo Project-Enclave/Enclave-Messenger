@@ -412,8 +412,8 @@ const esc = s => String(s === null || s === undefined ? '' : s)
 // {chat_id, text} where the backend reads {peer_id, plaintext}. That's
 // why sending, receiving and peer loading all silently did nothing
 // while settings and theme (which touch different routes) kept working.
-async function api(url, body, method) {
-  const opts = {headers: {}};
+async function api(url, body, method, extraHeaders) {
+  const opts = {headers: Object.assign({}, extraHeaders || {})};
   if (body !== undefined) {
     opts.method = method || 'POST';
     opts.headers['Content-Type'] = 'application/json';
@@ -625,9 +625,10 @@ function closeChat() {
 
 async function refreshMessages() {
   if (!currentChat) return;
-  const url = '/api/messages/' + encodeURIComponent(currentChat) +
-              '?passphrase=' + encodeURIComponent(passphrase);
-  const d = await api(url);
+  // passphrase goes in a header, never the URL (URLs end up in logs/history)
+  const url = '/api/messages/' + encodeURIComponent(currentChat);
+  const d = await api(url, undefined, undefined,
+                      {'X-Enclave-Passphrase': encodeURIComponent(passphrase)});
   const el = $('msgs');
   if (d.error) {
     el.innerHTML = '<div class="empty" style="color:var(--coral);">' + esc(d.error) + '</div>';

@@ -277,7 +277,7 @@ def main():
         web.app_core.peers = pipe_ap
         web.app_core.identity = pipe_alice._im
         with web.app.test_client() as c:
-            r = c.get(f"/api/messages/{pipe_bob._identity['user_id']}?passphrase=")
+            r = c.get(f"/api/messages/{pipe_bob._identity['user_id']}", headers={"X-Enclave-Passphrase": ""})
             d = r.get_json()
             check("pipeline: /api/messages/<id> route exists (was a 404 before)",
                   r.status_code == 200)
@@ -288,7 +288,7 @@ def main():
         web.app_core.peers = pipe_bp
         web.app_core.identity = pipe_bob._im
         with web.app.test_client() as c:
-            r = c.get(f"/api/messages/{pipe_alice._identity['user_id']}?passphrase=")
+            r = c.get(f"/api/messages/{pipe_alice._identity['user_id']}", headers={"X-Enclave-Passphrase": ""})
             d = r.get_json()
             check("pipeline: recipient sees decrypted+verified message via the route",
                   d["messages"] and d["messages"][0]["text"] == "pipeline test message"

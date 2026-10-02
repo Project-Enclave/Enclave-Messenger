@@ -27,7 +27,9 @@ import threading
 import traceback
 from datetime import datetime, timezone, timedelta
 
-from flask import Flask, request, jsonify, render_template, abort
+from urllib.parse import unquote
+
+from flask import Flask, request, jsonify, render_template, abort, redirect, make_response
 try:
     from flask_sock import Sock
     _SOCK_AVAILABLE = True
@@ -66,6 +68,7 @@ app = Flask(__name__)
 _CSRF_TOKEN = secrets.token_urlsafe(32)
 _CSRF_HEADER = "X-Enclave-CSRF"
 _CSRF_EXEMPT_PATHS = {"/api/health"}
+_PASSPHRASE_HEADER = "X-Enclave-Passphrase"
 
 
 @app.before_request
@@ -78,6 +81,106 @@ def _check_csrf():
         token = request.headers.get(_CSRF_HEADER, "")
         if not secrets.compare_digest(token, _CSRF_TOKEN):
             abort(403, description="missing or invalid CSRF token")
+
+# ---------------------------------------------------------------------------
+# LAN-mode access gate
+# ---------------------------------------------------------------------------
+# The CSRF token above stops *other websites* from driving your browser at
+# this API. It does nothing about another device on the network opening the
+# page directly (the token is embedded in that page). So when bound to
+# 0.0.0.0 (--host lan) every non-loopback client must first enter a one-time
+# access code that is printed in the terminal of the machine running the
+# app. Loopback clients (the person at the keyboard) are never asked.
+_LAN_MODE = False
+_LAN_CODE = None            # set at startup when --host lan is used
+_LAN_COOKIE = "enclave_lan"
+_LAN_SESSIONS: set = set()
+_LAN_FAILS: dict = {}       # ip -> [timestamps of recent failed attempts]
+_LAN_MAX_FAILS = 5
+_LAN_FAIL_WINDOW = 300      # seconds
+_LAN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O/1/I
+
+
+def _new_lan_code() -> str:
+    raw = "".join(secrets.choice(_LAN_ALPHABET) for _ in range(8))
+    return raw[:4] + "-" + raw[4:]
+
+
+def _enable_lan_mode() -> str:
+    global _LAN_MODE, _LAN_CODE
+    _LAN_MODE = True
+    _LAN_CODE = _new_lan_code()
+    return _LAN_CODE
+
+
+def _is_loopback(addr: str) -> bool:
+    return addr in ("127.0.0.1", "::1") or (addr or "").startswith("::ffff:127.")
+
+
+_LAN_LOGIN_HTML = """<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Enclave Messenger - access code</title>
+<body style="font-family:system-ui;max-width:22rem;margin:4rem auto;padding:0 1rem">
+<h2>enclave messenger</h2>
+<p>This instance is shared on the local network. Enter the access code shown
+in the terminal of the computer running it.</p>
+<p style="color:#b00">__ERR__</p>
+<form method=post action=/lan-login>
+<input name=code autofocus autocomplete=off placeholder="XXXX-XXXX"
+ style="font-size:1.2rem;padding:.4rem;width:100%;box-sizing:border-box">
+<button style="margin-top:.6rem;padding:.5rem 1rem">unlock</button>
+</form>"""
+
+
+def _lan_login_page(error: str = "", status: int = 401):
+    resp = make_response(_LAN_LOGIN_HTML.replace("__ERR__", error), status)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.before_request
+def _require_lan_auth():
+    if not _LAN_MODE or _is_loopback(request.remote_addr):
+        return
+    if request.path == "/lan-login":
+        return
+    token = request.cookies.get(_LAN_COOKIE, "")
+    if token and token in _LAN_SESSIONS:
+        return
+    if request.path.startswith("/api/") or request.path == "/ws":
+        return jsonify({"error": "access code required"}), 401
+    return _lan_login_page()
+
+
+@app.route("/lan-login", methods=["GET", "POST"])
+def lan_login():
+    if not _LAN_MODE or _is_loopback(request.remote_addr):
+        return redirect("/")
+    if request.method == "GET":
+        return _lan_login_page(status=200)
+
+    ip = request.remote_addr or "?"
+    now = datetime.now(timezone.utc).timestamp()
+    recent = [t for t in _LAN_FAILS.get(ip, []) if now - t < _LAN_FAIL_WINDOW]
+    if len(recent) >= _LAN_MAX_FAILS:
+        _LAN_FAILS[ip] = recent
+        return _lan_login_page("too many attempts, try again in a few minutes", 429)
+
+    supplied = (request.form.get("code") or
+                (request.get_json(silent=True) or {}).get("code") or "")
+    supplied = supplied.strip().upper()
+    if _LAN_CODE and secrets.compare_digest(supplied, _LAN_CODE):
+        _LAN_FAILS.pop(ip, None)
+        session = secrets.token_urlsafe(32)
+        _LAN_SESSIONS.add(session)
+        resp = redirect("/")
+        resp.set_cookie(_LAN_COOKIE, session, httponly=True, samesite="Strict")
+        return resp
+
+    recent.append(now)
+    _LAN_FAILS[ip] = recent
+    return _lan_login_page("wrong code", 401)
+
 
 # ---------------------------------------------------------------------------
 # WebSocket broker
@@ -481,6 +584,36 @@ def new_chat():
 def get_chat(chat_id):
     return jsonify({"chat_id": chat_id, "messages": app_core.get_messages(chat_id)})
 
+# ---------------------------------------------------------------------------
+# Plugin trust
+# ---------------------------------------------------------------------------
+# User-installed plugins are arbitrary Python with the same access you have
+# (files, network, your identity key). Manifest permissions do NOT sandbox
+# them. They are therefore never loaded until trusted here, and trust is
+# pinned to the exact main.py hash so editing the file revokes it.
+
+@app.route("/api/plugins")
+def list_plugins():
+    return jsonify({"plugins": app_core.plugin_manager.get_all()})
+
+
+@app.route("/api/plugins/<plugin_id>/trust", methods=["POST"])
+def trust_plugin(plugin_id):
+    data = request.get_json(silent=True) or {}
+    if data.get("i_understand") is not True:
+        return jsonify({
+            "ok": False,
+            "error": "confirmation required: this plugin will be able to run "
+                     "any code with your privileges. Send i_understand: true.",
+        }), 400
+    return jsonify(app_core.plugin_manager.trust(plugin_id))
+
+
+@app.route("/api/plugins/<plugin_id>/untrust", methods=["POST"])
+def untrust_plugin(plugin_id):
+    return jsonify(app_core.plugin_manager.untrust(plugin_id))
+
+
 @app.route("/api/messages/<path:chat_id>")
 def get_messages_decrypted(chat_id):
     # This is the route the frontend actually calls (refreshMessages() in
@@ -490,7 +623,19 @@ def get_messages_decrypted(chat_id):
     # in the frontend ever called /api/crypto/decrypt either — so even with
     # a matching URL, messages would have rendered as raw ciphertext.
     # Actual decrypt+resolve logic lives in main.py (shared with tui.py).
-    passphrase = request.args.get("passphrase", "")
+    #
+    # The passphrase used to arrive as ?passphrase=... — URLs are written
+    # to access logs (werkzeug prints the full request line to the
+    # terminal), browser/proxy history and Referer headers, so a secret
+    # must never live there. It now travels in a request header instead.
+    # It is percent-encoded by the client because HTTP header values must
+    # be Latin-1 and passphrases are free-form unicode.
+    if "passphrase" in request.args:
+        return jsonify({
+            "error": "passphrase must be sent in the "
+                     f"{_PASSPHRASE_HEADER} header, not the URL"
+        }), 400
+    passphrase = unquote(request.headers.get(_PASSPHRASE_HEADER, ""))
     return jsonify({
         "chat_id": chat_id,
         "messages": app_core.get_messages_decrypted(chat_id, passphrase),
@@ -875,6 +1020,19 @@ if __name__ == "__main__":
     )
 
     debug = app_core.config.get_setting("debug", False)
+
+    if bind_mode == "lan":
+        # Werkzeug's debugger console is remote code execution for anyone
+        # who can reach the port, so it is never allowed on a LAN bind.
+        if debug:
+            print(" ! debug mode is disabled while bound to the LAN")
+            debug = False
+        code = _enable_lan_mode()
+        print("")
+        print(" ! LAN mode: anyone on this network can reach this page.")
+        print(f" ! Other devices must enter this access code:  {code}")
+        print(" ! (this machine, via 127.0.0.1, is never asked for it)")
+        print("")
 
     print(f" * Binding to {bind_ip}:{port}  (profile: {app_core._active_profile})")
     app.run(host=bind_ip, port=port, debug=debug)
