@@ -4,7 +4,7 @@ core/auth.py — Passphrase verification helper.
 Provides a constant-time check against the stored identity so that
 passphrase validation is centralised and cannot be accidentally skipped.
 """
-
+# i still have no idea why this is its own file...
 
 def verify_passphrase(identity_manager, passphrase: str) -> bool:
     """
