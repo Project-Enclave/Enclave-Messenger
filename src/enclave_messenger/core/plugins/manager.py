@@ -1,0 +1,491 @@
+"""
+manager.py — PluginManager: discovery, lifecycle, and storage for plugins.
+
+Plugin locations:
+  Builtin:        core/plugins/builtin/<id>/
+  User-installed: <data dir>/plugins/<id>/   (see enclave_messenger.paths)
+
+Each plugin folder must contain:
+  manifest.json   — metadata and permissions (read before any code runs)
+  main.py         — contains a class Plugin(EnclavePlugin)
+"""
+
+from __future__ import annotations
+
+import os
+import json
+import hashlib
+import importlib.util
+import sys
+from typing import TYPE_CHECKING
+
+from .base import EnclavePlugin, PluginCore
+from .security import PluginSecurity
+
+if TYPE_CHECKING:
+    from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore, LogStore
+    from enclave_messenger.core.identity import IdentityManager
+    from enclave_messenger.core.network import Node
+
+BUILTIN_DIR = os.path.join(os.path.dirname(__file__), "builtin")
+# Overridable (tests set it); None means "use the per-user plugins dir".
+USER_PLUGIN_DIR: str | None = None
+
+
+def _user_plugin_dir() -> str:
+    if USER_PLUGIN_DIR:
+        return USER_PLUGIN_DIR
+    from enclave_messenger import paths
+    return str(paths.plugins_dir())
+
+
+def _install_legacy_core_alias() -> None:
+    """
+    Plugins written before the package rename do
+    `from core.plugins.manager import EnclavePlugin`. Keep that working by
+    aliasing `core.*` to `enclave_messenger.core.*`, but only once a user
+    plugin is actually about to be imported.
+    """
+    import importlib
+    import importlib.abc
+    import importlib.util
+    if any(type(f).__name__ == "_LegacyCoreFinder" for f in sys.meta_path):
+        return
+
+    class _LegacyCoreFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "core" or fullname.startswith("core."):
+                return importlib.util.spec_from_loader(fullname, self)
+            return None
+
+        def create_module(self, spec):
+            return importlib.import_module("enclave_messenger." + spec.name)
+
+        def exec_module(self, module):
+            pass
+
+    # Must come FIRST: once `core` aliases the real package (which has a real
+    # __path__), the normal path finder would happily load a second, duplicate
+    # copy of every submodule from that path, and classes would no longer match.
+    sys.meta_path.insert(0, _LegacyCoreFinder())
+
+REQUIRED_MANIFEST_KEYS = {"id", "display_name", "description", "version"}
+
+
+class PluginManager:
+    def __init__(
+        self,
+        config: "ConfigStore",
+        peers: "PeerStore",
+        chats: "ChatStore",
+        identity: "IdentityManager",
+        log: "LogStore",
+    ):
+        self._config = config
+        self._peers = peers
+        self._chats = chats
+        self._identity = identity
+        self._log = log
+        self._node = None  # set later via set_node()
+
+        # id -> {manifest, instance, enabled}
+        self._registry: dict[str, dict] = {}
+
+        self._security = PluginSecurity(
+            config=config,
+            log=log,
+            disable_callback=self._auto_disable,
+        )
+
+        from enclave_messenger import paths as _paths
+        _paths.make_private_dir(_user_plugin_dir())
+        self._drop_user_readme()
+
+    def set_node(self, node):
+        """Call after Node is started so network-permission plugins can receive it."""
+        self._node = node
+
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
+
+    def discover(self):
+        """Scan builtin and user plugin directories, register all valid plugins."""
+        # Builtins first so their IDs are reserved
+        self._scan_dir(BUILTIN_DIR, builtin=True)
+        self._scan_dir(_user_plugin_dir(), builtin=False)
+        self._log.info(f"Plugins discovered: {list(self._registry.keys())}")
+
+    def _scan_dir(self, directory: str, builtin: bool):
+        if not os.path.isdir(directory):
+            return
+        for entry in os.scandir(directory):
+            if not entry.is_dir():
+                continue
+            # __pycache__ (created the moment anything under this tree gets
+            # imported — including just by pytest or another plugin's own
+            # import), hidden dirs (.git, .vscode, ...), and other dunder
+            # dirs are never plugin folders. Skip them before they're ever
+            # treated as a candidate, instead of discovering the mistake
+            # via a "manifest error: No such file" warning on every startup.
+            if entry.name.startswith(".") or entry.name.startswith("__"):
+                continue
+            self._load_plugin_folder(entry.path, builtin=builtin)
+
+    def _load_plugin_folder(self, folder: str, builtin: bool):
+        manifest_path = os.path.join(folder, "manifest.json")
+        main_path = os.path.join(folder, "main.py")
+
+        # Read manifest before touching any Python
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception as e:
+            self._log.warning(f"[plugins] Skipping {folder}: manifest error: {e}")
+            return
+
+        missing = REQUIRED_MANIFEST_KEYS - manifest.keys()
+        if missing:
+            self._log.warning(f"[plugins] Skipping {folder}: manifest missing {missing}")
+            return
+
+        plugin_id = manifest["id"]
+
+        # Builtins reserve their IDs
+        if plugin_id in self._registry:
+            existing = self._registry[plugin_id]
+            if existing.get("builtin") and not builtin:
+                self._log.warning(f"[plugins] User plugin '{plugin_id}' conflicts with builtin — skipped")
+                return
+
+        if not os.path.exists(main_path):
+            self._log.warning(f"[plugins] Skipping {folder}: missing main.py")
+            return
+
+        # SECURITY: importing a plugin executes its top-level code with the
+        # full privileges of this process. Manifest "permissions" only
+        # control which helper objects are handed to the plugin; they do
+        # NOT sandbox it (it can still import os/socket and read your
+        # identity key directly). So user-supplied plugins are never
+        # imported until the user has explicitly trusted this exact
+        # version of main.py. Changing the file revokes that trust.
+        sha = ""
+        if not builtin:
+            sha = self._file_sha256(main_path)
+            trusted = (self._config.get("trusted_plugins", {}) or {})
+            if trusted.get(plugin_id) != sha:
+                self._registry[plugin_id] = {
+                    "manifest": manifest,
+                    "instance": None,
+                    "builtin": False,
+                    "folder": folder,
+                    "trusted": False,
+                    "sha256": sha,
+                }
+                self._log.warning(
+                    f"[plugins] User plugin '{plugin_id}' is NOT trusted — not loaded. "
+                    f"It can run arbitrary code as you; review it, then trust it explicitly."
+                )
+                return
+
+        instance = self._import_plugin(plugin_id, main_path)
+        if instance is None:
+            self._log.error(f"[plugins] Failed to load {folder}")
+            return
+
+        self._registry[plugin_id] = {
+            "manifest": manifest,
+            "instance": instance,
+            "builtin": builtin,
+            "folder": folder,
+            "trusted": True,
+            "sha256": sha,
+        }
+        self._log.info(f"[plugins] Registered {'builtin' if builtin else 'user'} plugin: {plugin_id}")
+
+    @staticmethod
+    def _file_sha256(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _import_plugin(self, plugin_id: str, main_path: str):
+        _install_legacy_core_alias()
+        try:
+            spec = importlib.util.spec_from_file_location(f"enclave_plugin_{plugin_id}", main_path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[f"enclave_plugin_{plugin_id}"] = mod
+            spec.loader.exec_module(mod)
+            plugin_class = getattr(mod, "Plugin", None)
+            if plugin_class is None or not issubclass(plugin_class, EnclavePlugin):
+                raise ValueError("main.py must define a class Plugin(EnclavePlugin)")
+            return plugin_class()
+        except Exception as e:
+            self._log.error(f"[plugins] Failed to import {plugin_id}: {e}")
+            return None
+
+    def trust(self, plugin_id: str) -> dict:
+        """
+        Mark the plugin's CURRENT main.py as trusted and load it.
+        The caller (UI) must have shown the user a warning that the plugin
+        can run arbitrary code with their privileges.
+        """
+        entry = self._registry.get(plugin_id)
+        if entry is None:
+            return {"ok": False, "error": "Plugin not found"}
+        if entry.get("builtin"):
+            return {"ok": True}
+        main_path = os.path.join(entry["folder"], "main.py")
+        sha = self._file_sha256(main_path)
+        instance = self._import_plugin(plugin_id, main_path)
+        if instance is None:
+            return {"ok": False, "error": "Plugin failed to load"}
+        trusted = dict(self._config.get("trusted_plugins", {}) or {})
+        trusted[plugin_id] = sha
+        self._config.set("trusted_plugins", trusted)
+        entry.update({"instance": instance, "trusted": True, "sha256": sha})
+        self._log.warning(f"[plugins] User trusted plugin: {plugin_id} (sha256 {sha[:12]}…)")
+        return {"ok": True}
+
+    def untrust(self, plugin_id: str) -> dict:
+        self.disable(plugin_id)
+        trusted = dict(self._config.get("trusted_plugins", {}) or {})
+        trusted.pop(plugin_id, None)
+        self._config.set("trusted_plugins", trusted)
+        entry = self._registry.get(plugin_id)
+        if entry and not entry.get("builtin"):
+            entry.update({"instance": None, "trusted": False})
+        return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def enable_all_saved(self):
+        """On startup: enable all plugins that were enabled in the last session."""
+        plugins_cfg = self._config.get("plugins", {}) or {}
+        for plugin_id, state in plugins_cfg.items():
+            if state.get("enabled") and not state.get("auto_disabled"):
+                self.enable(plugin_id, _startup=True)
+
+    def enable(self, plugin_id: str, _startup: bool = False) -> dict:
+        """Enable a plugin. Returns result dict with ok/error."""
+        entry = self._registry.get(plugin_id)
+        if entry is None:
+            return {"ok": False, "error": "Plugin not found"}
+
+        if entry.get("instance") is None:
+            return {
+                "ok": False,
+                "needs_trust": True,
+                "error": "Plugin is not trusted. Plugins run arbitrary code with "
+                         "your privileges; review it and trust it explicitly first.",
+            }
+
+        manifest = entry["manifest"]
+        instance: EnclavePlugin = entry["instance"]
+
+        # Build scoped core
+        core = self._security.build_core(manifest, {
+            "config": self._config,
+            "peers": self._peers,
+            "chats": self._chats,
+            "identity": self._identity,
+            "node": self._node,
+        })
+
+        # Wrap enable() in watchdog
+        safe_enable = self._security.wrap(plugin_id, instance.enable, "enable")
+        safe_enable(core)
+
+        # Persist enabled state
+        self._security.clear_auto_disable(plugin_id)
+        self._set_enabled(plugin_id, True)
+        self._log.info(f"[plugins] Enabled: {plugin_id}")
+        return {"ok": True}
+
+    def disable(self, plugin_id: str) -> dict:
+        """Disable a plugin (user-initiated)."""
+        entry = self._registry.get(plugin_id)
+        if entry is None:
+            return {"ok": False, "error": "Plugin not found"}
+
+        instance: EnclavePlugin = entry["instance"]
+        if instance is not None:
+            safe_disable = self._security.wrap(plugin_id, instance.disable, "disable")
+            safe_disable()
+
+        self._set_enabled(plugin_id, False)
+        self._log.info(f"[plugins] Disabled: {plugin_id}")
+        return {"ok": True}
+
+    def _auto_disable(self, plugin_id: str, reason: str):
+        """Called by PluginSecurity watchdog on threshold breach."""
+        entry = self._registry.get(plugin_id)
+        if entry and entry.get("instance") is not None:
+            try:
+                entry["instance"].disable()
+            except Exception:
+                pass
+        self._set_enabled(plugin_id, False)
+        self._security.record_auto_disable(plugin_id, reason)
+        self._log.error(f"[plugins] Auto-disabled {plugin_id}: {reason}")
+
+    def configure(self, plugin_id: str, settings: dict) -> dict:
+        entry = self._registry.get(plugin_id)
+        if entry is None:
+            return {"ok": False, "error": "Plugin not found"}
+        instance: EnclavePlugin = entry["instance"]
+        if instance is None:
+            return {"ok": False, "needs_trust": True, "error": "Plugin is not trusted"}
+        safe_configure = self._security.wrap(plugin_id, instance.configure, "configure")
+        safe_configure(settings)
+        # Persist settings
+        plugins_cfg = self._config.get("plugins", {}) or {}
+        if plugin_id not in plugins_cfg:
+            plugins_cfg[plugin_id] = {}
+        plugins_cfg[plugin_id]["settings"] = settings
+        self._config.set("plugins", plugins_cfg)
+        return {"ok": True}
+
+    def set_override(self, plugin_id: str, override: bool) -> dict:
+        """Set or clear the user security override for a plugin."""
+        if plugin_id not in self._registry:
+            return {"ok": False, "error": "Plugin not found"}
+        self._security.set_user_override(plugin_id, override)
+        return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
+    def get_all(self) -> list[dict]:
+        """Return a list of plugin info dicts for the API."""
+        result = []
+        plugins_cfg = self._config.get("plugins", {}) or {}
+        for plugin_id, entry in self._registry.items():
+            manifest = entry["manifest"]
+            instance: EnclavePlugin = entry["instance"]
+            state = plugins_cfg.get(plugin_id, {})
+            security_info = self._security.get_security_info(plugin_id)
+            if instance is None:
+                status = {"ok": False, "error": "not trusted - not loaded"}
+            else:
+                safe_status = self._security.wrap(plugin_id, instance.get_status, "get_status")
+                status = safe_status() or {"ok": False}
+            result.append({
+                "id": plugin_id,
+                "display_name": manifest.get("display_name", plugin_id),
+                "description": manifest.get("description", ""),
+                "version": manifest.get("version", ""),
+                "author": manifest.get("author", "Unknown"),
+                "permissions": manifest.get("permissions", []),
+                "builtin": entry["builtin"],
+                "enabled": bool(state.get("enabled")) and not security_info["auto_disabled"],
+                "settings": state.get("settings", {}),
+                "schema": instance.get_settings_schema() if instance is not None else {},
+                "trusted": bool(entry.get("trusted", True)),
+                "sha256": entry.get("sha256", ""),
+                "status": status,
+                "security": security_info,
+            })
+        return result
+
+    def get(self, plugin_id: str) -> EnclavePlugin | None:
+        entry = self._registry.get(plugin_id)
+        return entry["instance"] if entry else None
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _set_enabled(self, plugin_id: str, enabled: bool):
+        plugins_cfg = self._config.get("plugins", {}) or {}
+        if plugin_id not in plugins_cfg:
+            plugins_cfg[plugin_id] = {}
+        plugins_cfg[plugin_id]["enabled"] = enabled
+        self._config.set("plugins", plugins_cfg)
+
+    def _drop_user_readme(self):
+        readme = os.path.join(_user_plugin_dir(), "README.md")
+        if os.path.exists(readme):
+            return
+        content = """# Enclave User Plugins
+
+Drop plugin folders here. Each plugin must contain:
+
+```
+my_plugin/
+    manifest.json
+    main.py
+```
+
+## manifest.json
+
+```json
+{
+    "id": "my_plugin",
+    "display_name": "My Plugin",
+    "description": "What it does.",
+    "version": "1.0.0",
+    "author": "You",
+    "min_enclave_version": "1.0.0",
+    "permissions": ["config"]
+}
+```
+
+## Permissions
+
+| Permission | Grants access to |
+|---|---|
+| `config`   | Plugin's own config section |
+| `peers`    | Peer list (read) |
+| `chats`    | Chat history (read/write) |
+| `identity` | Your user ID and public key (read-only, no private keys) |
+| `network`  | Send messages, register inbound callbacks |
+
+## main.py
+
+```python
+from enclave_messenger.core.plugins.base import EnclavePlugin, PluginCore
+
+class Plugin(EnclavePlugin):
+    name = "my_plugin"
+    display_name = "My Plugin"
+    description = "What it does."
+    version = "1.0.0"
+    author = "You"
+
+    def enable(self, core: PluginCore):
+        super().enable(core)
+        # your startup code here
+
+    def disable(self):
+        super().disable()
+        # your teardown code here
+
+    def get_settings_schema(self):
+        return [
+            {"key": "api_key", "label": "API Key", "type": "password", "required": True, "default": ""},
+        ]
+
+    def configure(self, settings):
+        # save settings via self._core.config if needed
+        pass
+
+    def get_status(self):
+        return {"ok": True, "message": "Running"}
+```
+
+## Warning
+
+Plugins run with the same permissions as Enclave itself.
+Only install plugins from sources you trust.
+"""
+        try:
+            with open(readme, "w", encoding="utf-8") as f:
+                f.write(content)
+        except OSError:
+            pass

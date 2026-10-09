@@ -9,6 +9,7 @@ test_security_fixes_2.py — regression tests for the second round of fixes:
 
 Run:  python3 test_security_fixes_2.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import json, os, sys, tempfile, textwrap
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -21,7 +22,7 @@ def check(name, cond):
 def main():
     # ---------------- 3. peer-address validation ----------------
     print("\n[peer address validation]")
-    from core.network.transport import validate_peer_address as ok
+    from enclave_messenger.core.network.transport import validate_peer_address as ok
     check("normal LAN address allowed",            ok("http://192.168.1.20:5001"))
     check("loopback allowed (local multi-node)",   ok("http://127.0.0.1:5001"))
     check("cloud metadata IP blocked",             not ok("http://169.254.169.254:80"))
@@ -36,7 +37,7 @@ def main():
     check("missing port blocked",                  not ok("http://1.2.3.4"))
     check("garbage blocked",                       not ok("not a url") and not ok(None))
 
-    import core.network.transport as t
+    import enclave_messenger.core.network.transport as t
     from urllib.error import HTTPError
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -62,7 +63,7 @@ def main():
 
     # ---------------- 2. LAN gate + 1. passphrase header ----------------
     print("\n[web: LAN access gate]")
-    import web
+    from enclave_messenger import web
     web._enable_lan_mode()
     code = web._LAN_CODE
     check("access code looks like XXXX-XXXX", len(code) == 9 and code[4] == "-")
@@ -99,7 +100,7 @@ def main():
 
     # ---------------- 4. plugin trust ----------------
     print("\n[plugins: untrusted code is never imported]")
-    from core.plugins import manager as pm
+    from enclave_messenger.core.plugins import manager as pm
     tmp = tempfile.mkdtemp()
     marker = os.path.join(tmp, "PWNED")
     pdir = os.path.join(tmp, "evil")
@@ -107,7 +108,7 @@ def main():
     json.dump({"id": "evil", "display_name": "Evil", "version": "1", "description": "x",
                "author": "x", "permissions": []}, open(os.path.join(pdir, "manifest.json"), "w"))
     src = textwrap.dedent(f'''
-        from core.plugins.manager import EnclavePlugin
+        from enclave_messenger.core.plugins.manager import EnclavePlugin
         open({marker!r}, "w").write("top-level code ran")
         class Plugin(EnclavePlugin):
             def enable(self, core): pass

@@ -3,3 +3,5 @@ flask
 flask-sock
 requests
 websockets
+segno
+platformdirs

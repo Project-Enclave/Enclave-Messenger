@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""
+Smoke-test an INSTALLED Enclave Messenger: a pipx/pip install (`pe-em`) or the
+PyInstaller executable. Used by CI on Linux, macOS and Windows.
+
+    python scripts/smoke_install.py pe-em
+    python scripts/smoke_install.py ./dist/enclave-messenger
+
+It runs with a throw-away ENCLAVE_HOME and a throw-away working directory, and checks:
+  * --version / paths work and report the expected install kind
+  * --help creates nothing on disk
+  * `desktop --no-browser` really serves the UI (so templates were packaged)
+  * the built-in plugins load (their sources/manifests were packaged)
+  * data landed under ENCLAVE_HOME and nothing was written to the working directory
+"""
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+
+def free_port():
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit("usage: smoke_install.py <command> [expected-install-kind]")
+    cmd = sys.argv[1]
+    expect_kind = sys.argv[2] if len(sys.argv) > 2 else None
+    home = tempfile.mkdtemp(prefix="enclave_smoke_home_")
+    cwd = tempfile.mkdtemp(prefix="enclave_smoke_cwd_")
+    env = dict(os.environ, ENCLAVE_HOME=os.path.join(home, "h"), PYTHONUNBUFFERED="1")
+    env.pop("PYTHONPATH", None)          # must work from the install alone
+    failures = []
+
+    def check(name, ok):
+        print(("PASS  " if ok else "FAIL  ") + name)
+        if not ok:
+            failures.append(name)
+
+    def run(*args):
+        return subprocess.run([cmd, *args], env=env, cwd=cwd, capture_output=True, text=True, timeout=120)
+
+    r = run("--version")
+    check("--version runs: " + r.stdout.strip(), r.returncode == 0 and r.stdout.startswith("pe-em "))
+    if expect_kind:
+        check(f"install kind is '{expect_kind}'", f"({expect_kind}," in r.stdout)
+    r = run("--help")
+    check("--help runs", r.returncode == 0 and "desktop" in r.stdout)
+    r = run("paths", "--json")
+    ok = r.returncode == 0
+    if ok:
+        d = json.loads(r.stdout)
+        ok = d["override"] == env["ENCLAVE_HOME"]
+    check("paths --json honours ENCLAVE_HOME", ok)
+    check("--version/--help/paths wrote nothing to disk", not os.path.exists(env["ENCLAVE_HOME"]))
+
+    port = free_port()
+    proc = subprocess.Popen([cmd, "desktop", "--no-browser", "--port", str(port)], env=env, cwd=cwd,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    base = f"http://127.0.0.1:{port}"
+    html = None
+    try:
+        for _ in range(120):
+            if proc.poll() is not None:
+                break
+            try:
+                html = urllib.request.urlopen(base + "/", timeout=1).read().decode()
+                break
+            except Exception:
+                time.sleep(0.5)
+        check("desktop serves the UI (templates are packaged)", bool(html) and "Enclave Messenger" in html)
+        if html:
+            m = re.search(r"CSRF_TOKEN\s*=\s*['\"]([^'\"]+)", html) or \
+                re.search(r"csrf[^'\"]*['\"]([A-Za-z0-9_\-]{20,})['\"]", html, re.I)
+            req = urllib.request.Request(base + "/api/plugins", headers={"X-Enclave-CSRF": m.group(1) if m else ""})
+            plugins = json.loads(urllib.request.urlopen(req, timeout=5).read())["plugins"]
+            ids = {p["id"] for p in plugins}
+            check("built-in plugins load (sms_gateway, bluetooth)", {"sms_gateway", "bluetooth"} <= ids)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        if proc.stdout:
+            tail = proc.stdout.read()[-600:]
+            if failures:
+                print("--- app output ---\n" + tail)
+
+    check("data was created under ENCLAVE_HOME", os.path.isfile(os.path.join(env["ENCLAVE_HOME"], "config", "registry.json")))
+    check("nothing was written to the working directory", os.listdir(cwd) == [])
+    shutil.rmtree(home, ignore_errors=True)
+    shutil.rmtree(cwd, ignore_errors=True)
+    if failures:
+        sys.exit(f"{len(failures)} check(s) failed")
+    print("\nall smoke checks passed")
+
+
+if __name__ == "__main__":
+    main()

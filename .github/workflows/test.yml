@@ -36,7 +36,7 @@ jobs:
           test_update.py \
           test_web_multi_profile.py \
           test_ws_push.py \
-          --cov=core \
+          --cov=src/enclave_messenger \
           --cov-report=xml \
           --cov-report=term-missing
     

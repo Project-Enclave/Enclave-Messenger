@@ -30,6 +30,9 @@ jobs:
         python test_dht.py
         python test_multi_profile.py
         python test_security_fixes.py
+        python test_security_fixes_2.py
+        python test_ux_fixes.py
+        python test_packaging.py
         python test_sms_gateway.py
         python test_tui.py
         python test_update.py

@@ -9,12 +9,17 @@ Does:
   5. Deletes itself on success
 
 Run with: python3 set.py
+
+This is the DEVELOPER bootstrap for a source checkout. Installed users run
+`pe-em setup` instead (no pip, no venv, never deletes anything).
 """
 
 import sys
 import os
 import subprocess
 import shutil
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
 VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv")
 
@@ -183,75 +188,29 @@ def step_install_requirements():
 def step_config():
     global step_config_pass, step_failed, step_failed_total
     banner("Step 3 — App configuration")
-    from core.storage import ConfigStore
-    config = ConfigStore()
-
-    current_user = config.username or ""
-    username = ask("Your display name", default=current_user or None)
-    if username:
-        config.username = username
-        ok("Username set.")
-    else:
-        ok("Username skipped.")
-
-    print("\n  SMS Gateway (android-sms-gateway) — optional, press Enter to skip")
-    sms_user = ask("  Gateway username", default=None)
-    if sms_user:
-        sms_pass = ask("  Gateway password", secret=True)
-        sms_host = ask("  Device local IP (leave blank for cloud mode)", default=None)
-        config.set_sms_gateway(
-            provider=sms_user,
-            api_key=sms_pass,
-            sender_id=sms_host or "cloud",
-        )
-        ok("SMS gateway config saved.")
-    else:
-        ok("SMS gateway skipped.")
-
-    port_str = ask("  Web UI port", default="5000")
-    try:
-        config.set_setting("port", int(port_str))
-        step_config_pass=True
-        ok(f"Port set to: {port_str}")
-    except (ValueError, TypeError):
-        ok("Invalid port, keeping default 5000.")
-        step_failed_total+=1
-        step_config_pass=True
-        step_failed=0
+    from enclave_messenger import main as _main, setup_wizard
+    # Saved into the ACTIVE PROFILE's config. (This used to build a bare
+    # ConfigStore(), which wrote to ./storage/ in whatever directory you ran
+    # set.py from, so none of it was ever read back.)
+    setup_wizard.configure(_main.config)
+    step_config_pass = True
+    step_failed = 0
 
 
 def step_identity():
     global step_identity_pass, step_failed, step_failed_total
     banner("Step 4 — Identity")
-    # Import main so the identity is initialised at the profile path
-    # (same path web.py uses), not the bare ~/.enclave-messenger/identity/ default.
-    import main as _main
-    ident = _main.identity
-    if ident.has_identity():
-        ok("Identity already exists — skipping.")
-        step_identity_pass=True
-        step_failed=0
-        return
-    print("  No identity found. Creating one now...")
-    import getpass
-    passphrase = getpass.getpass("  Choose a passphrase: ").strip()
-    if not passphrase:
-        err("Passphrase cannot be empty.")
-        sys.exit(1)
-    confirm = getpass.getpass("  Confirm passphrase: ").strip()
-    if passphrase != confirm:
-        err("Passphrases do not match.")
-        step_identity_pass=False
-        step_failed+=1
-        step_failed_total+=1
+    # Imported here so the identity lives at the profile path the apps use.
+    from enclave_messenger import main as _main, setup_wizard
+    if setup_wizard.create_identity(_main.identity):
+        step_identity_pass = True
+        step_failed = 0
+    else:
+        step_identity_pass = False
+        step_failed += 1
+        step_failed_total += 1
         if step_failed > 2:
             step_dump(True)
-        return
-    ident.generate_new_identity()
-    ident.save_identity(passphrase=passphrase)
-    step_identity_pass=True
-    step_failed=0
-    ok(f"Identity created. User ID: {ident.get_user_id()}")
 
 
 def step_self_destruct():

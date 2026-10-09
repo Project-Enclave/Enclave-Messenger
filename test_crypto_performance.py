@@ -6,6 +6,7 @@ IdentityManager.crypto_salt persistence it depends on.
 
 Run: python3 test_crypto_performance.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import os
 import sys
 import tempfile
@@ -13,8 +14,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.crypto.crypto_manager import CryptoManager
-from core.identity.key_manager import IdentityManager
+from enclave_messenger.core.crypto.crypto_manager import CryptoManager
+from enclave_messenger.core.identity.key_manager import IdentityManager
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 PASS, FAIL = [], []

@@ -35,11 +35,13 @@ def main():
     tmp_home = tempfile.mkdtemp(prefix="enclave_home_")
     env = os.environ.copy()
     env["HOME"] = tmp_home
+    env["ENCLAVE_HOME"] = tmp_home
+    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
     env["PYTHONUNBUFFERED"] = "1"
 
     PARENT_PORT = 60101
     parent = subprocess.Popen(
-        ["python3", "web.py", "--port", str(PARENT_PORT)],
+        [sys.executable, "-m", "enclave_messenger", "web", "--port", str(PARENT_PORT)],
         cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         preexec_fn=os.setsid,
     )
@@ -114,7 +116,7 @@ def main():
         # Best-effort cleanup of the spawned child (start_new_session=True
         # means it's not in the parent's process group).
         try:
-            subprocess.run(["pkill", "-f", "web.py --profile realprofile"], timeout=3)
+            subprocess.run(["pkill", "-f", "enclave_messenger web --profile realprofile"], timeout=3)
         except Exception:
             pass
         os.killpg(os.getpgid(parent.pid), signal.SIGTERM)

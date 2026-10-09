@@ -15,6 +15,7 @@ nodes.
 
 Run: python3 test_dht.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import os
 import sys
 import tempfile
@@ -22,10 +23,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.network.dht import DHTNode, node_id_for, key_for
-from core.storage import ConfigStore, ChatStore, PeerStore
-from core.identity.key_manager import IdentityManager
-from core.network.router import Node
+from enclave_messenger.core.network.dht import DHTNode, node_id_for, key_for
+from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore
+from enclave_messenger.core.identity.key_manager import IdentityManager
+from enclave_messenger.core.network.router import Node
 
 PASS, FAIL = [], []
 

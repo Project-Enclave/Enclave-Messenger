@@ -33,3 +33,9 @@ Thumbs.db
 build/
 dist/
 *.spec
+
+# packaging / local dev data
+build/
+dist/
+*.egg-info/
+.enclave-dev/

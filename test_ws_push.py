@@ -39,13 +39,15 @@ async def main():
     tmp_home = tempfile.mkdtemp(prefix="enclave_home_")
     env = os.environ.copy()
     env["HOME"] = tmp_home
+    env["ENCLAVE_HOME"] = tmp_home
+    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
     env["PYTHONUNBUFFERED"] = "1"
     repo = os.path.dirname(os.path.abspath(__file__))
 
-    setup = subprocess.run(["python3", "-c", f"""
-import sys; sys.path.insert(0, '.')
-from core import profiles
-from core.identity.key_manager import IdentityManager
+    setup = subprocess.run([sys.executable, "-c", f"""
+import sys; sys.path.insert(0, 'src')
+from enclave_messenger.core import profiles
+from enclave_messenger.core.identity.key_manager import IdentityManager
 p = profiles.create_profile("alice", username="alice", transport_port={TRANSPORT_PORT}, web_port={WEB_PORT})
 im = IdentityManager(storage_dir=p["data_dir"] + "/identity")
 im.generate_new_identity()
@@ -56,7 +58,7 @@ print(im.get_user_id())
     alice_id = setup.stdout.strip()
 
     proc = subprocess.Popen(
-        ["python3", "web.py", "--profile", "alice", "--port", str(WEB_PORT)],
+        [sys.executable, "-m", "enclave_messenger", "web", "--profile", "alice", "--port", str(WEB_PORT)],
         cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         preexec_fn=os.setsid,
     )

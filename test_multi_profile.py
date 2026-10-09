@@ -40,6 +40,7 @@ machine.
 Run: python3 test_multi_profile.py
 """
 import json
+import _testenv  # noqa: F401
 import os
 import shutil
 import signal
@@ -60,6 +61,8 @@ def main():
     tmp_home = tempfile.mkdtemp(prefix="enclave_home_")
     env = os.environ.copy()
     env["HOME"] = tmp_home
+    env["ENCLAVE_HOME"] = tmp_home
+    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
     env["PYTHONUNBUFFERED"] = "1"
 
     profiles_spec = [
@@ -68,10 +71,10 @@ def main():
     ]
 
     setup = subprocess.run(
-        ["python3", "-c", f"""
-import sys; sys.path.insert(0, '.')
-from core import profiles
-from core.identity.key_manager import IdentityManager
+        [sys.executable, "-c", f"""
+import sys; sys.path.insert(0, 'src')
+from enclave_messenger.core import profiles
+from enclave_messenger.core.identity.key_manager import IdentityManager
 for name, tport, wport, pw in {profiles_spec!r}:
     p = profiles.create_profile(name, username=name, transport_port=tport, web_port=wport)
     im = IdentityManager(storage_dir=p["data_dir"] + "/identity")
@@ -87,7 +90,7 @@ for name, tport, wport, pw in {profiles_spec!r}:
     procs = {}
     for name, _tport, _wport, passphrase in profiles_spec:
         procs[name] = subprocess.Popen(
-            ["python3", "main.py", "run", "--profile", name,
+            [sys.executable, "-m", "enclave_messenger", "cli", "run", "--profile", name,
              "--passphrase", passphrase, "--ci"],
             cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, preexec_fn=os.setsid,
@@ -111,7 +114,7 @@ for name, tport, wport, pw in {profiles_spec!r}:
 
         # Ground truth first: the actual on-disk peer_store, not logs.
         def load_peers(profile):
-            path = os.path.join(tmp_home, ".enclave-messenger", "profiles",
+            path = os.path.join(tmp_home, "data", "profiles",
                                  profile, "peers.json")
             with open(path) as f:
                 data = json.load(f)
@@ -126,8 +129,8 @@ for name, tport, wport, pw in {profiles_spec!r}:
 
         # Then logging visibility, which is its own thing worth checking now
         # that it's actually fixed.
-        alice_log = open(os.path.join(repo, "storage", "logs", "enclave-alice.log")).read()
-        bob_log = open(os.path.join(repo, "storage", "logs", "enclave-bob.log")).read()
+        alice_log = open(os.path.join(tmp_home, "state", "log", "enclave-alice.log")).read()
+        bob_log = open(os.path.join(tmp_home, "state", "log", "enclave-bob.log")).read()
         check("alice's log shows she discovered a peer", "saw peer" in alice_log)
         check("bob's log shows he discovered a peer", "saw peer" in bob_log)
 
@@ -139,7 +142,8 @@ for name, tport, wport, pw in {profiles_spec!r}:
                 except ProcessLookupError:
                     pass
         shutil.rmtree(tmp_home, ignore_errors=True)
-        shutil.rmtree(os.path.join(repo, "storage"), ignore_errors=True)
+        # logs now live under ENCLAVE_HOME (removed with tmp_home), not ./storage
+        assert not os.path.exists(os.path.join(repo, "storage")), "stray ./storage created in the repo"
 
     test_bind_mode_coherence()
 
@@ -164,9 +168,9 @@ def test_bind_mode_coherence():
     because it looks done. Hence this test.
     """
     import tempfile as _tf
-    from core.identity.key_manager import IdentityManager
-    from core.storage import ConfigStore, ChatStore, PeerStore
-    from core.network.router import Node
+    from enclave_messenger.core.identity.key_manager import IdentityManager
+    from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore
+    from enclave_messenger.core.network.router import Node
 
     def mk(label, tport, bind_mode=None):
         d = os.path.join(_tf.mkdtemp(), label)

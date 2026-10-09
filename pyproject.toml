@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "project-enclave-messenger"
+dynamic = ["version"]
+description = "Project Enclave - Enclave Messenger: a peer-to-peer messenger that keeps working when the internet doesn't (LAN, Bluetooth, SMS, DHT)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+keywords = ["messenger", "p2p", "e2ee", "offline", "mesh"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "cryptography",
+    "flask",
+    "flask-sock",
+    "requests",
+    "websockets",
+    "segno",
+    "platformdirs>=3",
+    "windows-curses; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+# Needs the system Bluetooth headers first (Linux: libbluetooth-dev).
+bluetooth = ["pybluez2; sys_platform == 'linux'"]
+
+[project.urls]
+Homepage = "https://github.com/Project-Enclave/Enclave-Messenger"
+Documentation = "https://messenger.docs.projectenclave.dev"
+Issues = "https://github.com/Project-Enclave/Enclave-Messenger/issues"
+
+[project.scripts]
+pe-em = "enclave_messenger.cli:run"
+enclave-messenger = "enclave_messenger.cli:run"
+
+[tool.setuptools.dynamic]
+version = {attr = "enclave_messenger.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+enclave_messenger = [
+    "templates/*",
+    "core/plugins/builtin/*/manifest.json",
+]

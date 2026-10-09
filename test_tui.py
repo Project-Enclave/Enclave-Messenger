@@ -10,6 +10,7 @@ Two layers:
 
 Run: python3 test_tui.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import fcntl
 import os
 import pty
@@ -26,7 +27,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from tui import (
+from enclave_messenger.tui import (
     AppState, parse_command, fmt_time, truncate,
     chat_list_label, peer_list_label, message_display_line,
 )
@@ -233,7 +234,7 @@ def main():
 # ---------------------------------------------------------------------------
 
 def test_new_command_parsing():
-    from tui import parse_command
+    from enclave_messenger.tui import parse_command
     check(":profiles parses", parse_command("profiles") == ("profiles", None))
     check(":settings parses", parse_command("settings") == ("settings", None))
     check(":help parses", parse_command("help") == ("help", None))
@@ -250,7 +251,7 @@ def test_new_command_parsing():
 
 
 def test_overlay_state():
-    from tui import AppState, SETTINGS_FIELDS
+    from enclave_messenger.tui import AppState, SETTINGS_FIELDS
     s = AppState()
     check("no overlay by default", s.overlay is None)
     s.open_overlay("settings")
@@ -286,10 +287,10 @@ def test_ip_port_connect():
     discovery quietly finding them anyway.
     """
     import tempfile as _tf
-    from core.identity.key_manager import IdentityManager
-    from core.storage import ConfigStore, ChatStore, PeerStore
-    from core.network.router import Node
-    from main import classify_address
+    from enclave_messenger.core.identity.key_manager import IdentityManager
+    from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore
+    from enclave_messenger.core.network.router import Node
+    from enclave_messenger.main import classify_address
 
     check("classify_address now recognises ip:port",
           classify_address("192.168.0.5:4000") == ("192.168.0.5:4000", "ip"))

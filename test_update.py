@@ -5,6 +5,7 @@ invocations of update.py itself, not mocks.
 
 Run: python3 test_update.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import hashlib
 import json
 import os

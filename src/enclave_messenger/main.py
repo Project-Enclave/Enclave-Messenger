@@ -1,0 +1,911 @@
+"""
+main.py — Enclave Messenger coordinator.
+
+This is the heart of the app. It wires up all core modules and exposes
+a clean API that web.py, tui.py, gui.py etc. import directly.
+
+Running directly:
+    python main.py run              # start node (discovery + transport)
+    python main.py run --passphrase secret
+    python main.py run --profile alice
+    python main.py run --port 8080  # override web-UI port
+    python main.py run --ci         # headless / no browser open
+
+CLI utilities:
+    python main.py init
+    python main.py init --profile alice
+    python main.py encrypt ...
+    python main.py decrypt ...
+    python main.py sms send ...
+    python main.py bt scan
+    python main.py bt send --to AA:BB:CC:DD:EE:FF --message "Hello"
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import signal
+import threading
+
+from enclave_messenger.core.identity import IdentityManager
+from enclave_messenger.core.crypto import CryptoManager
+from enclave_messenger.core.crypto.e2e import E2EManager
+from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore, LogStore
+from enclave_messenger.core.plugins import SMSGateway, PluginManager
+from enclave_messenger.core.plugins.builtin.bluetooth.main import (
+    BluetoothPlugin,
+    BluetoothUnavailableError,
+    is_bt_chat_id,
+    mac_from_chat_id,
+    chat_id_from_mac,
+)
+from enclave_messenger.core.network import Node
+from enclave_messenger.core import profiles as _profiles
+from enclave_messenger import paths as _paths
+
+
+# ---------------------------------------------------------------------------
+# Profile-aware store initialisation
+# ---------------------------------------------------------------------------
+
+def _init_stores(profile_name: str = None):
+    """
+    Initialise all stores for the given profile.
+    Falls back to the active profile, then ensures a 'default' profile exists.
+    Returns (config, chats, peers, identity, log, profile_name).
+    """
+    if profile_name is None:
+        profile_name = _profiles.get_active_profile()
+    if profile_name is None:
+        profile_name = _profiles.ensure_default_profile()
+
+    data_dir = _profiles.get_profile_data_dir(profile_name)
+    identity_dir = os.path.join(data_dir, "identity")
+
+    _config   = ConfigStore(base_dir=data_dir)
+    _chats    = ChatStore(base_dir=data_dir)
+    _peers    = PeerStore(base_dir=data_dir)
+    _identity = IdentityManager(storage_dir=identity_dir)
+    _log      = LogStore(name=f"enclave-{profile_name}", log_dir=str(_paths.log_dir()))
+    return _config, _chats, _peers, _identity, _log, profile_name
+
+
+# ---------------------------------------------------------------------------
+# Singletons — initialised once at import time for the active profile.
+# web.py / tui.py / gui.py import these directly and they continue to work.
+# ---------------------------------------------------------------------------
+
+config, chats, peers, identity, log, _active_profile = _init_stores()
+
+# Plugin manager — discovered on import, enabled after node starts.
+plugin_manager = PluginManager(
+    config=config,
+    peers=peers,
+    chats=chats,
+    identity=identity,
+    log=log,
+)
+plugin_manager.discover()
+
+# The Node is None until start_node() is called.
+_node: Node | None = None
+_node_lock = threading.Lock()
+
+# Bluetooth plugin instance — created once, listener started in start_node().
+_bt: BluetoothPlugin | None = None
+_bt_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Bluetooth helpers
+# ---------------------------------------------------------------------------
+
+def _bt_on_message(chat_id: str, plaintext: str) -> None:
+    import datetime
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    chats.append_message(chat_id, {"token": plaintext, "sender": "peer", "ts": ts})
+    log.info(f"[bluetooth] received message from {chat_id}")
+
+
+def get_bluetooth() -> BluetoothPlugin:
+    global _bt
+    with _bt_lock:
+        if _bt is None:
+            _bt = BluetoothPlugin(on_message=_bt_on_message)
+        return _bt
+
+
+def scan_bluetooth(duration: int = 8) -> list[dict]:
+    return get_bluetooth().scan(duration=duration)
+
+
+def send_bt(mac_or_chat_id: str, plaintext: str) -> None:
+    import datetime
+    bt = get_bluetooth()
+    bt.send(mac_or_chat_id, plaintext)
+    chat_id = mac_or_chat_id if mac_or_chat_id.upper().startswith('BT:') \
+              else chat_id_from_mac(mac_or_chat_id)
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    chats.append_message(chat_id, {"token": plaintext, "sender": "me", "ts": ts})
+    log.info(f"[bluetooth] sent message to {chat_id}")
+
+
+def start_bt_listener() -> None:
+    try:
+        get_bluetooth().start_listener()
+    except BluetoothUnavailableError as e:
+        log.warning(f"[bluetooth] listener not started: {e}")
+
+
+def stop_bt_listener() -> None:
+    with _bt_lock:
+        if _bt is not None:
+            _bt.stop_listener()
+
+
+# ---------------------------------------------------------------------------
+# Node lifecycle
+# ---------------------------------------------------------------------------
+
+def start_node(passphrase: str, transport_port: int = None) -> Node:
+    """
+    Start the network node for the active profile.
+
+    transport_port: override the port Node listens on for P2P traffic.
+                    If omitted, Node uses config_store's 'network_port',
+                    falling back to TRANSPORT_PORT (51821) in router.py.
+                    Pass this when running multiple instances on one machine.
+    """
+    global _node
+    with _node_lock:
+        if _node is not None:
+            return _node
+
+        if not identity.has_identity():
+            raise RuntimeError("No identity found. Run: python main.py init")
+
+        identity.load_identity(passphrase=passphrase)
+        log.info("Identity loaded: " + identity.get_user_id())
+
+        # Write the port into config so Node picks it up.
+        # Profile meta takes priority; CLI/env override wins over both.
+        if transport_port is None:
+            profile_meta = _profiles.get_profile(_active_profile)
+            transport_port = (profile_meta or {}).get("transport_port")
+
+        if transport_port is not None:
+            config.set_setting("network_port", transport_port)
+
+        _node = Node(
+            identity_manager=identity,
+            config_store=config,
+            peer_store=peers,
+            chat_store=chats,
+        )
+        _node.start()
+        log.info("Node started")
+
+        plugin_manager.set_node(_node)
+        plugin_manager.enable_all_saved()
+
+        start_bt_listener()
+
+        return _node
+
+
+def stop_node():
+    global _node
+    with _node_lock:
+        if _node:
+            _node.stop()
+            _node = None
+            log.info("Node stopped")
+    stop_bt_listener()
+
+
+def get_node() -> Node | None:
+    return _node
+
+
+# ---------------------------------------------------------------------------
+# Messaging API (used by web.py)
+# ---------------------------------------------------------------------------
+
+def send_message(peer_user_id: str, plaintext: str) -> bool:
+    if is_bt_chat_id(peer_user_id):
+        send_bt(peer_user_id, plaintext)
+        return True
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    return _node.send(peer_user_id, plaintext)
+
+
+def retry_message(peer_user_id: str, ts: str) -> bool:
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    return _node.retry_message(peer_user_id, ts)
+
+
+def get_messages(chat_id: str) -> list:
+    return chats.load_messages(chat_id)
+
+
+def get_messages_decrypted(chat_id: str, passphrase: str = "") -> list[dict]:
+    """
+    Same data as get_messages(), but decrypted and shaped for display:
+    {text, sender, author, timestamp, verified, encrypted}. Shared by
+    web.py's /api/messages route and tui.py so there's exactly one place
+    that knows how to turn a stored record into something displayable —
+    including the plaintext-marked self-echo case (see router.py's
+    Node.send()) and resolving a raw sender user_id to the peer's known
+    username for the author label.
+    """
+    raw = chats.load_messages(chat_id)
+    peer_meta = peers.get(chat_id) or {}
+    out = []
+    for m in raw:
+        token = m.get("token", "")
+        if m.get("plaintext"):
+            text, encrypted_ok = token, True
+        else:
+            try:
+                text = decrypt_message(token, passphrase, chat_id=chat_id)
+                encrypted_ok = True
+            except Exception as e:
+                text = f"[could not decrypt: {e}]"
+                encrypted_ok = False
+        sender = m.get("sender")
+        author = sender
+        if sender and sender != "me":
+            # Local nickname wins over the peer's own broadcast username
+            # (see PeerStore.set_nickname()) — that's the whole point of a
+            # nickname being local-only rather than something they set for
+            # themselves.
+            author = peer_meta.get("nickname") or peer_meta.get("username") or sender
+        out.append({
+            "text":      text,
+            "sender":    sender,
+            "author":    author,
+            "timestamp": m.get("ts"),
+            "verified":  m.get("verified"),
+            "encrypted": encrypted_ok,
+            "pending_contact": m.get("pending_contact", False),
+            # delivery state of our own messages (None for inbound and for
+            # records written before this field existed)
+            "status":    m.get("status"),
+            "via":       m.get("via"),
+        })
+    return out
+
+
+def get_chats() -> list:
+    return [
+        {"id": cid, "count": chats.message_count(cid)}
+        for cid in chats.list_chats()
+    ]
+
+
+def get_peers() -> list:
+    return peers.all()
+
+
+# ---------------------------------------------------------------------------
+# Contacts (handshake) API — used by web.py and tui.py
+# ---------------------------------------------------------------------------
+
+def get_pending_contact_requests() -> list:
+    if _node is None:
+        return []
+    return _node.pending_contact_requests()
+
+
+def get_contact_status(peer_user_id: str) -> str | None:
+    if _node is None:
+        return None
+    return _node.contact_status(peer_user_id)
+
+
+def send_contact_request(peer_user_id: str, greeting: str = "") -> bool:
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    return _node.request_contact(peer_user_id, greeting)
+
+
+def accept_contact_request(peer_user_id: str) -> bool:
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    return _node.accept_contact(peer_user_id)
+
+
+def reject_contact_request(peer_user_id: str) -> None:
+    if _node is None:
+        raise RuntimeError("Node not started. Call start_node() first.")
+    _node.reject_contact(peer_user_id)
+
+
+def set_contact_nickname(peer_user_id: str, nickname: str) -> bool:
+    """Local-only rename — never broadcast, never touched by discovery
+    (see PeerStore.upsert()'s docstring)."""
+    return peers.set_nickname(peer_user_id, (nickname or "").strip())
+
+
+# ---------------------------------------------------------------------------
+# Profile customization API — used by web.py and tui.py
+# ---------------------------------------------------------------------------
+
+def get_profile() -> dict:
+    prof = dict(config.get("profile", {}))
+    prof["username"] = config.username or ""
+    return prof
+
+
+def set_profile_status(text: str) -> None:
+    text = (text or "").strip()[:120]
+    if _node is not None:
+        _node.set_status(text)
+    else:
+        config.set_profile(status=text)
+
+
+def set_profile_bio(text: str) -> None:
+    text = (text or "").strip()[:280]
+    if _node is not None:
+        _node.set_bio(text)
+    else:
+        config.set_profile(bio=text)
+
+
+# ---------------------------------------------------------------------------
+# Relay (store-and-forward) API — used by web.py and tui.py
+# ---------------------------------------------------------------------------
+
+def get_relay_status() -> dict:
+    stats = {}
+    if _node is not None:
+        stats = _node._relay_store.stats()
+    cfg = config.get("relay", {})
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "ttl_hours": cfg.get("ttl_hours", 48),
+        "max_total_mb": cfg.get("max_total_mb", 20),
+        "queued_recipients": stats.get("queued_recipients", 0),
+        "queued_envelopes": stats.get("queued_envelopes", 0),
+        "total_bytes": stats.get("total_bytes", 0),
+    }
+
+
+def set_relay_enabled(enabled: bool) -> None:
+    if _node is not None:
+        _node.set_relay_enabled(bool(enabled))
+    else:
+        config.set_relay_config(enabled=bool(enabled))
+
+
+# Shared by web.py's /api/chats/new and tui.py's :new command — one place
+# that decides what a typed-in address actually means, instead of two
+# copies of the same regexes drifting apart.
+_NODE_ID_RE  = re.compile(r'^[A-Za-z0-9_-]{40,50}$')          # unpadded b64url Ed25519 pubkey
+_PHONE_RE    = re.compile(r'^\+?[0-9][0-9\-\s]{6,14}[0-9]$')
+_IP_PORT_RE  = re.compile(r'^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$')
+
+def classify_address(address: str) -> tuple[str, str]:
+    """
+    Turn a typed-in address into (chat_id, type). Raises ValueError with a
+    user-facing message if the address isn't usable — callers show that
+    message directly rather than pretending something worked.
+    """
+    address = (address or "").strip()
+    if not address:
+        raise ValueError("address required")
+
+    if is_bt_chat_id(address):
+        return chat_id_from_mac(mac_from_chat_id(address)), "bluetooth"
+
+    if _NODE_ID_RE.match(address):
+        return address, "node"
+
+    if _PHONE_RE.match(address):
+        # SMS isn't E2E and has no cryptographic identity — the phone
+        # number itself is the chat_id, same convention as bluetooth's
+        # MAC-based ids.
+        return address, "phone"
+
+    if _IP_PORT_RE.match(address):
+        # This used to be rejected outright, because there genuinely was
+        # no way to learn who was at an address — and a chat_id has to be
+        # a real user_id for encryption to work, so pretending otherwise
+        # would have produced a chat that could never send anything.
+        # There's now a real handshake: GET /identity on the transport
+        # server (core/network/transport.py), consumed by
+        # Node.connect_to_address(). The address is NOT a chat_id, so it's
+        # returned as-is with type "ip" and the caller resolves it.
+        return address, "ip"
+
+    raise ValueError("unrecognised address — expected a node id, phone "
+                      "number, bluetooth MAC, or ip:port")
+
+
+def create_profile_with_identity(name: str, passphrase: str, username: str = None,
+                                   transport_port: int = None, web_port: int = None) -> dict:
+    """
+    Creates a profile registry entry AND a real identity for it in one
+    step. Shared by web.py's POST /api/profiles route and tui.py's
+    :new-profile command, so there's exactly one place that knows how to
+    do this correctly — tui.py already called this function by name
+    before it actually existed here, which would have crashed with
+    AttributeError the moment :new-profile was used. That happened
+    because the refactor to introduce this shared function got lost
+    across a container reset earlier in this session: web.py kept its
+    own working inline copy (which is why profile creation via the web
+    UI kept passing its own tests), while tui.py's newer code assumed the
+    shared version existed. Two surfaces silently expecting different
+    things is exactly the drift this function exists to prevent — so
+    it's being added for real this time, and web.py is being pointed at
+    it instead of its own copy.
+
+    Also fixes a second bug found while tracing this: _profiles.create_profile()
+    below only writes the username into the profiles REGISTRY (profiles.json)
+    — that's separate bookkeeping used just to label the profile in the
+    Profiles list UI. It is NOT the ConfigStore a profile's own Node reads
+    from once it actually starts — Node._build_identity() reads
+    config.username directly — and nothing was ever setting that for a
+    freshly created profile. So every profile made through the web UI or
+    TUI broadcast an empty username via Discovery, and every peer that
+    found them showed a bare node id instead of a name. Confirmed
+    directly: a profile created with username="bob" showed username: ""
+    in the discovering side's peer_store.
+
+    Raises ValueError if the profile name already exists (from
+    core.profiles.create_profile), or any other Exception if identity
+    creation itself fails after the registry entry was already written
+    — callers should treat that case as "registered but not yet usable"
+    and tell the user to delete and retry.
+    """
+    profile = _profiles.create_profile(
+        name=name, username=username,
+        transport_port=transport_port, web_port=web_port,
+    )
+    data_dir = _profiles.get_profile_data_dir(name)
+
+    im = IdentityManager(storage_dir=os.path.join(data_dir, "identity"))
+    im.generate_new_identity()
+    im.save_identity(passphrase=passphrase)
+
+    cfg = ConfigStore(base_dir=data_dir)
+    cfg.username = username or name
+
+    return profile
+
+
+def get_identity_status() -> dict:
+    has = identity.has_identity()
+    node_id = ""
+    if has and identity.ed25519_priv:
+        try:
+            node_id = identity.get_user_id()
+        except Exception:
+            pass
+    return {
+        "has_identity": has,
+        # Expose as both node_id (frontend) and user_id (legacy callers)
+        "node_id":  node_id,
+        "user_id":  node_id,
+        "username": config.username or "",
+        "node_running": _node is not None,
+        "dht_active": bool(_node is not None and getattr(_node, "_dht", None) is not None),
+        "profile": _active_profile,
+    }
+
+
+def _guess_lan_ip() -> str | None:
+    """Best-effort: the address other devices on this LAN can reach us at.
+    Uses connect() on a UDP socket, which sends nothing — it only asks the
+    OS which interface it would use. Tries a few targets so it still works
+    on a hotspot/LAN that has no internet route."""
+    import socket
+    for target in ("8.8.8.8", "10.255.255.255", "192.168.255.255", "172.31.255.255"):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.2)
+            s.connect((target, 1))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+                return ip
+        except OSError:
+            continue
+    return None
+
+
+def get_share_info() -> dict:
+    """What someone else needs to reach this node directly."""
+    from enclave_messenger.core.network.router import TRANSPORT_PORT
+    status = get_identity_status()
+    port = config.get_setting("network_port") or TRANSPORT_PORT
+    ip = _guess_lan_ip()
+    return {
+        "node_id": status["node_id"],
+        "username": status["username"],
+        "address": f"{ip}:{port}" if ip else None,
+    }
+
+
+# --- identity backup / restore -------------------------------------------
+_BACKUP_VERSION = 1
+_PEM_HEADER = "-----BEGIN ENCRYPTED PRIVATE KEY-----"
+
+
+def export_identity_backup() -> dict:
+    """The passphrase-encrypted key files plus the salt, as one JSON-able
+    bundle. The private keys inside are still encrypted with the user's
+    passphrase, so the file is useless without it. Chat history is NOT
+    included (it lives in the profile folder)."""
+    import base64
+    if not identity.has_identity():
+        raise RuntimeError("No identity to back up")
+    with open(identity.ed25519_file, "rb") as f:
+        ed = f.read()
+    with open(identity.x25519_file, "rb") as f:
+        x = f.read()
+    salt = b""
+    if os.path.exists(identity.crypto_salt_file):
+        with open(identity.crypto_salt_file, "rb") as f:
+            salt = f.read()
+    return {
+        "enclave_identity_backup": _BACKUP_VERSION,
+        "ed25519_pem": ed.decode("ascii"),
+        "x25519_pem": x.decode("ascii"),
+        "crypto_salt_b64": base64.b64encode(salt).decode("ascii"),
+    }
+
+
+def restore_identity_backup(bundle: dict, passphrase: str) -> dict:
+    """
+    Restore keys from a backup bundle. Refuses to overwrite an existing
+    identity. The bundle is validated and the passphrase is proven correct
+    BEFORE anything is written.
+    """
+    import base64
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+    if identity.has_identity():
+        raise ValueError("this profile already has an identity; refusing to overwrite it")
+    if not isinstance(bundle, dict) or bundle.get("enclave_identity_backup") != _BACKUP_VERSION:
+        raise ValueError("not an Enclave identity backup")
+    if not passphrase:
+        raise ValueError("passphrase required")
+
+    def _pem(name):
+        v = bundle.get(name)
+        if not isinstance(v, str) or len(v) > 4096 or not v.startswith(_PEM_HEADER):
+            raise ValueError(f"backup is missing a valid {name}")
+        return v.encode("ascii")
+
+    ed_pem, x_pem = _pem("ed25519_pem"), _pem("x25519_pem")
+    try:
+        salt = base64.b64decode(bundle.get("crypto_salt_b64", ""), validate=True)
+    except Exception:
+        raise ValueError("backup has an invalid salt")
+    if len(salt) > 64:
+        raise ValueError("backup has an invalid salt")
+
+    pw = passphrase.encode("utf-8")
+    try:
+        ed = serialization.load_pem_private_key(ed_pem, password=pw)
+        x = serialization.load_pem_private_key(x_pem, password=pw)
+    except Exception:
+        raise ValueError("wrong passphrase, or the backup is corrupted")
+    if not isinstance(ed, Ed25519PrivateKey) or not isinstance(x, X25519PrivateKey):
+        raise ValueError("backup contains unexpected key types")
+
+    os.makedirs(identity.storage_dir, exist_ok=True)
+
+    def _write(path, data):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+
+    _write(identity.ed25519_file, ed_pem)
+    _write(identity.x25519_file, x_pem)
+    if salt:
+        _write(identity.crypto_salt_file, salt)
+    identity.load_identity(passphrase=passphrase)
+    return {"node_id": identity.get_user_id()}
+
+
+def encrypt_message(plaintext: str, chat_id: str, created_at: str, passphrase: str) -> str:
+    if identity.x25519_priv is not None:
+        peer_info = peers.get(chat_id)
+        peer_pub  = peer_info.get("x25519_pub") if peer_info else None
+        if peer_pub:
+            return E2EManager(identity.x25519_priv).encrypt(
+                plaintext=plaintext,
+                peer_x25519_pub_b64=peer_pub,
+                chat_id=chat_id,
+                created_at=created_at,
+            )
+    return CryptoManager(passphrase, root_salt=identity.crypto_salt).encrypt(
+        plaintext=plaintext,
+        chat_id=chat_id,
+        created_at=created_at,
+    )
+
+
+def decrypt_message(token: str, passphrase: str, chat_id: str | None = None) -> str:
+    if E2EManager.is_e2e_token(token):
+        if identity.x25519_priv is None:
+            raise RuntimeError(
+                "Identity not unlocked — cannot decrypt E2E token. "
+                "Start the node with your passphrase first."
+            )
+        return E2EManager(identity.x25519_priv).decrypt(token)
+    return CryptoManager(passphrase, root_salt=identity.crypto_salt).decrypt(token)
+
+
+def configure_sms(username: str, password: str, host: str | None):
+    config.set_sms_gateway(
+        provider=username,
+        api_key=password,
+        sender_id=host or "cloud",
+    )
+
+
+def send_sms(to: str, message: str) -> dict:
+    plugin = plugin_manager.get("sms_gateway")
+    if plugin and plugin._enabled:
+        return plugin.get_sms_instance().send(to, message)
+    sms = SMSGateway.from_config(config)
+    return sms.send(to, message)
+
+
+# ---------------------------------------------------------------------------
+# CLI commands
+# ---------------------------------------------------------------------------
+
+def cmd_init(args):
+    if args.profile:
+        global config, chats, peers, identity, log, _active_profile
+        config, chats, peers, identity, log, _active_profile = _init_stores(args.profile)
+
+    if identity.has_identity():
+        print("Identity already exists.")
+        return 0
+    import getpass
+    passphrase = getpass.getpass("Choose a passphrase: ")
+    confirm    = getpass.getpass("Confirm passphrase: ")
+    if passphrase != confirm:
+        print("Passphrases do not match.")
+        return 1
+    identity.generate_new_identity()
+    identity.save_identity(passphrase=passphrase)
+    if args.username:
+        config.username = args.username
+    print(f"Identity created (profile: {_active_profile}).")
+    print("User ID:", identity.get_user_id())
+    return 0
+
+
+def cmd_run(args):
+    if args.profile:
+        global config, chats, peers, identity, log, _active_profile
+        config, chats, peers, identity, log, _active_profile = _init_stores(args.profile)
+
+    import getpass
+    passphrase = args.passphrase or getpass.getpass("Passphrase: ")
+
+    if getattr(args, "dht", False):
+        config.set_setting("dht_enabled", True)
+    if getattr(args, "dht_bootstrap", None):
+        config.set_setting("dht_bootstrap", args.dht_bootstrap)
+    if getattr(args, "dht_public_ip", None):
+        config.set_setting("dht_public_ip", args.dht_public_ip)
+
+    try:
+        node = start_node(
+            passphrase=passphrase,
+            transport_port=args.transport_port,
+        )
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        return 1
+
+    print(f"Enclave node running (profile: {_active_profile}).")
+    print(f"User ID: {identity.get_user_id()}")
+    if config.get_setting("dht_enabled", False):
+        print("DHT (internet discovery) enabled.")
+
+    # --ci / headless mode: start web server on requested port, skip browser,
+    # and block until SIGINT/SIGTERM instead of waiting for a keypress.
+    ci_mode = getattr(args, "ci", False)
+    web_port = getattr(args, "port", None)
+
+    if web_port is not None:
+        # Store so web.py picks it up if it reads config.
+        config.set_setting("web_port", web_port)
+
+    if ci_mode:
+        print(f"CI/headless mode — web port: {web_port or 'default'}. No browser will open.")
+    else:
+        print("Press Ctrl+C to stop.")
+
+    stop_event = threading.Event()
+
+    def _handle_signal(sig, frame):
+        print("\nShutting down...")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT,  _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+    stop_event.wait()
+    stop_node()
+    return 0
+
+
+def cmd_encrypt(args):
+    token = encrypt_message(
+        plaintext=args.message,
+        chat_id=args.chat_id,
+        created_at=args.created_at,
+        passphrase=args.passphrase,
+    )
+    print(token)
+    return 0
+
+
+def cmd_decrypt(args):
+    try:
+        plaintext = decrypt_message(args.token, args.passphrase)
+        try:
+            parsed = json.loads(plaintext)
+            print(json.dumps(parsed, indent=2))
+        except json.JSONDecodeError:
+            print(plaintext)
+        return 0
+    except Exception as e:
+        print(f"Decrypt failed: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_sms_config(args):
+    configure_sms(args.username, args.password, args.host)
+    print("SMS gateway config saved.")
+    return 0
+
+
+def cmd_sms_send(args):
+    try:
+        result = send_sms(args.to, args.message)
+        print("Sent:", result)
+        return 0
+    except Exception as e:
+        print(f"SMS gateway not configured or failed: {e}")
+        return 1
+
+
+def cmd_bt_scan(args):
+    print("Scanning for Bluetooth devices...")
+    try:
+        devices = scan_bluetooth(duration=args.duration)
+        if not devices:
+            print("No devices found.")
+            return 0
+        for d in devices:
+            print(f"  {d['mac']}  {d['name']}")
+        return 0
+    except BluetoothUnavailableError as e:
+        print(f"Bluetooth unavailable: {e}")
+        return 1
+
+
+def cmd_bt_send(args):
+    try:
+        send_bt(args.to, args.message)
+        print(f"Sent to {args.to}")
+        return 0
+    except BluetoothUnavailableError as e:
+        print(f"Bluetooth unavailable: {e}")
+        return 1
+    except Exception as e:
+        print(f"Bluetooth send failed: {e}")
+        return 1
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="pe-em cli", description="Enclave Messenger")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # init
+    p_init = sub.add_parser("init", help="Create a new identity")
+    p_init.add_argument("--username", default=None)
+    p_init.add_argument("--profile", default=None,
+                        help="Profile name to initialise (defaults to active profile)")
+    p_init.set_defaults(func=cmd_init)
+
+    # run
+    p_run = sub.add_parser("run", help="Start the Enclave node (discovery + transport)")
+    p_run.add_argument("--passphrase", default=None,
+                       help="Identity passphrase (prompted if omitted)")
+    p_run.add_argument("--profile", default=None,
+                       help="Profile name to run (defaults to active profile)")
+    p_run.add_argument("--transport-port", type=int, default=None,
+                       help="P2P transport port override")
+    p_run.add_argument("--port", type=int, default=None,
+                       help="Web UI port (stored in config; web.py reads it)")
+    p_run.add_argument("--ci", action="store_true", default=False,
+                       help="Headless / CI mode — skip browser launch, block on signal")
+    p_run.add_argument("--dht", action="store_true", default=False,
+                       help="Enable DHT (internet) discovery, in addition to LAN. "
+                            "Opt-in: announces your address to a swarm of strangers. "
+                            "See core/network/dht.py for what this does and doesn't do.")
+    p_run.add_argument("--dht-bootstrap", action="append", default=None,
+                       help="host:port of a reachable DHT node to bootstrap from. "
+                            "Repeatable. Required to actually join an existing swarm — "
+                            "there's no public bootstrap infrastructure to fall back on.")
+    p_run.add_argument("--dht-public-ip", default=None,
+                       help="Your own reachable IP, if you already know it (e.g. a VPS "
+                            "with a static IP). Otherwise auto-detected via a bootstrap peer.")
+    p_run.set_defaults(func=cmd_run)
+
+    # encrypt
+    p_enc = sub.add_parser("encrypt", help="Encrypt a message")
+    p_enc.add_argument("--passphrase",  required=True)
+    p_enc.add_argument("--chat-id",     required=True)
+    p_enc.add_argument("--created-at",  required=True)
+    p_enc.add_argument("--message",     required=True)
+    p_enc.set_defaults(func=cmd_encrypt)
+
+    # decrypt
+    p_dec = sub.add_parser("decrypt", help="Decrypt a message token")
+    p_dec.add_argument("--passphrase", required=True)
+    p_dec.add_argument("token")
+    p_dec.set_defaults(func=cmd_decrypt)
+
+    # sms
+    p_sms = sub.add_parser("sms", help="SMS gateway commands")
+    sms_sub = p_sms.add_subparsers(dest="sms_cmd", required=True)
+
+    p_sms_cfg = sms_sub.add_parser("config")
+    p_sms_cfg.add_argument("--username", required=True)
+    p_sms_cfg.add_argument("--password", required=True)
+    p_sms_cfg.add_argument("--host", default=None)
+    p_sms_cfg.set_defaults(func=cmd_sms_config)
+
+    p_sms_send = sms_sub.add_parser("send")
+    p_sms_send.add_argument("--to",      required=True)
+    p_sms_send.add_argument("--message", required=True)
+    p_sms_send.set_defaults(func=cmd_sms_send)
+
+    # bt
+    p_bt = sub.add_parser("bt", help="Bluetooth commands")
+    bt_sub = p_bt.add_subparsers(dest="bt_cmd", required=True)
+
+    p_bt_scan = bt_sub.add_parser("scan", help="Scan for nearby Bluetooth devices")
+    p_bt_scan.add_argument("--duration", type=int, default=8,
+                           help="Scan duration in seconds (default: 8)")
+    p_bt_scan.set_defaults(func=cmd_bt_scan)
+
+    p_bt_send = bt_sub.add_parser("send", help="Send a message over Bluetooth")
+    p_bt_send.add_argument("--to",      required=True,
+                           help="Target MAC address or BT: chat ID")
+    p_bt_send.add_argument("--message", required=True)
+    p_bt_send.set_defaults(func=cmd_bt_send)
+
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args   = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

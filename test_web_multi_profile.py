@@ -18,13 +18,15 @@ def main():
     tmp_home = tempfile.mkdtemp(prefix="enclave_home_")
     env = os.environ.copy()
     env["HOME"] = tmp_home
+    env["ENCLAVE_HOME"] = tmp_home
+    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
     env["PYTHONUNBUFFERED"] = "1"
     repo = os.path.dirname(os.path.abspath(__file__))
 
-    setup = subprocess.run(["python3", "-c", """
-import sys; sys.path.insert(0, '.')
-from core import profiles
-from core.identity.key_manager import IdentityManager
+    setup = subprocess.run([sys.executable, "-c", """
+import sys; sys.path.insert(0, 'src')
+from enclave_messenger.core import profiles
+from enclave_messenger.core.identity.key_manager import IdentityManager
 for name, tport, wport, pw in [("alice", 59961, 59971, "p1"), ("bob", 59962, 59972, "p2")]:
     p = profiles.create_profile(name, username=name, transport_port=tport, web_port=wport)
     im = IdentityManager(storage_dir=p["data_dir"] + "/identity")
@@ -38,7 +40,7 @@ for name, tport, wport, pw in [("alice", 59961, 59971, "p1"), ("bob", 59962, 599
     pws = {"alice": "p1", "bob": "p2"}
     for name, port in ports.items():
         procs[name] = subprocess.Popen(
-            ["python3", "web.py", "--profile", name, "--port", str(port)],
+            [sys.executable, "-m", "enclave_messenger", "web", "--profile", name, "--port", str(port)],
             cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             preexec_fn=os.setsid,
         )

@@ -4,6 +4,7 @@ Pre-seeds a real identity + a peer + an existing message, then runs the
 real TUIApp against real curses, so the smoke test exercises actual
 rendering and key dispatch, not just the pure-logic layer.
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import curses
 import os
 import sys
@@ -11,10 +12,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-import main as app_core
-from core.identity.key_manager import IdentityManager
-from core.storage import ConfigStore, ChatStore, PeerStore
-from tui import TUIApp
+from enclave_messenger import main as app_core
+from enclave_messenger.core.identity.key_manager import IdentityManager
+from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore
+from enclave_messenger.tui import TUIApp
 
 tmp = sys.argv[1]
 port = int(sys.argv[2])

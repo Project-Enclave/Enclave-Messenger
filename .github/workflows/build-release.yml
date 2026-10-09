@@ -42,26 +42,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      # Install the package itself (this also pulls windows-curses on Windows,
+      # via the dependency markers in pyproject.toml), so the executable is
+      # built from exactly what `pip`/`pipx` users get.
+      - name: Install the package and PyInstaller
         run: |
-          pip install -r requirements.txt
+          pip install .
           pip install pyinstaller
-
-      # Windows curses TUI needs its own wheel — harmless to skip if the
-      # TUI isn't part of what you're shipping, but included here so the
-      # same command line works on every platform.
-      - name: Install windows-curses (Windows only)
-        if: runner.os == 'Windows'
-        run: pip install windows-curses
 
       - name: Build executable (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
+          # --collect-data bundles templates/ and the plugin manifests; the
+          # --add-data line bundles the built-in plugins' main.py FILES, which
+          # the plugin loader reads from disk (they are not importable modules).
           pyinstaller --onefile --name enclave-messenger \
             --hidden-import=flask_sock \
             --hidden-import=websockets \
-            --collect-submodules core \
-            --add-data "templates:templates" \
+            --collect-submodules enclave_messenger \
+            --collect-data enclave_messenger \
+            --add-data "src/enclave_messenger/core/plugins/builtin:enclave_messenger/core/plugins/builtin" \
             launch_desktop.py
 
       - name: Build executable (Windows)
@@ -70,9 +70,18 @@ jobs:
           pyinstaller --onefile --name enclave-messenger `
             --hidden-import=flask_sock `
             --hidden-import=websockets `
-            --collect-submodules core `
-            --add-data "templates;templates" `
+            --collect-submodules enclave_messenger `
+            --collect-data enclave_messenger `
+            --add-data "src/enclave_messenger/core/plugins/builtin;enclave_messenger/core/plugins/builtin" `
             launch_desktop.py
+
+      # Starts the freshly built executable and checks it really serves the UI,
+      # loads the built-in plugins and keeps its data under a throw-away folder.
+      - name: Smoke-test the executable
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then EXE="dist/enclave-messenger.exe"; else EXE="dist/enclave-messenger"; fi
+          python scripts/smoke_install.py "$EXE" frozen
 
       - name: Rename artifact
         shell: bash

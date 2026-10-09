@@ -23,8 +23,8 @@ ensure_profile() {
   echo "[launcher] Checking profile: $profile"
   $PYTHON - <<EOF
 import sys
-sys.path.insert(0, '.')
-from core import profiles
+sys.path.insert(0, 'src')
+from enclave_messenger.core import profiles
 if not profiles.get_profile('$profile'):
     profiles.create_profile(
         name='$profile',

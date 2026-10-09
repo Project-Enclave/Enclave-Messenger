@@ -11,17 +11,18 @@ are reachable through the actual product today.
 
 Run: python3 test_sms_gateway.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import os
 import sys
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.plugins.builtin.sms_gateway.sms_gateway import SMSGateway, _parse_host_port
-from core.plugins.builtin.sms_gateway.main import Plugin as SMSPlugin
-from core.plugins.manager import PluginManager
-from core.storage import ConfigStore, ChatStore, PeerStore
-from core.identity.key_manager import IdentityManager
+from enclave_messenger.core.plugins.builtin.sms_gateway.sms_gateway import SMSGateway, _parse_host_port
+from enclave_messenger.core.plugins.builtin.sms_gateway.main import Plugin as SMSPlugin
+from enclave_messenger.core.plugins.manager import PluginManager
+from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore
+from enclave_messenger.core.identity.key_manager import IdentityManager
 
 PASS, FAIL = [], []
 def check(name, cond):
@@ -70,7 +71,7 @@ def test_send_request_construction():
     which is the part that's actually ours to get right.
     """
     gw = SMSGateway(username="u", password="p", host="192.168.1.5:8080")
-    with patch("core.plugins.builtin.sms_gateway.sms_gateway.requests.post") as mock_post:
+    with patch("enclave_messenger.core.plugins.builtin.sms_gateway.sms_gateway.requests.post") as mock_post:
         mock_post.return_value = MagicMock(status_code=200,
                                             json=lambda: {"id": "msg1", "state": "Pending"})
         mock_post.return_value.raise_for_status = lambda: None
@@ -136,7 +137,7 @@ def test_bluetooth_chat_id_helpers():
     classify_address() in test_security_fixes.py; testing directly here
     too since nothing in the repo tested these functions on their own.
     """
-    from core.plugins.builtin.bluetooth.main import is_bt_chat_id, chat_id_from_mac, mac_from_chat_id
+    from enclave_messenger.core.plugins.builtin.bluetooth.main import is_bt_chat_id, chat_id_from_mac, mac_from_chat_id
 
     check("a raw MAC is recognized as a bt chat id",
           is_bt_chat_id("AA:BB:CC:DD:EE:FF"))

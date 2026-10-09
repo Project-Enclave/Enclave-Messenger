@@ -2,7 +2,8 @@
 reset.py — Enclave Messenger full reset.
 
 Undoes everything setup.py did:
-  1. Deletes ~/.enclave-messenger entirely (all profiles + identity)
+  1. Deletes the app's data after you type DELETE (all profiles + identity): the per-user
+     folders, and the old ~/.enclave-messenger as well. Installed users: `pe-em reset`.
   2. Wipes config           (storage/config/config.json)
   3. Wipes chat/key/log     (storage/ subdirs)
   4. Removes .venv          (if created by setup.py uv fallback)
@@ -57,8 +58,14 @@ def remove_dir(path, label):
 
 def step_identity():
     banner("Step 1 — Delete identity & all profiles")
-    enclave_dir = os.path.expanduser("~/.enclave-messenger")
-    remove_dir(enclave_dir, "~/.enclave-messenger")
+    # Same safe, confirming code path as `pe-em reset` (it lists what will go
+    # and makes you type DELETE). --include-legacy also covers the pre-1.1
+    # ~/.enclave-messenger folder.
+    sys.path.insert(0, os.path.join(HERE, "src"))
+    from enclave_messenger import housekeeping
+    code = housekeeping.main(["--include-legacy"])
+    if code != 0:
+        info("Skipped (cancelled or nothing to delete).")
 
 
 def step_config():

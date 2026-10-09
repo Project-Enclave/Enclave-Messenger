@@ -4,6 +4,7 @@ review actually work against real code paths (not mocks of my own logic).
 
 Run: python3 test_security_fixes.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import base64
 import json
 import os
@@ -17,10 +18,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.identity.key_manager import IdentityManager
-from core.storage import ConfigStore, ChatStore, PeerStore
-from core.network.router import Node, _signable
-from core.network.discovery import Discovery
+from enclave_messenger.core.identity.key_manager import IdentityManager
+from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore
+from enclave_messenger.core.network.router import Node, _signable
+from enclave_messenger.core.network.discovery import Discovery
 
 PASS, FAIL = [], []
 
@@ -188,7 +189,7 @@ def main():
         # ------------------------------------------------------------
         # Web UI: CSRF protection on /api/* mutating endpoints
         # ------------------------------------------------------------
-        import web
+        from enclave_messenger import web
         with web.app.test_client() as c:
             r = c.post("/api/identity/update", data='{"username":"pwned"}',
                        content_type="text/plain")
@@ -218,7 +219,7 @@ def main():
         # had been imported once, which creates __pycache__).
         # ------------------------------------------------------------
         import logging, io
-        from core.plugins.manager import PluginManager
+        from enclave_messenger.core.plugins.manager import PluginManager
 
         plog = logging.getLogger("plugins_test_probe")
         buf = io.StringIO()
@@ -307,7 +308,7 @@ def main():
         # declaration while adding the /api/chats/new route below.
         # ------------------------------------------------------------
         import re as _re, subprocess as _sp
-        html = open(os.path.join(os.path.dirname(__file__), "templates", "chat.html"),
+        html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "enclave_messenger", "templates", "chat.html"),
                     encoding="utf-8").read()
         script = _re.search(r"<script>(.*?)</script>", html, _re.DOTALL).group(1)
         js_path = os.path.join(tmp, "_extracted.js")
