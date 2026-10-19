@@ -85,6 +85,17 @@ class ChatStore:
             record["status"] = entry["status"]
         if entry.get("via"):
             record["via"] = entry["via"]
+        # SMS transport metadata: preserve whether the wire message was
+        # end-to-end encrypted, which Enclave identity it was paired with,
+        # and the public key used by an outgoing retry. These are needed to
+        # render the correct security label and to keep retries encrypted
+        # even if the contact pairing is later changed or removed.
+        if "sms_e2e" in entry:
+            record["sms_e2e"] = bool(entry["sms_e2e"])
+        if entry.get("sms_peer_id"):
+            record["sms_peer_id"] = entry["sms_peer_id"]
+        if entry.get("sms_peer_x25519_pub"):
+            record["sms_peer_x25519_pub"] = entry["sms_peer_x25519_pub"]
         with self._lock:
             with open(self._path(chat_id), "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, separators=(',', ':')) + "\n")

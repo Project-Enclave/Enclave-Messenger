@@ -953,6 +953,8 @@ def message_send():
     try:
         ok = app_core.send_message(peer_id, plaintext)
         return jsonify({"ok": ok})
+    except ValueError as e:
+        return err(str(e), 400)
     except RuntimeError as e:
         return err(str(e), 503)
     except Exception as e:
@@ -988,6 +990,35 @@ def sms_config():
     return jsonify({"status": "saved"})
 
 
+@app.route("/api/sms/pairing-code")
+def sms_pairing_code():
+    try:
+        return jsonify(app_core.get_sms_pairing_code())
+    except RuntimeError as e:
+        return err(str(e), 409)
+
+
+@app.route("/api/sms/pair", methods=["GET", "POST", "DELETE"])
+def sms_pair():
+    if request.method == "GET":
+        try:
+            return jsonify(app_core.get_sms_pair(request.args.get("phone", "")))
+        except ValueError as e:
+            return err(str(e), 400)
+
+    data = request.get_json(silent=True) or {}
+    phone = data.get("phone", "")
+    try:
+        if request.method == "DELETE":
+            return jsonify(app_core.unpair_sms_chat(phone))
+        code = data.get("pairing_code", "")
+        return jsonify(app_core.pair_sms_chat(phone, code))
+    except ValueError as e:
+        return err(str(e), 400)
+    except RuntimeError as e:
+        return err(str(e), 409)
+
+
 @app.route(_SMS_WEBHOOK, methods=["POST"])
 def sms_webhook():
     """Incoming SMS from the android-sms-gateway app. Signed; see core/sms_inbound.py."""
@@ -1018,6 +1049,9 @@ def sms_webhook():
         result = app_core.receive_sms(chat_id, event["message"], event["ext_id"], event["received_at"])
     except RuntimeError as e:
         return err(str(e), 503)                            # locked: the gateway app retries later
+    except ValueError as e:
+        app_core.log.warning(f"[sms] rejected encrypted message from {chat_id}: {e}")
+        return err(str(e), 400)
     if result == "stored":
         _ws_broadcast("new_message", {"chat_id": chat_id, "sender_id": chat_id,
                                       "ts": datetime.now(timezone.utc).isoformat()})

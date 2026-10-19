@@ -33,6 +33,7 @@ import threading
 from enclave_messenger.core.identity import IdentityManager
 from enclave_messenger.core.crypto import CryptoManager
 from enclave_messenger.core.crypto.e2e import E2EManager
+from enclave_messenger.core import sms_e2e as sms_e2e_protocol
 from enclave_messenger.core.storage import ConfigStore, ChatStore, PeerStore, LogStore
 from enclave_messenger.core.plugins import SMSGateway, PluginManager
 from enclave_messenger.core.plugins.builtin.bluetooth.main import (
@@ -270,6 +271,59 @@ def is_phone_chat_id(chat_id: str) -> bool:
     return bool(_PHONE_RE.match(chat_id or ""))
 
 
+def _sms_phone_key(phone: str) -> str:
+    phone = (phone or "").strip()
+    if not is_phone_chat_id(phone):
+        raise ValueError("SMS pairing requires a phone-number chat")
+    key = re.sub(r"[\s\-().]", "", phone)
+    if not re.fullmatch(r"\+?[0-9]{8,16}", key):
+        raise ValueError("enter a phone number with 8 to 16 digits")
+    return key
+
+
+def _sms_pairs() -> dict:
+    saved = config.get("sms_peer_keys", {}) or {}
+    return dict(saved) if isinstance(saved, dict) else {}
+
+
+def get_sms_pair(chat_id: str) -> dict:
+    phone = _sms_phone_key(chat_id)
+    pair = _sms_pairs().get(phone)
+    if not isinstance(pair, dict):
+        return {"phone": phone, "paired": False}
+    return {
+        "phone": phone,
+        "paired": True,
+        "peer_id": pair.get("peer_id", ""),
+        "peer_name": pair.get("username", "") or pair.get("peer_id", "")[:12],
+    }
+
+
+def get_sms_pairing_code() -> dict:
+    return {"code": sms_e2e_protocol.create_pairing_code(identity, config.username or "")}
+
+
+def pair_sms_chat(chat_id: str, pairing_code: str) -> dict:
+    phone = _sms_phone_key(chat_id)
+    peer = sms_e2e_protocol.verify_pairing_code(pairing_code)
+    if identity.ed25519_priv is None:
+        raise RuntimeError("unlock your Enclave identity before pairing SMS")
+    if peer["peer_id"] == identity.get_user_id():
+        raise ValueError("you cannot pair an SMS chat with your own identity")
+    pairs = _sms_pairs()
+    pairs[phone] = peer
+    config.set("sms_peer_keys", pairs)
+    return get_sms_pair(phone)
+
+
+def unpair_sms_chat(chat_id: str) -> dict:
+    phone = _sms_phone_key(chat_id)
+    pairs = _sms_pairs()
+    pairs.pop(phone, None)
+    config.set("sms_peer_keys", pairs)
+    return {"phone": phone, "paired": False}
+
+
 _sms_stats = {"last": None, "count": 0}
 
 
@@ -288,9 +342,26 @@ def receive_sms(chat_id: str, text: str, ext_id: str, received_at: str) -> str:
             ts = datetime.datetime.fromisoformat(received_at).astimezone(datetime.timezone.utc).isoformat()
         except ValueError:
             pass
-    token = _seal(text, chat_id, ts)
+    encrypted_sms = text.startswith(sms_e2e_protocol.SMS_E2E_PREFIX)
+    sender_id = ""
+    verified = False
+    if encrypted_sms:
+        phone = _sms_phone_key(chat_id)
+        pair = _sms_pairs().get(phone)
+        expected_sender_id = pair.get("peer_id") if isinstance(pair, dict) else None
+        plaintext, sender_id = sms_e2e_protocol.decrypt_sms(
+            text, identity, expected_sender_id=expected_sender_id)
+        known_peer = peers.get(sender_id) or {}
+        verified = bool(
+            expected_sender_id == sender_id
+            or (known_peer and known_peer.get("ed25519_pub") == sender_id)
+        )
+    else:
+        plaintext = text
+    token = _seal(plaintext, chat_id, ts)
     chats.append_message(chat_id, {"token": token, "sender": "peer", "ts": ts,
-                                   "verified": False, "ext_id": ext_id})
+                                   "verified": verified, "ext_id": ext_id, "via": "sms",
+                                   "sms_e2e": encrypted_sms, "sms_peer_id": sender_id})
     _sms_stats["last"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _sms_stats["count"] += 1
     log.info(f"[sms] received a message from {chat_id}")
@@ -313,17 +384,34 @@ def register_sms_webhook(url: str) -> dict:
     return sms.register_webhook(f"enclave-{_active_profile}", url, "sms:received")
 
 
+def _sms_wire_text(to: str, plaintext: str, ts: str, peer: dict | None = None) -> tuple[str, bool, str]:
+    if peer is None:
+        pair = _sms_pairs().get(_sms_phone_key(to))
+        peer = pair if isinstance(pair, dict) else None
+    if peer is None:
+        return plaintext, False, ""
+    wire = sms_e2e_protocol.encrypt_sms(plaintext, identity, peer, ts)
+    if len(wire) > 4000:
+        raise ValueError("encrypted SMS is too long; shorten the message")
+    return wire, True, peer["peer_id"]
+
+
 def _gateway_send(to: str, plaintext: str, ts: str) -> bool:
     """Send one SMS and keep our (sealed) copy with its outcome. False if the gateway refused."""
     token = _seal(plaintext, to, ts)           # raises first if locked: never send what we cannot keep
+    wire_text, encrypted, peer_id = _sms_wire_text(to, plaintext, ts)
+    pair = _sms_pairs().get(_sms_phone_key(to)) if encrypted else None
+    peer_x25519_pub = pair.get("x25519_pub") if isinstance(pair, dict) else ""
     try:
-        send_sms(to, plaintext)
+        send_sms(to, wire_text)
         status = "queued"                      # handed to the phone; the phone sends it
     except Exception as e:
         log.warning(f"[sms] could not send to {to}: {e}")
         status = "failed"
     chats.append_message(to, {"token": token, "sender": "me", "ts": ts, "verified": True,
-                              "status": status, "via": "sms"})
+                              "status": status, "via": "sms", "sms_e2e": encrypted,
+                              "sms_peer_id": peer_id,
+                              "sms_peer_x25519_pub": peer_x25519_pub})
     return status == "queued"
 
 
@@ -346,7 +434,18 @@ def retry_message(peer_user_id: str, ts: str) -> bool:
             return False
         try:
             text = E2EManager(identity.x25519_priv).decrypt(rec["token"])
-            send_sms(peer_user_id, text)
+            saved_peer_id = rec.get("sms_peer_id", "")
+            saved_peer_key = rec.get("sms_peer_x25519_pub", "")
+            if rec.get("sms_e2e"):
+                if not saved_peer_id or not saved_peer_key:
+                    return False
+                wire_text, _, _ = _sms_wire_text(
+                    peer_user_id, text, ts,
+                    {"peer_id": saved_peer_id, "x25519_pub": saved_peer_key},
+                )
+            else:
+                wire_text = text
+            send_sms(peer_user_id, wire_text)
         except Exception as e:
             log.warning(f"[sms] retry to {peer_user_id} failed: {e}")
             return False
@@ -393,6 +492,14 @@ def get_messages_decrypted(chat_id: str, passphrase: str = "") -> list[dict]:
             # nickname being local-only rather than something they set for
             # themselves.
             author = peer_meta.get("nickname") or peer_meta.get("username") or sender
+        message_peer = peers.get(m.get("sms_peer_id", "")) if m.get("sms_e2e") else None
+        if message_peer:
+            author = message_peer.get("nickname") or message_peer.get("username") or author
+        elif m.get("sms_e2e") and sender != "me":
+            phone = re.sub(r"[\s\-().]", "", chat_id or "")
+            paired = _sms_pairs().get(phone, {})
+            if paired.get("peer_id") == m.get("sms_peer_id"):
+                author = paired.get("username") or author
         out.append({
             "text":      text,
             "sender":    sender,
@@ -405,6 +512,7 @@ def get_messages_decrypted(chat_id: str, passphrase: str = "") -> list[dict]:
             # records written before this field existed)
             "status":    m.get("status"),
             "via":       m.get("via"),
+            "sms_e2e":   bool(m.get("sms_e2e")),
         })
     return out
 
@@ -536,9 +644,8 @@ def classify_address(address: str) -> tuple[str, str]:
         return address, "node"
 
     if _PHONE_RE.match(address):
-        # SMS isn't E2E and has no cryptographic identity — the phone
-        # number itself is the chat_id, same convention as bluetooth's
-        # MAC-based ids.
+        # The phone number remains the chat_id; a paired Enclave identity
+        # can optionally add end-to-end encryption to SMS messages.
         return address, "phone"
 
     if _IP_PORT_RE.match(address):

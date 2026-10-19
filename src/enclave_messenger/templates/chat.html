@@ -283,6 +283,32 @@
   </div>
 </div>
 
+<div class="backdrop hidden" id="sms-pair-backdrop" onclick="if(event.target===this)closeModal('sms-pair')">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-head">
+      <div class="modal-title">pair encrypted SMS</div>
+      <button class="icon-btn" onclick="closeModal('sms-pair')">close</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" id="sms-pair-current"></div>
+      <div class="hint">
+        Paste the signed pairing code copied from the other Enclave user's Settings &rarr; SMS.
+        Verify their node ID over a trusted channel. Both users need to pair each other's code
+        before replies are encrypted. Unpaired messages remain ordinary SMS.
+      </div>
+      <div class="field">
+        <div class="label">their signed pairing code</div>
+        <textarea id="sms-pair-code" class="input" rows="5" spellcheck="false"
+                  placeholder="paste the pairing code here"></textarea>
+      </div>
+      <button class="btn btn-primary" onclick="saveSmsPair()">pair this phone chat</button>
+      <button class="btn btn-ghost" id="sms-unpair-btn" style="display:none;"
+              onclick="unpairSmsChat()">remove pairing</button>
+      <div class="status" id="sms-pair-status"></div>
+    </div>
+  </div>
+</div>
+
 <div class="backdrop hidden" id="settings-backdrop" onclick="if(event.target===this)closeModal('settings')">
   <div class="modal">
     <div class="modal-head">
@@ -392,7 +418,8 @@
       <div class="spanel" id="spanel-sms">
         <div class="hint">
           Texts go through the <strong>SMS Gateway</strong> app on an Android phone (docs.sms-gate.app).
-          Replies you type in a phone-number chat are sent as SMS by that phone.
+          Replies you type in a phone-number chat are sent by that phone. Standard SMS is not
+          encrypted; pair it with another Enclave identity to send end-to-end encrypted SMS.
         </div>
         <div class="sub-title">gateway login</div>
         <div class="field"><div class="label">username</div><input id="sms-user" class="input" autocomplete="off"/></div>
@@ -400,6 +427,19 @@
         <div class="field"><div class="label">phone address (blank = cloud server)</div><input id="sms-host" class="input" placeholder="192.168.1.20:8080" autocomplete="off"/></div>
         <button class="btn btn-ghost" onclick="saveSmsGateway()">save gateway login</button>
         <div class="status" id="sms-gw-status"></div>
+
+        <div class="divider"></div>
+        <div class="sub-title">encrypted SMS identity</div>
+        <div class="hint">
+          Share this signed code with an Enclave user over a trusted channel. They paste it into
+          the SMS chat for your phone number. Pair their code on your side too if you want encrypted
+          replies. Never assume ordinary SMS is encrypted.
+        </div>
+        <button class="btn btn-ghost" onclick="loadSmsPairingCode()">show my signed pairing code</button>
+        <textarea id="sms-own-pairing-code" class="input" rows="5" readonly spellcheck="false"
+                  placeholder="generate the code to share"></textarea>
+        <button class="btn btn-ghost" onclick="copySmsPairingCode()">copy pairing code</button>
+        <div class="status" id="sms-own-pairing-status"></div>
 
         <div class="divider"></div>
         <div class="sub-title">receiving texts</div>
@@ -491,13 +531,14 @@
         <div class="panel-title" id="chat-title">&mdash;</div>
         <div class="panel-sub" id="chat-sub"></div>
       </div>
+      <button class="icon-btn" id="sms-pair-open" style="display:none;" onclick="openSmsPair()">pair E2E</button>
       <button class="icon-btn" onclick="refreshMessages()">refresh</button>
     </div>
 
     <div class="placeholder" id="placeholder">
       <div class="big">enclave</div>
       <div>select a chat, or start a new one</div>
-      <div style="font-size:.75rem;">messages are end-to-end encrypted</div>
+      <div style="font-size:.75rem;">Enclave peer chats and paired SMS are end-to-end encrypted</div>
     </div>
 
     <div class="msgs" id="msgs" style="display:none;"></div>
@@ -809,6 +850,7 @@ async function openChat(chatId) {
   $('chat-avatar').textContent = (name[0] || '?').toUpperCase();
   $('chat-title').textContent = name;
   $('chat-sub').textContent = chatId;
+  await refreshSmsChatStatus();
   document.body.classList.add('chat-open');
   renderList();
   await refreshMessages();
@@ -817,12 +859,66 @@ async function openChat(chatId) {
 
 function closeChat() {
   currentChat = null;
+  $('sms-pair-open').style.display = 'none';
   $('placeholder').style.display = 'flex';
   $('panel-head').style.display = 'none';
   $('msgs').style.display = 'none';
   $('composer').style.display = 'none';
   document.body.classList.remove('chat-open');
   renderList();
+}
+
+async function refreshSmsChatStatus() {
+  const button = $('sms-pair-open');
+  if (!currentChat || !isPhoneNo(currentChat)) {
+    button.style.display = 'none';
+    $('chat-sub').textContent = currentChat || '';
+    return;
+  }
+  button.style.display = '';
+  button.textContent = 'pair E2E';
+  const d = await api('/api/sms/pair?phone=' + encodeURIComponent(currentChat));
+  if (d.error) {
+    $('chat-sub').textContent = currentChat + ' · SMS security status unavailable';
+    return;
+  }
+  if (d.paired) {
+    $('chat-sub').textContent = currentChat + ' · E2E SMS with ' + (d.peer_name || String(d.peer_id).slice(0, 12));
+    button.textContent = 'E2E paired';
+  } else {
+    $('chat-sub').textContent = currentChat + ' · SMS is not end-to-end encrypted';
+  }
+}
+
+async function openSmsPair() {
+  if (!currentChat || !isPhoneNo(currentChat)) return;
+  $('sms-pair-code').value = '';
+  $('sms-pair-status').textContent = '';
+  const d = await api('/api/sms/pair?phone=' + encodeURIComponent(currentChat));
+  $('sms-unpair-btn').style.display = d.paired ? '' : 'none';
+  $('sms-pair-current').textContent = d.paired
+    ? 'Paired with ' + (d.peer_name || String(d.peer_id).slice(0, 12)) + '.'
+    : 'This chat is not paired. Messages currently use ordinary SMS.';
+  openModal('sms-pair');
+}
+
+async function saveSmsPair() {
+  const st = $('sms-pair-status');
+  const code = $('sms-pair-code').value.trim();
+  if (!code) { st.textContent = 'paste the other user’s pairing code first'; st.className = 'status err'; return; }
+  st.textContent = 'checking signed identity…'; st.className = 'status';
+  const d = await api('/api/sms/pair', {phone: currentChat, pairing_code: code});
+  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
+  closeModal('sms-pair');
+  await refreshSmsChatStatus();
+  await refreshMessages();
+}
+
+async function unpairSmsChat() {
+  const d = await api('/api/sms/pair', {phone: currentChat}, 'DELETE');
+  if (d.error) { $('sms-pair-status').textContent = d.error; $('sms-pair-status').className = 'status err'; return; }
+  closeModal('sms-pair');
+  await refreshSmsChatStatus();
 }
 
 async function refreshMessages() {
@@ -847,6 +943,8 @@ async function refreshMessages() {
     const author = (!mine && who) ? '<div class="bubble-author">' + esc(who) + '</div>' : '';
     const verified = m.verified ? ' &#10003;' : '';
     let meta = esc(fmtTime(m.timestamp)) + verified;
+    if (m.sms_e2e) meta += m.verified ? ' · E2E SMS' : ' · encrypted SMS, sender unverified';
+    else if (m.via === 'sms') meta += ' · SMS, not E2E';
     let cls = mine ? 'me' : 'them';
     if (mine && m.status === 'delivered') meta += ' \u00b7 delivered';
     else if (mine && m.status === 'relayed') meta += ' \u00b7 handed to a relay, not confirmed yet';
@@ -946,6 +1044,28 @@ function openModal(n){ $(n + '-backdrop').classList.remove('hidden'); }
 function closeModal(n){ $(n + '-backdrop').classList.add('hidden'); }
 
 function openSettings(){ openModal('settings'); switchTab('identity'); }
+
+async function loadSmsPairingCode() {
+  const st = $('sms-own-pairing-status');
+  st.textContent = 'creating signed code…'; st.className = 'status';
+  const d = await api('/api/sms/pairing-code');
+  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
+  $('sms-own-pairing-code').value = d.code || '';
+  st.textContent = 'share this code over a trusted Enclave chat or another trusted channel';
+  st.className = 'status ok';
+}
+
+async function copySmsPairingCode() {
+  const field = $('sms-own-pairing-code');
+  if (!field.value) { await loadSmsPairingCode(); if (!field.value) return; }
+  try {
+    await navigator.clipboard.writeText(field.value);
+  } catch (e) {
+    field.focus(); field.select(); document.execCommand('copy');
+  }
+  $('sms-own-pairing-status').textContent = 'pairing code copied';
+  $('sms-own-pairing-status').className = 'status ok';
+}
 
 function switchTab(t) {
   const tabs = document.querySelectorAll('.stab');

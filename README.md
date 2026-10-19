@@ -120,9 +120,15 @@ SMS goes through the [SMS Gateway](https://docs.sms-gate.app) app on an Android 
    computer. An `https://` address with a certificate the phone trusts also works if you prefer that.
 
 A text from `+1 650 555 1212` appears as a chat named `+16505551212`. Typing in that chat sends an SMS through the phone, and a
-failed send can be retried like any other message. Texts are stored encrypted like every other message. If Enclave is locked
-when a text arrives it answers "try later" and the phone app delivers it again, so nothing is lost. Named senders ("MyBank")
-get a read-only `sms:MyBank` chat.
+failed send can be retried like any other message. Texts are stored encrypted on this computer, but ordinary SMS is **not
+end-to-end encrypted** and can be read by the SMS provider and recipient's normal messaging app.
+
+To encrypt SMS between two Enclave users, both users need Enclave and an SMS Gateway phone. In Settings -> sms, each user
+shows and shares their signed pairing code over a trusted channel. In the phone-number chat, paste the other user's code and
+pair it. Each side must pair the other's code to encrypt messages in both directions. The chat header and each message show
+whether SMS was paired and encrypted. The recipient must receive the text through their configured SMS Gateway webhook while
+Enclave is unlocked; a normal SMS app cannot decrypt Enclave messages. If Enclave is locked when a text arrives, the gateway
+app retries delivery. Named senders ("MyBank") get a read-only `sms:MyBank` chat and cannot be paired.
 
 ## Developing
 
