@@ -776,11 +776,25 @@ def decrypt_message(token: str, passphrase: str, chat_id: str | None = None) -> 
 
 
 def configure_sms(username: str, password: str, host: str | None):
+    host = host or "cloud"
+    # Keep the legacy config for callers that use SMSGateway.from_config(),
+    # and the plugin config for the enabled builtin plugin. Without both,
+    # the web UI can report "saved" while send_sms() still uses the plugin's
+    # old (or empty) settings.
     config.set_sms_gateway(
         provider=username,
         api_key=password,
-        sender_id=host or "cloud",
+        sender_id=host,
     )
+    plugin = plugin_manager.get("sms_gateway")
+    if plugin is not None:
+        result = plugin_manager.configure("sms_gateway", {
+            "username": username,
+            "password": password,
+            "host": host,
+        })
+        if plugin._enabled and not result.get("ok"):
+            raise RuntimeError(result.get("error", "SMS plugin settings could not be saved"))
 
 
 def send_sms(to: str, message: str) -> dict:
