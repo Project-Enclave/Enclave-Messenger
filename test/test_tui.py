@@ -8,7 +8,7 @@ Two layers:
    a pseudo-terminal (pty) via _tui_pty_harness.py, so rendering and key
    dispatch are exercised for real, not just the decisions underneath them.
 
-Run: python3 test_tui.py
+Run: python3 test/test_tui.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import fcntl
@@ -132,9 +132,9 @@ def test_pty_integration():
     env["TERM"] = "xterm-256color"
 
     proc = subprocess.Popen(
-        ["python3", "_tui_pty_harness.py", tmp, "53301"],
+        [sys.executable, os.path.join(_testenv.TEST_DIR, "_tui_pty_harness.py"), tmp, "53301"],
         stdin=slave, stdout=slave, stderr=slave, env=env,
-        cwd=os.path.dirname(os.path.abspath(__file__)),
+        cwd=_testenv.ROOT,
         preexec_fn=os.setsid,
     )
     os.close(slave)

@@ -9,7 +9,7 @@ caught because nothing in web.py currently enables the plugin at all —
 only the legacy /api/sms/* routes (SMSGateway.from_config() directly)
 are reachable through the actual product today.
 
-Run: python3 test_sms_gateway.py
+Run: python3 test/test_sms_gateway.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import os

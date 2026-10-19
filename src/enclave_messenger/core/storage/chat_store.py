@@ -77,6 +77,10 @@ class ChatStore:
         #   status: "delivered" (peer reached directly) | "relayed"
         #           (handed to a relay, not yet confirmed) | "failed"
         #   via:    "direct" | "relay"
+        # Id the message had where it came from (e.g. the SMS gateway's message id),
+        # so a re-delivered webhook can be recognised and not stored twice.
+        if entry.get("ext_id"):
+            record["ext_id"] = entry["ext_id"]
         if entry.get("status"):
             record["status"] = entry["status"]
         if entry.get("via"):
@@ -134,6 +138,36 @@ class ChatStore:
                                      "verified": None, "plaintext": False,
                                      "pending_contact": False})
         return entries
+
+    def has_ext_id(self, chat_id: str, ext_id: str) -> bool:
+        return bool(ext_id) and any(m.get("ext_id") == ext_id for m in self.load_messages(chat_id))
+
+    def rewrite_messages(self, chat_id: str, fn) -> int:
+        """
+        Apply `fn(record) -> new_record | None` to every stored record of one
+        chat (None = leave it alone) and write the result back atomically
+        (temp file + rename, under the store lock, so a crash never leaves a
+        half-written chat and a concurrent append is never lost). Returns the
+        number of records that changed.
+        """
+        with self._lock:
+            msgs = self.load_messages(chat_id)
+            out, changed = [], 0
+            for m in msgs:
+                new = fn(dict(m))
+                if new is not None and new != m:
+                    out.append(new)
+                    changed += 1
+                else:
+                    out.append(m)
+            if not changed:
+                return 0
+            tmp = self._path(chat_id) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for m in out:
+                    f.write(json.dumps(m, separators=(',', ':')) + "\n")
+            os.replace(tmp, self._path(chat_id))
+            return changed
 
     def clear_pending_contact(self, chat_id: str):
         """Flip pending_contact off for every stored message in this

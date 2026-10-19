@@ -68,6 +68,7 @@ def main(argv=None) -> int:
     print("  Close this window (or press Ctrl+C) to stop the app.")
     print("=" * 60)
 
+    web._PORT = port
     web.app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
     return 0
 

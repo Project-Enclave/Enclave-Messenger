@@ -13,6 +13,7 @@ It runs with a throw-away ENCLAVE_HOME and a throw-away working directory, and c
   * the built-in plugins load (their sources/manifests were packaged)
   * data landed under ENCLAVE_HOME and nothing was written to the working directory
 """
+import http.cookiejar
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 
@@ -38,6 +40,7 @@ def main():
     cwd = tempfile.mkdtemp(prefix="enclave_smoke_cwd_")
     env = dict(os.environ, ENCLAVE_HOME=os.path.join(home, "h"), PYTHONUNBUFFERED="1")
     env.pop("PYTHONPATH", None)          # must work from the install alone
+    env.pop("ENCLAVE_NO_LOGIN", None)    # the login gate must be ON, as for a real user
     failures = []
 
     def check(name, ok):
@@ -80,8 +83,20 @@ def main():
         if html:
             m = re.search(r"CSRF_TOKEN\s*=\s*['\"]([^'\"]+)", html) or \
                 re.search(r"csrf[^'\"]*['\"]([A-Za-z0-9_\-]{20,})['\"]", html, re.I)
-            req = urllib.request.Request(base + "/api/plugins", headers={"X-Enclave-CSRF": m.group(1) if m else ""})
-            plugins = json.loads(urllib.request.urlopen(req, timeout=5).read())["plugins"]
+            csrf = m.group(1) if m else ""
+            try:
+                urllib.request.urlopen(urllib.request.Request(base + "/api/plugins"), timeout=5)
+                gated = False
+            except urllib.error.HTTPError as e:
+                gated = e.code == 401
+            check("the API is behind the login (401 without a session)", gated)
+            jar = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            req = urllib.request.Request(base + "/api/identity/generate", data=json.dumps({"passphrase": "smoke test passphrase"}).encode(),
+                                         headers={"X-Enclave-CSRF": csrf, "Content-Type": "application/json"})
+            created = json.loads(opener.open(req, timeout=20).read())
+            check("first run: the person at this computer can create an identity (and is signed in)", bool(created.get("node_id")))
+            plugins = json.loads(opener.open(urllib.request.Request(base + "/api/plugins"), timeout=5).read())["plugins"]
             ids = {p["id"] for p in plugins}
             check("built-in plugins load (sms_gateway, bluetooth)", {"sms_gateway", "bluetooth"} <= ids)
     finally:

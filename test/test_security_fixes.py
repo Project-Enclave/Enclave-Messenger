@@ -2,7 +2,7 @@
 test_security_fixes.py — verifies the 4 critical/high fixes from the code
 review actually work against real code paths (not mocks of my own logic).
 
-Run: python3 test_security_fixes.py
+Run: python3 test/test_security_fixes.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import base64
@@ -272,7 +272,8 @@ def main():
         alice_own = pipe_ac.load_messages(pipe_bob._identity["user_id"])
         check("pipeline: sender's own history now records the sent message",
               len(alice_own) == 1 and alice_own[0]["sender"] == "me"
-              and alice_own[0]["plaintext"] is True)
+              and alice_own[0]["plaintext"] is False
+              and "pipeline test message" not in alice_own[0]["token"])
 
         web.app_core.chats = pipe_ac
         web.app_core.peers = pipe_ap
@@ -308,7 +309,7 @@ def main():
         # declaration while adding the /api/chats/new route below.
         # ------------------------------------------------------------
         import re as _re, subprocess as _sp
-        html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "enclave_messenger", "templates", "chat.html"),
+        html = open(os.path.join(_testenv.SRC, "enclave_messenger", "templates", "chat.html"),
                     encoding="utf-8").read()
         script = _re.search(r"<script>(.*?)</script>", html, _re.DOTALL).group(1)
         js_path = os.path.join(tmp, "_extracted.js")

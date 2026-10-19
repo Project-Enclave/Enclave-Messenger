@@ -7,7 +7,7 @@ test_security_fixes_2.py — regression tests for the second round of fixes:
      redirects are refused
   4. user plugins are never imported until explicitly trusted (hash-pinned)
 
-Run:  python3 test_security_fixes_2.py
+Run:  python3 test/test_security_fixes_2.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import json, os, sys, tempfile, textwrap

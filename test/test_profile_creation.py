@@ -11,8 +11,9 @@ passphrase, confirm a background process actually gets spawned and
 comes up on its own port, and confirm the identity it was given can
 actually be unlocked there with that same passphrase.
 
-Run: python3 test_profile_creation.py
+Run: python3 test/test_profile_creation.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path, throw-away ENCLAVE_HOME, repo ROOT)
 import os
 import re
 import shutil
@@ -31,12 +32,12 @@ def check(name, cond):
 
 
 def main():
-    repo = os.path.dirname(os.path.abspath(__file__))
+    repo = _testenv.ROOT
     tmp_home = tempfile.mkdtemp(prefix="enclave_home_")
     env = os.environ.copy()
     env["HOME"] = tmp_home
     env["ENCLAVE_HOME"] = tmp_home
-    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+    env["PYTHONPATH"] = _testenv.SRC
     env["PYTHONUNBUFFERED"] = "1"
 
     PARENT_PORT = 60101

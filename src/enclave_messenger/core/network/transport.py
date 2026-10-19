@@ -52,6 +52,7 @@ _MAX_BODY_BYTES = 256 * 1024  # reject anything bigger — a text envelope has n
 # /identity, /health) on a plain http(s) host:port" and block the
 # ranges that are never a legitimate peer.
 
+import http.client
 import ipaddress
 import socket
 import re as _re
@@ -119,6 +120,9 @@ def validate_peer_address(address: str) -> bool:
     return True
 
 
+_NET_ERRORS = (URLError, OSError, http.client.HTTPException)
+
+
 class _NoRedirect(HTTPRedirectHandler):
     """A peer must not be able to bounce us to somewhere else."""
     def redirect_request(self, *args, **kwargs):
@@ -184,8 +188,12 @@ class Transport:
         self._thread.start()
 
     def stop(self):
-        if self._server:
-            self._server.shutdown()
+        server, self._server = self._server, None
+        if server:
+            server.shutdown()        # stops serve_forever()
+            server.server_close()    # ...and actually closes the listening socket. Without
+            #                          this a "stopped" node kept accepting connections that
+            #                          nobody answered, and could not be restarted on its port.
 
     def _serve(self):
         self._server.serve_forever()
@@ -295,7 +303,12 @@ class Transport:
             with _open(req, 5) as resp:
                 log.debug("[transport] sent to %s -> %d", url, resp.status)
                 return resp.status == 200
-        except URLError as e:
+        except _NET_ERRORS as e:
+            # URLError covers refused/unreachable; a peer that accepts the
+            # connection but never answers raises a bare TimeoutError (an
+            # OSError), a reset raises ConnectionError, a half-written reply
+            # raises http.client.HTTPException. None of those may escape and
+            # turn "not delivered" into a crashed request.
             log.warning("[transport] send failed to %s: %s", url, e)
             return False
 
@@ -318,7 +331,7 @@ class Transport:
             with _open(req, 5) as resp:
                 log.debug("[transport] relayed via %s -> %d", url, resp.status)
                 return resp.status == 200
-        except URLError as e:
+        except _NET_ERRORS as e:
             log.warning("[transport] relay send failed to %s: %s", url, e)
             return False
 
@@ -367,5 +380,5 @@ class Transport:
         try:
             with _open(req, 3) as resp:
                 return resp.status == 200
-        except URLError:
+        except _NET_ERRORS:
             return False

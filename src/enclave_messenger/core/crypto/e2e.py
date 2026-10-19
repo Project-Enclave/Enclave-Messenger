@@ -135,6 +135,24 @@ class E2EManager:
         }
         return _b64e(_canonical_json(envelope))
 
+    def seal_for_self(self, plaintext: str, chat_id: str, created_at: str) -> str:
+        """
+        Encrypt *plaintext* so that only THIS identity can read it again.
+
+        The network copy of an outgoing message is encrypted to the recipient,
+        and (by design, for forward secrecy) the sender can never decrypt it.
+        To keep our own history unreadable on disk too, we store a SECOND
+        envelope encrypted to our own public key. It is an ordinary E2E
+        token, so reading it back goes through exactly the same decrypt path
+        as a received message and needs the unlocked identity.
+        """
+        return self.encrypt(
+            plaintext=plaintext,
+            peer_x25519_pub_b64=_b64e(_pub_bytes_raw(self._priv)),
+            chat_id=chat_id,
+            created_at=created_at,
+        )
+
     # ------------------------------------------------------------------
     # Decrypt (recipient side only)
     # ------------------------------------------------------------------

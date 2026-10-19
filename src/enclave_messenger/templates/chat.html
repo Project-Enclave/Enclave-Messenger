@@ -294,6 +294,7 @@
       <button class="stab" data-stab="profiles" onclick="switchTab('profiles')">profiles</button>
       <button class="stab" data-stab="network" onclick="switchTab('network')">network</button>
       <button class="stab" data-stab="plugins" onclick="switchTab('plugins')">plugins</button>
+      <button class="stab" data-stab="sms" onclick="switchTab('sms')">sms</button>
     </div>
     <div class="modal-body">
 
@@ -321,6 +322,26 @@
             <button class="btn btn-ghost" style="font-size:.78rem;" onclick="copyShareAddr()">copy address</button>
           </div>
         </div>
+
+        <div class="divider"></div>
+        <div class="sub-title">signing in</div>
+        <div class="hint">
+          Your passphrase is asked once each time you open Enclave in a browser, and again after this
+          much time without touching it. It is only ever typed on this computer, never over the network.
+        </div>
+        <div class="field">
+          <div class="label">lock after</div>
+          <select id="set-idle" class="input" onchange="saveSignInSettings()">
+            <option value="5">5 minutes</option><option value="15">15 minutes</option>
+            <option value="30">30 minutes</option><option value="60">1 hour</option>
+            <option value="0">never (still locks when the browser closes)</option>
+          </select>
+        </div>
+        <label class="check-row" style="align-items:flex-start;">
+          <input type="checkbox" id="set-lockload" onchange="saveSignInSettings()" style="margin-top:.15rem;"/>
+          <span>Ask for my passphrase every time this page is loaded or refreshed</span>
+        </label>
+        <div class="status" id="signin-status"></div>
 
         <div class="divider"></div>
         <div class="sub-title">back up your identity</div>
@@ -368,6 +389,34 @@
         <div class="status" id="plugins-status"></div>
       </div>
 
+      <div class="spanel" id="spanel-sms">
+        <div class="hint">
+          Texts go through the <strong>SMS Gateway</strong> app on an Android phone (docs.sms-gate.app).
+          Replies you type in a phone-number chat are sent as SMS by that phone.
+        </div>
+        <div class="sub-title">gateway login</div>
+        <div class="field"><div class="label">username</div><input id="sms-user" class="input" autocomplete="off"/></div>
+        <div class="field"><div class="label">password</div><input id="sms-pass" class="input" type="password" autocomplete="off"/></div>
+        <div class="field"><div class="label">phone address (blank = cloud server)</div><input id="sms-host" class="input" placeholder="192.168.1.20:8080" autocomplete="off"/></div>
+        <button class="btn btn-ghost" onclick="saveSmsGateway()">save gateway login</button>
+        <div class="status" id="sms-gw-status"></div>
+
+        <div class="divider"></div>
+        <div class="sub-title">receiving texts</div>
+        <div class="hint">
+          1. In the phone app open <em>Settings &rarr; Webhooks</em> and copy the <strong>signing key</strong> here.
+          Every incoming text is checked against it, and nothing is accepted without it.<br/>
+          2. The phone app only calls <code>http://</code> addresses on the phone itself (127.0.0.1). The simplest way:
+          connect the phone with USB and run <code id="sms-adb">adb reverse tcp:5000 tcp:5000</code> on this computer.
+          Then register the address below.
+        </div>
+        <div class="field"><div class="label">signing key</div><input id="sms-key" class="input" type="password" autocomplete="off"/></div>
+        <button class="btn btn-ghost" onclick="saveSmsKey()">save signing key</button>
+        <div class="field" style="margin-top:.8rem;"><div class="label">address the phone should call</div><input id="sms-url" class="input" autocomplete="off"/></div>
+        <button class="btn btn-ghost" onclick="registerSmsWebhook()">register with the phone</button>
+        <div class="status" id="sms-in-status"></div>
+      </div>
+
       <div class="spanel" id="spanel-network">
         <div class="sub-title">DHT (internet discovery)</div>
         <div class="hint">
@@ -401,6 +450,7 @@
       <div class="brand">project <span>enclave</span></div>
       <div style="display:flex;gap:.35rem;">
         <button class="icon-btn" onclick="toggleTheme()" title="theme">&#9680;</button>
+        <button class="icon-btn" onclick="lockNow()" title="lock now">lock</button>
         <button class="icon-btn" onclick="openSettings()" title="settings">settings</button>
       </div>
     </div>
@@ -497,6 +547,7 @@ async function api(url, body, method, extraHeaders) {
     const text = await r.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch (e) { data = {error: text.slice(0,200)}; }
+    if (r.status === 401 && data.login) { needLogin(); }
     if (!r.ok && !data.error) data.error = 'HTTP ' + r.status;
     return data;
   } catch (e) {
@@ -537,13 +588,47 @@ function toggleTheme() {
 })();
 
 // ── Unlock / node start ─────────────────────────────────────────────
-async function initUnlock() {
-  const d = await api('/api/identity');
-  const first = !d.has_identity;
+let IS_LOCAL = true;       // is this browser on the computer that runs Enclave?
+let locked = false;
+let lastActive = Date.now();
+let idleMs = 0;
+
+function needLogin() {
+  if (locked) return;
+  locked = true;
+  passphrase = '';
+  if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+  $('msgs').textContent = '';
+  $('list').textContent = '';
+  currentChat = null;
+  $('settings-backdrop').classList.add('hidden');
+  $('unlock-backdrop').classList.remove('hidden');
+  initUnlock();
+}
+
+async function lockNow() {
+  await api('/api/auth/logout', {});
+  needLogin();
+}
+
+['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach(function(ev) {
+  document.addEventListener(ev, function() { lastActive = Date.now(); }, {passive: true});
+});
+setInterval(function() {
+  if (!locked && idleMs > 0 && Date.now() - lastActive > idleMs) lockNow();
+}, 15000);
+
+async function initUnlock(st) {
+  st = st || await api('/api/auth/status');
+  const first = !st.has_identity;
+  IS_LOCAL = st.local !== false;
   $('unlock-title').textContent = first ? 'create identity' : 'unlock';
   $('unlock-hint').textContent = first
     ? 'no identity yet for this profile. choose a passphrase — it protects your keys and cannot be recovered.'
-    : 'enter your passphrase to start the node.';
+    : (st.node_running ? 'enter your passphrase to unlock.' : 'enter your passphrase to start the node.');
+  if (!IS_LOCAL) {
+    $('unlock-hint').textContent = 'This device is not signed in. Passphrases are only accepted on the computer running Enclave; reload this page to enter the access code instead.';
+  }
   $('unlock-confirm-field').style.display = first ? '' : 'none';
   $('unlock-ack-row').style.display = first ? 'flex' : 'none';
   $('unlock-restore').style.display = first ? '' : 'none';
@@ -552,7 +637,9 @@ async function initUnlock() {
     $('unlock-pass').addEventListener('input', showStrength);
     showStrength();
   }
-  $('unlock-btn').textContent = first ? 'create & start node' : 'unlock & start node';
+  $('unlock-btn').textContent = first ? 'create & start node' : (st.node_running ? 'unlock' : 'unlock & start node');
+  $('unlock-pass').value = '';
+  $('unlock-status').textContent = '';
   $('unlock-pass').focus();
 }
 
@@ -588,11 +675,18 @@ async function doUnlock() {
   const d = await api('/api/node/start', {passphrase: p});
   if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
 
+  afterSignIn(p);
+}
+
+async function afterSignIn(p) {
   passphrase = p;
+  locked = false;
+  lastActive = Date.now();
   $('unlock-backdrop').classList.add('hidden');
   await loadAll();
   startRealtime();
   renderBanners();
+  loadSignInSettings();
 }
 
 async function restoreFromFile(file) {
@@ -610,11 +704,7 @@ async function restoreFromFile(file) {
   st.textContent = 'restored \u2014 starting node\u2026';
   const d = await api('/api/node/start', {passphrase: p});
   if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
-  passphrase = p;
-  $('unlock-backdrop').classList.add('hidden');
-  await loadAll();
-  startRealtime();
-  renderBanners();
+  afterSignIn(p);
 }
 
 // ── Data loading ────────────────────────────────────────────────────
@@ -739,8 +829,8 @@ async function refreshMessages() {
   if (!currentChat) return;
   // passphrase goes in a header, never the URL (URLs end up in logs/history)
   const url = '/api/messages/' + encodeURIComponent(currentChat);
-  const d = await api(url, undefined, undefined,
-                      {'X-Enclave-Passphrase': encodeURIComponent(passphrase)});
+  const d = await api(url, undefined, undefined, IS_LOCAL
+                      ? {'X-Enclave-Passphrase': encodeURIComponent(passphrase)} : {});
   const el = $('msgs');
   if (d.error) {
     el.innerHTML = '<div class="empty" style="color:var(--coral);">' + esc(d.error) + '</div>';
@@ -760,6 +850,7 @@ async function refreshMessages() {
     let cls = mine ? 'me' : 'them';
     if (mine && m.status === 'delivered') meta += ' \u00b7 delivered';
     else if (mine && m.status === 'relayed') meta += ' \u00b7 handed to a relay, not confirmed yet';
+    else if (mine && m.status === 'queued') meta += ' \u00b7 queued on your phone';
     else if (mine && m.status === 'failed') {
       cls += ' failed';
       meta += ' \u00b7 not delivered <button class="retry" data-ts="' + esc(m.timestamp || '') + '">retry</button>';
@@ -865,6 +956,7 @@ function switchTab(t) {
   if (t === 'profiles') loadProfiles();
   if (t === 'network')  loadDht();
   if (t === 'plugins')  loadPlugins();
+  if (t === 'sms')      loadSms();
 }
 
 async function loadIdentityTab() {
@@ -875,6 +967,63 @@ async function loadIdentityTab() {
 }
 
 let shareText = '';
+async function loadSignInSettings() {
+  const d = await api('/api/auth/settings');
+  if (d.error) return;
+  idleMs = (d.idle_minutes || 0) * 60 * 1000;
+  const sel = $('set-idle');
+  if (sel) {
+    if (!Array.prototype.some.call(sel.options, function(o){ return o.value === String(d.idle_minutes); })) {
+      const o = document.createElement('option'); o.value = String(d.idle_minutes); o.textContent = d.idle_minutes + ' minutes'; sel.appendChild(o);
+    }
+    sel.value = String(d.idle_minutes);
+    $('set-lockload').checked = !!d.lock_on_page_load;
+  }
+}
+
+async function saveSignInSettings() {
+  const st = $('signin-status');
+  const r = await api('/api/auth/settings', {idle_minutes: parseInt($('set-idle').value, 10), lock_on_page_load: $('set-lockload').checked});
+  if (r.error) { st.textContent = r.error; st.className = 'status err'; return; }
+  st.textContent = 'saved'; st.className = 'status ok';
+  loadSignInSettings();
+}
+
+async function loadSms() {
+  const port = location.port || '80';
+  $('sms-adb').textContent = 'adb reverse tcp:' + port + ' tcp:' + port;
+  if (!$('sms-url').value) $('sms-url').value = 'http://127.0.0.1:' + port + '/api/sms/webhook';
+  const d = await api('/api/sms/inbound');
+  const st = $('sms-in-status');
+  if (d.error) { st.textContent = d.error; st.className = 'status err'; return; }
+  st.textContent = (d.configured ? 'signing key saved' : 'no signing key yet - incoming texts are refused')
+    + (d.received_count ? ' \u00b7 ' + d.received_count + ' received since start' : '');
+  st.className = 'status' + (d.configured ? ' ok' : '');
+}
+
+async function saveSmsGateway() {
+  const st = $('sms-gw-status');
+  const r = await api('/api/sms/config', {username: $('sms-user').value.trim(), password: $('sms-pass').value, host: $('sms-host').value.trim() || null});
+  st.textContent = r.error ? r.error : 'saved';
+  st.className = 'status ' + (r.error ? 'err' : 'ok');
+}
+
+async function saveSmsKey() {
+  const st = $('sms-in-status');
+  const r = await api('/api/sms/inbound', {signing_key: $('sms-key').value.trim()});
+  if (r.error) { st.textContent = r.error; st.className = 'status err'; return; }
+  $('sms-key').value = '';
+  loadSms();
+}
+
+async function registerSmsWebhook() {
+  const st = $('sms-in-status');
+  st.textContent = 'registering\u2026'; st.className = 'status';
+  const r = await api('/api/sms/inbound/register', {url: $('sms-url').value.trim()});
+  st.textContent = r.error ? r.error : 'registered - the phone will now send incoming texts here';
+  st.className = 'status ' + (r.error ? 'err' : 'ok');
+}
+
 async function loadShare() {
   const sh = await api('/api/identity/share');
   const hint = $('share-hint'), addr = $('share-addr'), qr = $('share-qr');
@@ -1133,15 +1282,20 @@ function startRealtime() {
 
 // ── Boot ────────────────────────────────────────────────────────────
 (async function boot(){
-  const d = await api('/api/identity');
-  await loadIdentity();
-  if (d.node_running) {
+  const st = await api('/api/auth/status');
+  IS_LOCAL = st.local !== false;
+  idleMs = (st.idle_minutes || 0) * 60 * 1000;
+  if (st.authenticated && st.node_running) {
     $('unlock-backdrop').classList.add('hidden');
+    await loadIdentity();
     await loadAll();
     startRealtime();
     renderBanners();
+    loadSignInSettings();
   } else {
-    await initUnlock();
+    locked = true;
+    $('unlock-backdrop').classList.remove('hidden');
+    await initUnlock(st);
   }
 })();
 </script>

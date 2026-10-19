@@ -350,22 +350,16 @@ class Node:
         # message never appears in your own history at all, only the
         # recipient's.
         #
-        # This deliberately stores PLAINTEXT, not the ciphertext token.
-        # e2e.py uses ephemeral-static ECDH (the sender's ephemeral private
-        # key is discarded right after encrypt() returns, which is what
-        # gives forward secrecy) — only the RECIPIENT's static private key
-        # can reverse it. The sender can never decrypt their own ciphertext
-        # with this scheme; nobody can but the intended recipient. Since we
-        # already have the plaintext right here (it's a plain function
-        # argument, before encryption), storing it directly for the local
-        # echo is the same trade-off real E2E messengers make: E2E secrecy
-        # covers the network leg, and your own local copy of what you sent
-        # is protected by the same OS file permissions as the rest of your
-        # profile data (see key_manager.py's chmod 600), not by a second
-        # layer of at-rest encryption on top.
+        # The copy stored here is SEALED TO OUR OWN KEY (see
+        # E2EManager.seal_for_self), not plaintext. The envelope sent to the
+        # peer is encrypted with an ephemeral key that is thrown away (that
+        # is what gives forward secrecy), so even we can't decrypt it later.
+        # Instead we keep a second, ordinary E2E envelope addressed to
+        # ourselves. History on disk is then unreadable without the unlocked
+        # identity, exactly like received messages, and is read back through
+        # the same decrypt path.
         self._chats.append_message(peer_user_id, {
-            "token":     plaintext,
-            "plaintext": True,
+            "token":     self._seal(plaintext, peer_user_id, ts),
             "sender":    "me",
             "ts":        ts,
             "verified":  True,
@@ -417,14 +411,23 @@ class Node:
                      peer_user_id[:12], len(relay_candidates))
         return None
 
+    def _seal(self, plaintext: str, peer_user_id: str, ts: str) -> str:
+        return E2EManager(self._im.x25519_priv).seal_for_self(plaintext, peer_user_id, ts)
+
+    def _unseal(self, rec: dict) -> str:
+        """Plaintext of one of OUR stored messages (sealed, or an old plaintext record)."""
+        if rec.get("plaintext"):
+            return rec["token"]
+        return E2EManager(self._im.x25519_priv).decrypt(rec["token"])
+
     def _record_failed(self, peer_user_id: str, plaintext: str) -> None:
         """Keep what the user typed visible (with a retry button) even when
         we could not attempt delivery at all — otherwise it just vanishes."""
+        ts = datetime.now(timezone.utc).isoformat()
         self._chats.append_message(peer_user_id, {
-            "token":     plaintext,
-            "plaintext": True,
+            "token":     self._seal(plaintext, peer_user_id, ts),
             "sender":    "me",
-            "ts":        datetime.now(timezone.utc).isoformat(),
+            "ts":        ts,
             "verified":  True,
             "status":    "failed",
             "via":       "",
@@ -446,7 +449,11 @@ class Node:
         """
         rec = next((m for m in self._chats.load_messages(peer_user_id)
                     if m.get("ts") == ts and m.get("sender") == "me"), None)
-        if rec is None or rec.get("status") != "failed" or not rec.get("plaintext"):
+        if rec is None or rec.get("status") != "failed":
+            return False
+        try:
+            text = self._unseal(rec)
+        except Exception:
             return False
         peer = self._peers.get(peer_user_id)
         if not peer and self._dht:
@@ -458,7 +465,7 @@ class Node:
             return False
 
         token = E2EManager(self._im.x25519_priv).encrypt(
-            plaintext=rec["token"],
+            plaintext=text,
             peer_x25519_pub_b64=peer_pub,
             chat_id=peer_user_id,
             created_at=ts,

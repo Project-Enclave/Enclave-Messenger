@@ -15,4 +15,4 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Run crypto tests
-        run: python test_core_crypto.py
+        run: python test/test_core_crypto.py

@@ -13,7 +13,7 @@ their own substantial testing effort if this ever needs to run against
 a real, larger, adversarial swarm rather than a handful of trusted local
 nodes.
 
-Run: python3 test_dht.py
+Run: python3 test/test_dht.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import os

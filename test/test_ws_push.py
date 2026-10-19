@@ -11,8 +11,9 @@ receives a push event.
 Requires the `websockets` package (test-only, not an app dependency):
     pip install websockets
 
-Run: python3 test_ws_push.py
+Run: python3 test/test_ws_push.py
 """
+import _testenv  # noqa: F401  (src/ on sys.path, throw-away ENCLAVE_HOME, repo ROOT)
 import asyncio
 import json
 import os
@@ -40,9 +41,9 @@ async def main():
     env = os.environ.copy()
     env["HOME"] = tmp_home
     env["ENCLAVE_HOME"] = tmp_home
-    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+    env["PYTHONPATH"] = _testenv.SRC
     env["PYTHONUNBUFFERED"] = "1"
-    repo = os.path.dirname(os.path.abspath(__file__))
+    repo = _testenv.ROOT
 
     setup = subprocess.run([sys.executable, "-c", f"""
 import sys; sys.path.insert(0, 'src')

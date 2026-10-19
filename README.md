@@ -108,6 +108,22 @@ python tui.py
 
 ***
 
+## SMS (sending and receiving)
+
+SMS goes through the [SMS Gateway](https://docs.sms-gate.app) app on an Android phone. In Settings -> sms:
+
+1. enter the gateway login (username, password, and the phone's address, or leave it blank for the cloud server);
+2. paste the **signing key** from the phone app (*Settings -> Webhooks*). Incoming texts are only accepted if they carry a
+   valid signature made with this key (HMAC-SHA256, and no older than 5 minutes), and nothing is accepted until it is set;
+3. connect the phone by USB and run `adb reverse tcp:5000 tcp:5000` (use your web port), then press *register with the phone*.
+   The phone app only calls plain `http://` addresses on the phone itself (127.0.0.1); `adb reverse` makes that reach this
+   computer. An `https://` address with a certificate the phone trusts also works if you prefer that.
+
+A text from `+1 650 555 1212` appears as a chat named `+16505551212`. Typing in that chat sends an SMS through the phone, and a
+failed send can be retried like any other message. Texts are stored encrypted like every other message. If Enclave is locked
+when a text arrives it answers "try later" and the phone app delivers it again, so nothing is lost. Named senders ("MyBank")
+get a read-only `sms:MyBank` chat.
+
 ## Developing
 
 From a checkout, nothing needs installing: the scripts at the repo root are thin shims over `src/enclave_messenger/`.
@@ -119,11 +135,12 @@ python main.py run ...   # = pe-em cli run ...  python launch_desktop.py   # = p
 python set.py            # developer bootstrap (venv + deps + setup); installed users run `pe-em setup`
 ```
 
-Dev runs use the same per-user folders as an installed copy. Set `ENCLAVE_HOME=./.enclave-dev`
+Dev runs use the same per-user folders as an installed copy and ask for the passphrase like a real install. `ENCLAVE_NO_LOGIN=1` switches the login off for throw-away runs (the tests do this); never use it with real data. Set `ENCLAVE_HOME=./.enclave-dev`
 to keep experiments away from your real profiles (the tests always do this). `pip install -e .`
 gives you the `pe-em` command pointing at your checkout.
 
-Tests: `python test_<name>.py` or `pytest`. `python scripts/smoke_install.py pe-em` checks an
+Tests live in `test/`: `python test/run_all.py` runs every file there (`python test/run_all.py <part of a name>` to pick some),
+or run one directly with `python test/test_<name>.py` / `pytest test`. `python scripts/smoke_install.py pe-em` checks an
 installed copy (CI runs it for pipx on Linux/macOS/Windows and for the executables).
 
 ## What this is
@@ -194,6 +211,15 @@ Please note that this is a hobby project by a teen, it will have problems and yo
   unspecified addresses refused, redirects never followed. LAN/loopback peers are
   still allowed, since that is where real peers live.
 
+- **Login.** Opening the page is public, everything else needs a session. You type your passphrase
+  **once per browser session**, on the computer that runs Enclave (it is never accepted from other devices,
+  because it would cross the network unencrypted). The page locks itself after 15 idle minutes (change it in
+  Settings, or set `session_idle_minutes`), there is a lock button, and wrong passphrases are rate limited
+  (5 per 5 minutes). Turn on *ask every time this page is loaded* in Settings if you want the passphrase on every
+  refresh. Other devices on the LAN (`--host lan`) sign in with the access code instead. A different profile
+  on another port has its own login.
+- **Encrypted history.** Messages you send are stored sealed to your own key, like the ones you receive; nothing
+  readable is left on disk. Older readable history is converted the first time you unlock.
 - **Identity backup.** Settings -> identity -> *download identity backup* saves your
   passphrase-encrypted key files as one JSON file; the first-run screen can restore
   from it. There is no account recovery, so lose the device *and* the backup and the

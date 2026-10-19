@@ -2,7 +2,7 @@
 test_ux_fixes.py - tests for delivery status/retry, identity backup+restore,
 share/QR, plugin routes (secrets hidden), LAN status, and the scanner port.
 
-Run:  python3 test_ux_fixes.py
+Run:  python3 test/test_ux_fixes.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import json, os, sys, tempfile
@@ -62,8 +62,10 @@ def main():
         ok = alice.send(bid, "are you there?")
         rec = ac.load_messages(bid)
         check("offline peer: send() reports failure", ok is False)
+        from enclave_messenger.core.crypto.e2e import E2EManager
         check("offline peer: bubble is kept and marked failed",
-              len(rec) == 1 and rec[0]["status"] == "failed" and rec[0]["token"] == "are you there?")
+              len(rec) == 1 and rec[0]["status"] == "failed"
+              and E2EManager(alice._im.x25519_priv).decrypt(rec[0]["token"]) == "are you there?")
         ts = rec[0]["ts"]
 
         check("retry while still offline stays failed, no duplicate bubble",
@@ -81,14 +83,16 @@ def main():
         check("retry of an already-delivered message is refused", alice.retry_message(bid, ts) is False)
 
         ok2 = alice.send(bid, "second")
-        r2 = [m for m in ac.load_messages(bid) if m["token"] == "second"][0]
+        r2 = [m for m in ac.load_messages(bid)
+              if E2EManager(alice._im.x25519_priv).decrypt(m["token"]) == "second"][0]
         check("normal send to online peer is marked delivered/direct",
               ok2 and r2["status"] == "delivered" and r2["via"] == "direct")
 
         ok3 = alice.send("nobody-knows-this-id", "lost?")
         r3 = ac.load_messages("nobody-knows-this-id")
         check("unknown peer: typed text is kept as a failed bubble, not lost",
-              ok3 is False and len(r3) == 1 and r3[0]["status"] == "failed")
+              ok3 is False and len(r3) == 1 and r3[0]["status"] == "failed"
+              and E2EManager(alice._im.x25519_priv).decrypt(r3[0]["token"]) == "lost?")
         alice.stop(); bob.stop()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -103,6 +107,21 @@ def main():
 
         r = c.get("/api/identity/share")
         check("share endpoint answers", r.status_code == 200 and "node_id" in r.get_json())
+
+        import xml.etree.ElementTree as ET
+        real_share = web.app_core.get_share_info
+        web.app_core.get_share_info = lambda: {"node_id": "X" * 44, "username": "u", "address": "192.168.1.20:43100"}
+        try:
+            r = c.get("/api/identity/share.svg")
+        finally:
+            web.app_core.get_share_info = real_share
+        try:
+            root_tag = ET.fromstring(r.data).tag
+        except ET.ParseError:
+            root_tag = None
+        check("share.svg is a standalone SVG document (namespaced root), which a browser needs to draw it as an <img>",
+              r.status_code == 200 and r.headers["Content-Type"].startswith("image/svg+xml")
+              and root_tag == "{http://www.w3.org/2000/svg}svg")
 
         r = c.get("/api/plugins")
         d = r.get_json()

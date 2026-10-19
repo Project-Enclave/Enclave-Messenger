@@ -1,3 +1,4 @@
+import _testenv  # noqa: F401  (src/ on sys.path, throw-away ENCLAVE_HOME, repo ROOT)
 import os
 import re
 import shutil
@@ -19,9 +20,9 @@ def main():
     env = os.environ.copy()
     env["HOME"] = tmp_home
     env["ENCLAVE_HOME"] = tmp_home
-    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+    env["PYTHONPATH"] = _testenv.SRC
     env["PYTHONUNBUFFERED"] = "1"
-    repo = os.path.dirname(os.path.abspath(__file__))
+    repo = _testenv.ROOT
 
     setup = subprocess.run([sys.executable, "-c", """
 import sys; sys.path.insert(0, 'src')

@@ -9,7 +9,7 @@ test_packaging.py — the installable-package pieces:
   plugins    old `from core.plugins...` plugins still import
   dev shims  `python web.py` etc. from a checkout
 
-Run:  python3 test_packaging.py
+Run:  python3 test/test_packaging.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import hashlib
@@ -27,8 +27,8 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(ROOT, "src")
+ROOT = _testenv.ROOT
+SRC = _testenv.SRC
 PASS = FAIL = 0
 
 

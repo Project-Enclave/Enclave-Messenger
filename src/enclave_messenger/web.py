@@ -18,6 +18,7 @@ The actual logic for crypto and comms is NOT handled by this file.
 """
 
 import argparse
+import io
 import os
 import re
 import secrets
@@ -37,6 +38,7 @@ except ImportError:
     _SOCK_AVAILABLE = False
 
 from enclave_messenger import main as app_core
+from enclave_messenger.core import sms_inbound
 from enclave_messenger.spawn import spawn_web_profile
 from enclave_messenger.core import profiles as _profiles
 from enclave_messenger.core.network.scanner import scan_lan_peers, ENCLAVE_PORT
@@ -63,12 +65,18 @@ app = Flask(__name__)
 # rendered HTML), required as a custom header on every mutating request.
 # Custom headers always force a CORS preflight, and this server never sends
 # Access-Control-Allow-Origin, so the browser refuses to send the real
-# request cross-origin. This is enough for a single-user local app; it is
-# NOT a general auth system and doesn't need to be — the passphrase already
-# gates the actual cryptographic operations.
+# request cross-origin.
+#
+# That token is NOT authentication: anyone who can open the page gets it.
+# Who may use the app is decided by the login session below.
 _CSRF_TOKEN = secrets.token_urlsafe(32)
 _CSRF_HEADER = "X-Enclave-CSRF"
-_CSRF_EXEMPT_PATHS = {"/api/health"}
+# The phone's SMS gateway app POSTs incoming texts here. It cannot carry our CSRF header, a login
+# cookie or the LAN access code, so this ONE path skips those gates. It is authenticated by the
+# HMAC signature on every request instead (see core/sms_inbound.py), and refuses everything until a
+# signing key has been configured.
+_SMS_WEBHOOK = "/api/sms/webhook"
+_CSRF_EXEMPT_PATHS = {"/api/health", _SMS_WEBHOOK}
 _PASSPHRASE_HEADER = "X-Enclave-Passphrase"
 
 
@@ -143,7 +151,7 @@ def _lan_login_page(error: str = "", status: int = 401):
 def _require_lan_auth():
     if not _LAN_MODE or _is_loopback(request.remote_addr):
         return
-    if request.path == "/lan-login":
+    if request.path in ("/lan-login", _SMS_WEBHOOK):
         return
     token = request.cookies.get(_LAN_COOKIE, "")
     if token and token in _LAN_SESSIONS:
@@ -176,7 +184,7 @@ def lan_login():
         _LAN_SESSIONS.add(session)
         resp = redirect("/")
         resp.set_cookie(_LAN_COOKIE, session, httponly=True, samesite="Strict")
-        return resp
+        return _issue_session(resp, "lan")
 
     recent.append(now)
     _LAN_FAILS[ip] = recent
@@ -258,12 +266,180 @@ def err(msg, code=500, exc=None):
     return jsonify(p), code
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Login sessions
+# ---------------------------------------------------------------------------
+# Opening the page is public; everything else needs a session.
+#
+#   * The passphrase is only ever accepted from THIS computer (loopback). Typing
+#     it from another device would send it across the network in clear text, so
+#     LAN devices sign in with the one-time access code instead (see above).
+#   * A session is a random cookie (HttpOnly, SameSite=Strict, dies with the
+#     browser). It expires after `session_idle_minutes` of silence (default 15,
+#     0 = never) and after 12 hours in any case. The page also locks itself when
+#     you stop touching it, and has a lock button.
+#   * Setting `lock_on_page_load` makes every fetch of the page sign you out, so
+#     the passphrase is asked every time.
+#   * Wrong passphrases are rate-limited (5 per 5 minutes) because checking one
+#     is the expensive key derivation an attacker would want to repeat.
+#   * ENCLAVE_NO_LOGIN=1 turns the gate off. Meant for tests and throw-away dev
+#     runs, never for real data.
+import time as _time
+
+_AUTH_ENABLED = os.environ.get("ENCLAVE_NO_LOGIN", "").strip().lower() not in ("1", "true", "yes")
+_PORT = None                      # set at startup; keeps cookies of different ports apart
+_SESSION_COOKIE = "enclave_session"
+_SESSIONS: dict = {}
+_SESSION_LOCK = threading.Lock()
+_SESSION_MAX_AGE = 12 * 3600
+_DEFAULT_IDLE_MINUTES = 15
+_LOGIN_FAILS: dict = {}
+_LOGIN_MAX_FAILS = 5
+_LOGIN_WINDOW = 300
+_AUTH_PUBLIC_PATHS = {"/", "/api/health", "/api/auth/status", "/api/auth/login",
+                      "/api/auth/logout", "/api/node/start", "/lan-login", _SMS_WEBHOOK}
+_FIRST_RUN_PATHS = {"/api/identity/generate", "/api/identity/restore"}
+
+
+def _now() -> float:
+    return _time.time()
+
+
+def _cookie_name() -> str:
+    # Cookies are shared between ports of the same host, and every profile runs on
+    # its own port. A per-port name stops one profile's login from clobbering another's.
+    return _SESSION_COOKIE + (f"_{_PORT}" if _PORT else "")
+
+
+def _idle_minutes() -> int:
+    try:
+        return max(0, int(app_core.config.get_setting("session_idle_minutes", _DEFAULT_IDLE_MINUTES)))
+    except (TypeError, ValueError):
+        return _DEFAULT_IDLE_MINUTES
+
+
+def _session_from_request():
+    sid = request.cookies.get(_cookie_name(), "")
+    if not sid:
+        return None
+    now = _now()
+    idle = _idle_minutes() * 60
+    with _SESSION_LOCK:
+        sess = _SESSIONS.get(sid)
+        if sess is None:
+            return None
+        if now - sess["created"] > _SESSION_MAX_AGE or (idle and now - sess["last"] > idle):
+            _SESSIONS.pop(sid, None)
+            return None
+        sess["last"] = now
+        return dict(sess)
+
+
+def _issue_session(resp, via: str):
+    sid = secrets.token_urlsafe(32)
+    now = _now()
+    with _SESSION_LOCK:
+        for k in [k for k, v in _SESSIONS.items() if now - v["created"] > _SESSION_MAX_AGE]:
+            _SESSIONS.pop(k, None)
+        _SESSIONS[sid] = {"created": now, "last": now, "via": via}
+    resp.set_cookie(_cookie_name(), sid, httponly=True, samesite="Strict", path="/")
+    return resp
+
+
+def _drop_session(resp=None):
+    sid = request.cookies.get(_cookie_name(), "")
+    if sid:
+        with _SESSION_LOCK:
+            _SESSIONS.pop(sid, None)
+    if resp is not None:
+        resp.delete_cookie(_cookie_name(), path="/")
+    return resp
+
+
+def _login_attempts_left(ip: str) -> bool:
+    now = _now()
+    recent = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < _LOGIN_WINDOW]
+    _LOGIN_FAILS[ip] = recent
+    return len(recent) < _LOGIN_MAX_FAILS
+
+
+@app.before_request
+def _require_session():
+    if not _AUTH_ENABLED:
+        return
+    path = request.path
+    if path in _AUTH_PUBLIC_PATHS:
+        return
+    if _session_from_request():
+        return
+    # First run: with no identity yet there is nothing to log in to, so the person at
+    # this computer may create (or restore) one. Never from another device.
+    if (path in _FIRST_RUN_PATHS and not app_core.identity.has_identity()
+            and _is_loopback(request.remote_addr)):
+        return
+    return jsonify({"error": "login required", "login": True}), 401
+
+
+def _first_run_session(resp, first_run: bool):
+    """Whoever just created (or restored) the identity on this computer is signed in."""
+    if first_run and _AUTH_ENABLED and _is_loopback(request.remote_addr):
+        return _issue_session(resp, "local")
+    return resp
+
+
+@app.route("/api/auth/status")
+def auth_status():
+    sess = _session_from_request() if _AUTH_ENABLED else {"via": "dev"}
+    return jsonify({
+        "has_identity": app_core.identity.has_identity(),
+        "node_running": app_core.get_node() is not None,
+        "authenticated": bool(sess),
+        "login_required": _AUTH_ENABLED,
+        "local": _is_loopback(request.remote_addr),
+        "lan_mode": _LAN_MODE,
+        "idle_minutes": _idle_minutes(),
+    })
+
+
+@app.route("/api/auth/settings")
+def auth_settings_get():
+    return jsonify({
+        "idle_minutes": _idle_minutes(),
+        "lock_on_page_load": bool(app_core.config.get_setting("lock_on_page_load", False)),
+    })
+
+
+@app.route("/api/auth/settings", methods=["POST"])
+def auth_settings_set():
+    data = request.get_json(force=True) or {}
+    if "idle_minutes" in data:
+        try:
+            minutes = int(data["idle_minutes"])
+        except (TypeError, ValueError):
+            return err("idle_minutes must be a whole number", 400)
+        if not 0 <= minutes <= 1440:
+            return err("idle_minutes must be between 0 (never) and 1440", 400)
+        app_core.config.set_setting("session_idle_minutes", minutes)
+    if "lock_on_page_load" in data:
+        app_core.config.set_setting("lock_on_page_load", bool(data["lock_on_page_load"]))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    return _drop_session(jsonify({"ok": True}))
+
+
 # Routes
 # ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
-    return render_template('chat.html', csrf_token=_CSRF_TOKEN)
+    resp = make_response(render_template('chat.html', csrf_token=_CSRF_TOKEN))
+    resp.headers["Cache-Control"] = "no-store"
+    if _AUTH_ENABLED and app_core.config.get_setting("lock_on_page_load", False):
+        _drop_session(resp)            # every fetch of the page asks for the passphrase again
+    return resp
 
 @app.route("/api/health")
 def health():
@@ -300,9 +476,14 @@ def identity_share_svg():
     text = info["address"] or info["node_id"]
     if not text:
         return err("no identity yet", 404)
-    svg = segno.make(text, error="m").svg_inline(scale=5, border=2,
-                                                 dark="#111111", light="#ffffff")
-    resp = make_response(svg)
+    # NOT svg_inline(): that output is meant to be pasted into an HTML page and
+    # has no xmlns, so a browser refuses to draw it as a standalone <img>
+    # (the image shows as broken). save(kind="svg") writes a complete SVG
+    # document with the namespace.
+    buf = io.BytesIO()
+    segno.make(text, error="m").save(buf, kind="svg", scale=5, border=2,
+                                     dark="#111111", light="#ffffff")
+    resp = make_response(buf.getvalue())
     resp.headers["Content-Type"] = "image/svg+xml"
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -319,9 +500,10 @@ def identity_backup():
 @app.route("/api/identity/restore", methods=["POST"])
 def identity_restore():
     data = request.get_json(silent=True) or {}
+    first_run = not app_core.identity.has_identity()
     try:
         res = app_core.restore_identity_backup(data.get("backup"), data.get("passphrase", ""))
-        return jsonify({"ok": True, **res})
+        return _first_run_session(jsonify({"ok": True, **res}), first_run)
     except ValueError as e:
         return err(str(e), 400)
 
@@ -360,6 +542,7 @@ def identity_generate():
          (node is running — re-use the session key so callers don't have to
          supply it again after unlock).
     """
+    first_run = not app_core.identity.has_identity()
     data = request.get_json(force=True) or {}
     p = data.get("passphrase", "")
 
@@ -381,7 +564,7 @@ def identity_generate():
     try:
         app_core.identity.generate_new_identity()
         app_core.identity.save_identity(passphrase=p)
-        return jsonify({"node_id": app_core.identity.get_user_id()})
+        return _first_run_session(jsonify({"node_id": app_core.identity.get_user_id()}), first_run)
     except Exception as e:
         return err(str(e), 500, exc=e)
 
@@ -390,26 +573,38 @@ def identity_generate():
 _callbacks_registered = False
 
 
+@app.route("/api/auth/login", methods=["POST"])
 @app.route("/api/node/start", methods=["POST"])
 def node_start():
-    data = request.get_json(force=True)
+    """Check the passphrase, start the node if it is not running, and sign this browser in."""
+    if not _is_loopback(request.remote_addr):
+        return err("Enter your passphrase on the computer that runs Enclave. It is never accepted "
+                   "from other devices, because it would cross the network unencrypted.", 403)
+    data = request.get_json(force=True) or {}
     p = data.get("passphrase", "")
     if not p:
         return err("passphrase required", 400)
+    if not app_core.identity.has_identity():
+        return err("no identity yet - create one first", 400)
 
-    if app_core.get_node() is not None:
-        try:
-            app_core.identity.load_identity(passphrase=p)
-        except Exception:
-            return err("invalid passphrase", 403)
-        return jsonify({"ok": True, "user_id": app_core.identity.get_user_id()})
+    ip = request.remote_addr or "?"
+    if not _login_attempts_left(ip):
+        return err("too many wrong passphrases, try again in a few minutes", 429)
+    if not app_core.identity.verify_passphrase(p):
+        _LOGIN_FAILS.setdefault(ip, []).append(_now())
+        return err("invalid passphrase", 403)
+    _LOGIN_FAILS.pop(ip, None)
 
     try:
-        app_core.start_node(passphrase=p)
-        _register_node_callbacks()
-        return jsonify({"ok": True, "user_id": app_core.identity.get_user_id()})
+        if app_core.get_node() is None:
+            app_core.start_node(passphrase=p)
+            _register_node_callbacks()
+        else:
+            app_core.identity.load_identity(passphrase=p)
+        resp = jsonify({"ok": True, "user_id": app_core.identity.get_user_id()})
     except Exception as e:
         return err(str(e), 500, exc=e)
+    return _issue_session(resp, "local") if _AUTH_ENABLED else resp
 
 
 def _register_node_callbacks():
@@ -793,6 +988,79 @@ def sms_config():
     return jsonify({"status": "saved"})
 
 
+@app.route(_SMS_WEBHOOK, methods=["POST"])
+def sms_webhook():
+    """Incoming SMS from the android-sms-gateway app. Signed; see core/sms_inbound.py."""
+    key = app_core.config.get_setting("sms_signing_key", "")
+    if not key:
+        return err("incoming SMS is not set up (no signing key)", 503)
+    limit = sms_inbound.MAX_BODY_BYTES
+    if request.content_length and request.content_length > limit:
+        return err("body too large", 413)
+    raw = request.stream.read(limit + 1)
+    if len(raw) > limit:
+        return err("body too large", 413)
+    if not sms_inbound.verify_signature(key, raw, request.headers.get("X-Timestamp", ""),
+                                        request.headers.get("X-Signature", "")):
+        app_core.log.warning("[sms] webhook rejected: bad or missing signature")
+        return err("invalid signature", 401)
+    try:
+        event = sms_inbound.parse_received(raw)
+    except ValueError as e:
+        return err(str(e), 400)
+    if event is None:
+        return jsonify({"status": "ignored"})              # some other event type: acknowledge it
+    try:
+        chat_id = sms_inbound.sender_chat_id(event["sender"])
+    except ValueError:
+        return jsonify({"status": "ignored"})              # a sender we cannot make a chat for
+    try:
+        result = app_core.receive_sms(chat_id, event["message"], event["ext_id"], event["received_at"])
+    except RuntimeError as e:
+        return err(str(e), 503)                            # locked: the gateway app retries later
+    if result == "stored":
+        _ws_broadcast("new_message", {"chat_id": chat_id, "sender_id": chat_id,
+                                      "ts": datetime.now(timezone.utc).isoformat()})
+    return jsonify({"status": result})
+
+
+@app.route("/api/sms/inbound")
+def sms_inbound_get():
+    return jsonify({**app_core.sms_inbound_status(), "webhook_path": _SMS_WEBHOOK})
+
+
+@app.route("/api/sms/inbound", methods=["POST"])
+def sms_inbound_set():
+    data = request.get_json(force=True) or {}
+    key = str(data.get("signing_key", "")).strip()
+    if key and not 8 <= len(key) <= 200:
+        return err("the signing key looks wrong (copy it from the phone app: Settings > Webhooks)", 400)
+    app_core.set_sms_signing_key(key)
+    return jsonify({"ok": True, **app_core.sms_inbound_status()})
+
+
+@app.route("/api/sms/inbound/register", methods=["POST"])
+def sms_inbound_register():
+    """Ask the gateway app to deliver incoming SMS to `url`."""
+    data = request.get_json(force=True) or {}
+    url = str(data.get("url", "")).strip()
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+        ok = (parts.scheme in ("http", "https") and parts.hostname and not parts.username
+              and not parts.password and parts.path.rstrip("/") == _SMS_WEBHOOK and len(url) <= 300)
+    except ValueError:
+        ok = False
+    if not ok:
+        return err(f"the URL must end in {_SMS_WEBHOOK}", 400)
+    if not app_core.config.get_setting("sms_signing_key", ""):
+        return err("save the signing key first, otherwise every incoming text would be refused", 400)
+    try:
+        return jsonify({"ok": True, "gateway": app_core.register_sms_webhook(url)})
+    except Exception as e:
+        return err(f"the gateway did not accept it: {e}", 502)
+
+
 @app.route("/api/config/save", methods=["POST"])
 def config_save():
     """Frontend alias for saving SMS gateway config.
@@ -1132,6 +1400,8 @@ def main(argv=None):
         print("")
 
     print(f" * Binding to {bind_ip}:{port}  (profile: {app_core._active_profile})")
+    global _PORT
+    _PORT = port
     app.run(host=bind_ip, port=port, debug=debug)
 
 

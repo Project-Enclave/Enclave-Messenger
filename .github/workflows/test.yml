@@ -24,18 +24,15 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-cov pytest-asyncio
     
-    - name: Run pytest tests
+    # Runs every test_*.py in test/ (pytest-style files with pytest, script-style
+    # files as scripts) one after another and fails if any of them fails. A new
+    # test file is picked up automatically; nothing to register here.
+    - name: Run every test in test/
+      run: python test/run_all.py
+
+    - name: Coverage (pytest-style tests)
       run: |
-        pytest \
-          test_crypto_performance.py \
-          test_dht.py \
-          test_multi_profile.py \
-          test_security_fixes.py \
-          test_sms_gateway.py \
-          test_tui.py \
-          test_update.py \
-          test_web_multi_profile.py \
-          test_ws_push.py \
+        pytest test \
           --cov=src/enclave_messenger \
           --cov-report=xml \
           --cov-report=term-missing

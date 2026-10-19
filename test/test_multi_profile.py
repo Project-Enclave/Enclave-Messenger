@@ -37,7 +37,7 @@ sandboxed HOME — not mocks, not in-process shortcuts — because that's
 the literal scenario being verified: two terminals, two profiles, one
 machine.
 
-Run: python3 test_multi_profile.py
+Run: python3 test/test_multi_profile.py
 """
 import json
 import _testenv  # noqa: F401
@@ -57,12 +57,12 @@ def check(name, cond):
 
 
 def main():
-    repo = os.path.dirname(os.path.abspath(__file__))
+    repo = _testenv.ROOT
     tmp_home = tempfile.mkdtemp(prefix="enclave_home_")
     env = os.environ.copy()
     env["HOME"] = tmp_home
     env["ENCLAVE_HOME"] = tmp_home
-    env["PYTHONPATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+    env["PYTHONPATH"] = _testenv.SRC
     env["PYTHONUNBUFFERED"] = "1"
 
     profiles_spec = [

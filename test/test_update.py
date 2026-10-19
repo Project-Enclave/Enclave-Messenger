@@ -3,7 +3,7 @@ test_update.py — real tests for update.py's signature verification and
 path-traversal guard. Uses a real openssl keypair and real subprocess
 invocations of update.py itself, not mocks.
 
-Run: python3 test_update.py
+Run: python3 test/test_update.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import hashlib
@@ -21,7 +21,7 @@ def check(name, cond):
 
 
 def main():
-    repo = os.path.dirname(os.path.abspath(__file__))
+    repo = _testenv.ROOT
     tmp = tempfile.mkdtemp()
     appdir = os.path.join(tmp, "app")
     os.makedirs(appdir)

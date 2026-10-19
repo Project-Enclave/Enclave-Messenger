@@ -22,6 +22,7 @@ CLI utilities:
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -99,13 +100,55 @@ _bt_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
+# Encryption at rest for OUR side of every conversation
+# ---------------------------------------------------------------------------
+
+def _seal(plaintext: str, chat_id: str, ts: str) -> str:
+    """Encrypt `plaintext` to our own key (see E2EManager.seal_for_self)."""
+    if identity.x25519_priv is None:
+        raise RuntimeError("Identity is locked - unlock it before sending or receiving messages.")
+    return E2EManager(identity.x25519_priv).seal_for_self(plaintext, chat_id, ts)
+
+
+def seal_plaintext_history() -> int:
+    """
+    One-time upgrade: older versions stored the messages WE sent (and all
+    Bluetooth messages) as readable text on disk. Rewrite them, in place and
+    atomically, as ordinary encrypted records. Needs the unlocked identity.
+    Returns how many records were changed. Safe to run repeatedly.
+    """
+    if identity.x25519_priv is None:
+        return 0
+    enc = E2EManager(identity.x25519_priv)
+    total = 0
+    for chat_id in chats.list_chats():
+        is_bt = chat_id.upper().startswith("BT:")
+
+        def fix(m, chat_id=chat_id, is_bt=is_bt):
+            tok = m.get("token", "")
+            if m.get("plaintext") or (is_bt and tok and not E2EManager.is_e2e_token(tok)):
+                m["token"] = enc.seal_for_self(tok, chat_id, m.get("ts") or "")
+                m["plaintext"] = False
+                return m
+            return None
+
+        total += chats.rewrite_messages(chat_id, fix)
+    return total
+
+
+# ---------------------------------------------------------------------------
 # Bluetooth helpers
 # ---------------------------------------------------------------------------
 
 def _bt_on_message(chat_id: str, plaintext: str) -> None:
     import datetime
     ts = datetime.datetime.utcnow().isoformat() + "Z"
-    chats.append_message(chat_id, {"token": plaintext, "sender": "peer", "ts": ts})
+    try:
+        token = _seal(plaintext, chat_id, ts)
+    except RuntimeError as e:
+        log.warning(f"[bluetooth] dropped message from {chat_id}: {e}")
+        return
+    chats.append_message(chat_id, {"token": token, "sender": "peer", "ts": ts})
     log.info(f"[bluetooth] received message from {chat_id}")
 
 
@@ -124,11 +167,12 @@ def scan_bluetooth(duration: int = 8) -> list[dict]:
 def send_bt(mac_or_chat_id: str, plaintext: str) -> None:
     import datetime
     bt = get_bluetooth()
-    bt.send(mac_or_chat_id, plaintext)
     chat_id = mac_or_chat_id if mac_or_chat_id.upper().startswith('BT:') \
               else chat_id_from_mac(mac_or_chat_id)
     ts = datetime.datetime.utcnow().isoformat() + "Z"
-    chats.append_message(chat_id, {"token": plaintext, "sender": "me", "ts": ts})
+    token = _seal(plaintext, chat_id, ts)       # refuse BEFORE sending if locked
+    bt.send(mac_or_chat_id, plaintext)
+    chats.append_message(chat_id, {"token": token, "sender": "me", "ts": ts})
     log.info(f"[bluetooth] sent message to {chat_id}")
 
 
@@ -187,6 +231,15 @@ def start_node(passphrase: str, transport_port: int = None) -> Node:
         _node.start()
         log.info("Node started")
 
+        if not config.get_setting("history_sealed_v1", False):
+            try:
+                n = seal_plaintext_history()
+                config.set_setting("history_sealed_v1", True)
+                if n:
+                    log.info(f"Encrypted {n} stored message(s) that were readable on disk")
+            except Exception as e:
+                log.warning(f"Could not encrypt old stored messages (will retry next unlock): {e}")
+
         plugin_manager.set_node(_node)
         plugin_manager.enable_all_saved()
 
@@ -213,7 +266,70 @@ def get_node() -> Node | None:
 # Messaging API (used by web.py)
 # ---------------------------------------------------------------------------
 
+def is_phone_chat_id(chat_id: str) -> bool:
+    return bool(_PHONE_RE.match(chat_id or ""))
+
+
+_sms_stats = {"last": None, "count": 0}
+
+
+def receive_sms(chat_id: str, text: str, ext_id: str, received_at: str) -> str:
+    """
+    Store a text that arrived through the SMS gateway (sealed to our own key, like every other
+    message on disk). Returns "stored" or "duplicate". Raises RuntimeError while the identity is
+    locked: the webhook then answers 503 and the gateway app retries later (it keeps retrying
+    for days), so nothing is lost and nothing readable is written.
+    """
+    if ext_id and chats.has_ext_id(chat_id, ext_id):
+        return "duplicate"
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if received_at:
+        try:
+            ts = datetime.datetime.fromisoformat(received_at).astimezone(datetime.timezone.utc).isoformat()
+        except ValueError:
+            pass
+    token = _seal(text, chat_id, ts)
+    chats.append_message(chat_id, {"token": token, "sender": "peer", "ts": ts,
+                                   "verified": False, "ext_id": ext_id})
+    _sms_stats["last"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _sms_stats["count"] += 1
+    log.info(f"[sms] received a message from {chat_id}")
+    return "stored"
+
+
+def sms_inbound_status() -> dict:
+    return {"configured": bool(config.get_setting("sms_signing_key", "")),
+            "last_received": _sms_stats["last"], "received_count": _sms_stats["count"]}
+
+
+def set_sms_signing_key(key: str) -> None:
+    config.set_setting("sms_signing_key", (key or "").strip())
+
+
+def register_sms_webhook(url: str) -> dict:
+    """Tell the gateway app to POST incoming SMS events to `url`."""
+    plugin = plugin_manager.get("sms_gateway")
+    sms = plugin.get_sms_instance() if plugin and plugin._enabled else SMSGateway.from_config(config)
+    return sms.register_webhook(f"enclave-{_active_profile}", url, "sms:received")
+
+
+def _gateway_send(to: str, plaintext: str, ts: str) -> bool:
+    """Send one SMS and keep our (sealed) copy with its outcome. False if the gateway refused."""
+    token = _seal(plaintext, to, ts)           # raises first if locked: never send what we cannot keep
+    try:
+        send_sms(to, plaintext)
+        status = "queued"                      # handed to the phone; the phone sends it
+    except Exception as e:
+        log.warning(f"[sms] could not send to {to}: {e}")
+        status = "failed"
+    chats.append_message(to, {"token": token, "sender": "me", "ts": ts, "verified": True,
+                              "status": status, "via": "sms"})
+    return status == "queued"
+
+
 def send_message(peer_user_id: str, plaintext: str) -> bool:
+    if is_phone_chat_id(peer_user_id):
+        return _gateway_send(peer_user_id, plaintext, datetime.datetime.now(datetime.timezone.utc).isoformat())
     if is_bt_chat_id(peer_user_id):
         send_bt(peer_user_id, plaintext)
         return True
@@ -223,6 +339,19 @@ def send_message(peer_user_id: str, plaintext: str) -> bool:
 
 
 def retry_message(peer_user_id: str, ts: str) -> bool:
+    if is_phone_chat_id(peer_user_id):
+        rec = next((m for m in chats.load_messages(peer_user_id)
+                    if m.get("ts") == ts and m.get("sender") == "me"), None)
+        if rec is None or rec.get("status") != "failed":
+            return False
+        try:
+            text = E2EManager(identity.x25519_priv).decrypt(rec["token"])
+            send_sms(peer_user_id, text)
+        except Exception as e:
+            log.warning(f"[sms] retry to {peer_user_id} failed: {e}")
+            return False
+        chats.update_message(peer_user_id, ts, status="queued", via="sms")
+        return True
     if _node is None:
         raise RuntimeError("Node not started. Call start_node() first.")
     return _node.retry_message(peer_user_id, ts)

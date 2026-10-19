@@ -42,8 +42,8 @@ jobs:
                   "enclave_messenger/core/plugins/builtin/sms_gateway/manifest.json",
                   "enclave_messenger/core/plugins/builtin/bluetooth/manifest.json"]
           missing = [n for n in need if n not in names]
-          bad = [n for n in names if n.split("/")[0] in ("test_core_crypto.py", "web.py", "set.py", "reset.py", "update.py")
-                 or n.startswith(("test_", "tests/"))]
+          bad = [n for n in names if n.split("/")[0] in ("test", "tests", "web.py", "set.py", "reset.py", "update.py")
+                 or n.startswith("test_")]
           assert not missing, f"missing from wheel: {missing}"
           assert not bad, f"unexpected files in wheel: {bad}"
           print("wheel contents OK:", len(names), "files")
@@ -67,7 +67,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - name: Packaging tests (paths, migration, CLI, spawn)
-        run: python test_packaging.py
+        run: python test/run_all.py test_packaging test_at_rest
 
   smoke-pipx:
     needs: build

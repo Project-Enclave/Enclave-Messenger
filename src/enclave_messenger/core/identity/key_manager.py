@@ -79,6 +79,21 @@ class IdentityManager:
 
         return True
 
+    def verify_passphrase(self, passphrase: str) -> bool:
+        """
+        True if `passphrase` opens the stored keys. Unlike load_identity() this
+        changes nothing in memory, so it is safe to call while the identity is
+        in use (e.g. to check a login attempt).
+        """
+        if not passphrase or not os.path.exists(self.ed25519_file):
+            return False
+        try:
+            with open(self.ed25519_file, "rb") as f:
+                serialization.load_pem_private_key(f.read(), password=passphrase.encode("utf-8"))
+            return True
+        except Exception:
+            return False
+
     def load_identity(self, passphrase: str | None = None):
         if not os.path.exists(self.ed25519_file) or not os.path.exists(self.x25519_file):
             return False

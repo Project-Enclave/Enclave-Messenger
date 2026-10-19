@@ -4,7 +4,7 @@ CryptoManager v2 key schedule (root key derived once via a fixed
 per-identity salt, not re-derived via Scrypt on every message) and the
 IdentityManager.crypto_salt persistence it depends on.
 
-Run: python3 test_crypto_performance.py
+Run: python3 test/test_crypto_performance.py
 """
 import _testenv  # noqa: F401  (src/ on sys.path + throw-away ENCLAVE_HOME)
 import os
