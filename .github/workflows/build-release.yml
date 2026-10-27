@@ -53,9 +53,6 @@ jobs:
       - name: Build executable (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          # --collect-data bundles templates/ and the plugin manifests; the
-          # --add-data line bundles the built-in plugins' main.py FILES, which
-          # the plugin loader reads from disk (they are not importable modules).
           pyinstaller --onefile --name enclave-messenger \
             --hidden-import=flask_sock \
             --hidden-import=websockets \
@@ -75,12 +72,51 @@ jobs:
             --add-data "src/enclave_messenger/core/plugins/builtin;enclave_messenger/core/plugins/builtin" `
             launch_desktop.py
 
+      - name: Discover built executable
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "dist directory contents:"
+          ls -la dist || true
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            CANDIDATES=(
+              "dist/enclave-messenger.exe"
+              "dist/launch_desktop.exe"
+              "dist/*.exe"
+            )
+          else
+            CANDIDATES=(
+              "dist/enclave-messenger"
+              "dist/launch_desktop"
+              "dist/*"
+            )
+          fi
+          for p in "${CANDIDATES[@]}"; do
+            if [ -f "$p" ]; then
+              echo "EXE_PATH=$p" >> "$GITHUB_ENV"
+              echo "Using executable: $p"
+              exit 0
+            fi
+          done
+          echo "No executable found in dist/." >&2
+          find . -maxdepth 3 -type f | sort | head -200 >&2
+          exit 1
+
       # Starts the freshly built executable and checks it really serves the UI,
       # loads the built-in plugins and keeps its data under a throw-away folder.
       - name: Smoke-test the executable
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then EXE="dist/enclave-messenger.exe"; else EXE="dist/enclave-messenger"; fi
+          set -euxo pipefail
+          EXE="${EXE_PATH:-dist/enclave-messenger}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            EXE="${EXE_PATH:-dist/enclave-messenger.exe}"
+          fi
+          if [ ! -f "$EXE" ]; then
+            echo "Expected executable not found: $EXE" >&2
+            ls -la dist || true
+            exit 1
+          fi
           python scripts/smoke_install.py "$EXE" frozen
 
       - name: Rename artifact
@@ -88,9 +124,9 @@ jobs:
         run: |
           mkdir -p out
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp dist/enclave-messenger.exe "out/${{ matrix.asset_name }}"
+            cp "${EXE_PATH:-dist/enclave-messenger.exe}" "out/${{ matrix.asset_name }}"
           else
-            cp dist/enclave-messenger "out/${{ matrix.asset_name }}"
+            cp "${EXE_PATH:-dist/enclave-messenger}" "out/${{ matrix.asset_name }}"
             chmod +x "out/${{ matrix.asset_name }}"
           fi
 
