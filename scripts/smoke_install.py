@@ -35,6 +35,10 @@ def main():
     if len(sys.argv) < 2:
         sys.exit("usage: smoke_install.py <command> [expected-install-kind]")
     cmd = sys.argv[1]
+    # Resolve executable paths before subprocesses switch to the isolated cwd.
+    # Leave bare commands such as `pe-em` for PATH lookup.
+    if os.path.exists(cmd):
+        cmd = os.path.abspath(cmd)
     expect_kind = sys.argv[2] if len(sys.argv) > 2 else None
     home = tempfile.mkdtemp(prefix="enclave_smoke_home_")
     cwd = tempfile.mkdtemp(prefix="enclave_smoke_cwd_")
