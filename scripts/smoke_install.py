@@ -70,8 +70,9 @@ def main():
     check("--version/--help/paths wrote nothing to disk", not os.path.exists(env["ENCLAVE_HOME"]))
 
     port = free_port()
+    app_log = tempfile.TemporaryFile(mode="w+b")
     proc = subprocess.Popen([cmd, "desktop", "--no-browser", "--port", str(port)], env=env, cwd=cwd,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                            stdout=app_log, stderr=subprocess.STDOUT)
     base = f"http://127.0.0.1:{port}"
     html = None
     try:
@@ -104,15 +105,32 @@ def main():
             ids = {p["id"] for p in plugins}
             check("built-in plugins load (sms_gateway, bluetooth)", {"sms_gateway", "bluetooth"} <= ids)
     finally:
-        proc.terminate()
+        if proc.poll() is None:
+            if os.name == "nt":
+                # PyInstaller's one-file bootloader starts a child process on
+                # Windows. Kill the whole tree so it cannot keep CI pipes or
+                # the temporary web server alive after its parent exits.
+                try:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, check=False, timeout=10,
+                    )
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            else:
+                proc.terminate()
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
-        if proc.stdout:
-            tail = proc.stdout.read()[-600:]
-            if failures:
-                print("--- app output ---\n" + tail)
+            proc.wait(timeout=10)
+        app_log.flush()
+        if failures:
+            app_log.seek(max(0, app_log.tell() - 600))
+            tail = app_log.read().decode("utf-8", errors="replace")
+            print("--- app output ---\n" + tail)
+        app_log.close()
 
     check("data was created under ENCLAVE_HOME", os.path.isfile(os.path.join(env["ENCLAVE_HOME"], "config", "registry.json")))
     check("nothing was written to the working directory", os.listdir(cwd) == [])
