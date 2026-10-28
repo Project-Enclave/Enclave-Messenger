@@ -6,7 +6,7 @@
   "tui.py": "166b4586ab9fd7c8c06570fd9939d2437533eb0921562c5c482b0386059b6c13",
   "update.py": "9d5e83efd9e8718b1599c8408c218ecbd49f31126e2d42c6c0b4036305a8999f",
   "web.py": "af4331de13338f60fea1919f711ed792716a1c6ac5670e706d67e1628bf42702",
-  "scripts/smoke_install.py": "3944c24044b0e036475b263d5f38a6378a804fde364e003af68a221bb45dfbe8",
+  "scripts/smoke_install.py": "4d6722327a9661678770a915465ac3975f1d5344bd31de46d5adb5782e68effa",
   "src/enclave_messenger/__init__.py": "853165c374101b083aed00be02259c74d18c48be0c15165db7febd63402246bc",
   "src/enclave_messenger/__main__.py": "c6c9fe16efa2c8de442de1d5209e4e1e653ff0bdbf818fe61ed09e91c72642ef",
   "src/enclave_messenger/cli.py": "e0f4838f4e952ccf21ccb5054afc64fe92f95ed1fcd6df6a81d1283f541b8c90",
