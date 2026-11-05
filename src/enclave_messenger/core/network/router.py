@@ -712,12 +712,18 @@ class Node:
         return ok
 
     def accept_contact(self, peer_user_id: str) -> bool:
+        """Accept locally (always), then tell the peer.
+
+        Returns True only if the peer was actually notified. The local
+        accept has happened either way, so False means "accepted, but they
+        don't know yet", not "failed".
+        """
         self._contacts.mark_accepted(peer_user_id)
         self._chats.clear_pending_contact(peer_user_id)
 
         peer = self._peers.get(peer_user_id)
         if not peer or not peer.get("ip") or not peer.get("port"):
-            return True  # accepted locally even if we can't notify them yet
+            return False  # accepted locally, but we have no address to notify them at
 
         ts = datetime.now(timezone.utc).isoformat()
         envelope = {

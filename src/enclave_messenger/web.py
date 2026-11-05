@@ -681,8 +681,11 @@ def contacts_request():
 @app.route("/api/contacts/<path:peer_id>/accept", methods=["POST"])
 def contacts_accept(peer_id):
     try:
-        ok = app_core.accept_contact_request(peer_id)
-        return jsonify({"ok": ok})
+        # The accept itself is local and always succeeds; only telling the
+        # peer can fail. "ok" used to carry the notify result, so a
+        # successful accept came back as ok:false. (#23)
+        notified = app_core.accept_contact_request(peer_id)
+        return jsonify({"ok": True, "accepted": True, "notified": bool(notified)})
     except RuntimeError as e:
         return err(str(e), 503)
     except Exception as e:
@@ -951,8 +954,13 @@ def message_send():
     if not peer_id or not plaintext:
         return err("peer_id and plaintext required", 400)
     try:
-        ok = app_core.send_message(peer_id, plaintext)
-        return jsonify({"ok": ok})
+        # A failed delivery is not a request error: the message is stored
+        # as "failed" and can be retried, so this stays HTTP 200 (a 5xx
+        # would make the UI put the text back in the input box and invite a
+        # duplicate send). "status" makes the outcome explicit. (#23)
+        ok = bool(app_core.send_message(peer_id, plaintext))
+        return jsonify({"ok": ok, "status": "delivered" if ok else "failed",
+                        "retryable": not ok})
     except ValueError as e:
         return err(str(e), 400)
     except RuntimeError as e:
