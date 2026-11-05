@@ -57,6 +57,30 @@ def _signable(envelope: dict) -> bytes:
     return json.dumps(fields, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
+def _pub_from_user_id(user_id: str) -> Ed25519PublicKey:
+    """
+    A user_id IS the sender's Ed25519 public key (urlsafe base64, padding
+    stripped; see IdentityManager.get_user_id()). So every envelope can be
+    verified against the identity it claims, with no key on file and no
+    trust-on-first-use. Raises ValueError for anything that isn't a 32-byte key.
+    """
+    raw = base64.urlsafe_b64decode((user_id + "=" * (-len(user_id) % 4)).encode())
+    if len(raw) != 32:
+        raise ValueError("user_id is not an Ed25519 public key")
+    return Ed25519PublicKey.from_public_bytes(raw)
+
+
+def _verify_from(envelope: dict) -> bool:
+    """True only if envelope['sig'] is a valid signature by the key in envelope['from']."""
+    try:
+        pub = _pub_from_user_id(envelope.get("from", ""))
+        sig = base64.urlsafe_b64decode(envelope.get("sig", "").encode())
+        pub.verify(sig, _signable(envelope))
+        return True
+    except (InvalidSignature, ValueError, TypeError, Exception):
+        return False
+
+
 class Node:
     def __init__(self, identity_manager, config_store, peer_store, chat_store,
                  base_dir: str = None):
@@ -90,6 +114,10 @@ class Node:
         self.on_inbound_callbacks: list = []
         self.on_peer_found_callbacks: list = []
         self.on_contact_request_callbacks: list = []
+        # Replay protection: tokens are unique per message (random salt,
+        # nonce and ephemeral key), so a token we've already stored is a
+        # replay. Checked in memory first, then against the stored chat.
+        self._seen_tokens: set = set()
 
         self._identity = self._build_identity()
         port = config_store.get_setting("network_port") or TRANSPORT_PORT
@@ -528,30 +556,27 @@ class Node:
             log.warning("[node] inbound: malformed envelope")
             return
 
-        # Verify the signature against whatever ed25519_pub we have on file
-        # for this sender_id. If we've never seen this peer before, there's
-        # no key to verify against yet (TOFU) — accept but mark unverified
-        # so the UI can flag it instead of silently trusting it forever.
+        # Every envelope must be signed by the key its "from" names. The
+        # user_id is the Ed25519 public key itself, so there is no
+        # unverified first-contact path: a message from a stranger is
+        # still provably from that stranger, and a forged "from" fails.
+        if not _verify_from(envelope):
+            log.warning("[node] inbound: missing or bad signature for %s — "
+                        "dropped (possible spoofing)", sender_id[:12])
+            return
         known_peer = self._peers.get(sender_id)
-        verified = False
         if known_peer and known_peer.get("ed25519_pub"):
-            if not sig_b64:
-                log.warning("[node] inbound: unsigned message claiming to be "
-                            "known peer %s — dropped", sender_id[:12])
+            pinned = known_peer["ed25519_pub"].rstrip("=")
+            if pinned != sender_id.rstrip("="):
+                log.warning("[node] inbound: pinned key for %s doesn't match "
+                            "its user_id — dropped", sender_id[:12])
                 return
-            try:
-                pub = Ed25519PublicKey.from_public_bytes(
-                    base64.urlsafe_b64decode(known_peer["ed25519_pub"].encode())
-                )
-                pub.verify(base64.urlsafe_b64decode(sig_b64.encode()), _signable(envelope))
-                verified = True
-            except (InvalidSignature, ValueError, Exception):
-                log.warning("[node] inbound: BAD SIGNATURE from %s — "
-                            "message dropped (possible spoofing)", sender_id[:12])
-                return
-        else:
-            log.info("[node] inbound: first contact from %s — unverified "
-                      "(no key on file yet)", sender_id[:12])
+        verified = True
+
+        if self._is_replay(sender_id, token):
+            log.warning("[node] inbound: replayed envelope from %s — dropped",
+                        sender_id[:12])
+            return
 
         # Contact/consent gating (see core/network/contacts.py). This is
         # layered ON TOP of the signature/TOFU check above, not instead of
@@ -585,6 +610,7 @@ class Node:
             "verified": verified,
             "pending_contact": pending_contact,
         })
+        self._seen_tokens.add(token)
         log.info("[node] inbound message from %s (verified=%s, pending_contact=%s)",
                   sender_id[:12], verified, pending_contact)
 
@@ -663,21 +689,20 @@ class Node:
         """The other side accepted a request WE sent — flips our local
         status from pending_outgoing to accepted without the user having
         to do anything (a message from them would eventually do the same
-        thing, but this makes it immediate)."""
+        thing, but this makes it immediate).
+
+        Only honoured when (a) it is signed by the key its "from" names and
+        (b) we actually have an outgoing request pending to that identity.
+        Without (b), anyone could send an unsolicited accept and land in the
+        accepted list, skipping the request screen entirely."""
         sender_id = envelope.get("from", "")
-        sig_b64   = envelope.get("sig", "")
-        if not sender_id or not sig_b64:
+        if not sender_id or not _verify_from(envelope):
+            log.warning("[node] contact_accept: missing or bad signature from %s "
+                        "— dropped", sender_id[:12])
             return
-        known_peer = self._peers.get(sender_id)
-        pub_b64 = (known_peer or {}).get("ed25519_pub") or envelope.get("ed25519_pub", "")
-        if not pub_b64:
-            return
-        try:
-            pub = Ed25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(pub_b64.encode()))
-            pub.verify(base64.urlsafe_b64decode(sig_b64.encode()), _signable(envelope))
-        except (InvalidSignature, ValueError, Exception):
-            log.warning("[node] contact_accept: bad signature from %s — dropped",
-                         sender_id[:12])
+        if self._contacts.get_status(sender_id) != "pending_outgoing":
+            log.warning("[node] contact_accept from %s with no pending request "
+                        "— ignored", sender_id[:12])
             return
         self._contacts.mark_accepted(sender_id)
         log.info("[node] contact request accepted by %s", sender_id[:12])
@@ -785,6 +810,19 @@ class Node:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _is_replay(self, sender_id: str, token: str) -> bool:
+        if token in self._seen_tokens:
+            return True
+        try:
+            for rec in self._chats.load_messages(sender_id):
+                if rec.get("token") == token and rec.get("sender") == sender_id:
+                    self._seen_tokens.add(token)
+                    return True
+        except Exception:
+            log.exception("[node] replay check: could not read chat for %s",
+                          sender_id[:12])
+        return False
 
     def _build_identity(self) -> dict:
         from cryptography.hazmat.primitives import serialization
