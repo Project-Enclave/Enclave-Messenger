@@ -703,6 +703,10 @@ async function doUnlock() {
     if (p !== $('unlock-pass2').value) {
       st.textContent = 'passphrases do not match'; st.className = 'status err'; return;
     }
+    if (p.length < 12) {
+      st.textContent = 'passphrase must be at least 12 characters (a few random words works well)';
+      st.className = 'status err'; return;
+    }
     if (!$('unlock-ack').checked) {
       st.textContent = 'please tick the box to confirm you understand there is no recovery';
       st.className = 'status err'; return;

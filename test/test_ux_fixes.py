@@ -160,7 +160,7 @@ def main():
         app_core.identity = a
         bundle = app_core.export_identity_backup()
         check("backup bundle has both keys and a version",
-              bundle["enclave_identity_backup"] == 1 and "ENCRYPTED PRIVATE KEY" in bundle["ed25519_pem"])
+              bundle["enclave_identity_backup"] == 2 and "key_wrap" in bundle and "ENCRYPTED PRIVATE KEY" in bundle["ed25519_pem"])
         check("backup contains no plaintext private key",
               "BEGIN PRIVATE KEY" not in json.dumps(bundle))
 

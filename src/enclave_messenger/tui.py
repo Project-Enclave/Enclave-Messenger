@@ -454,6 +454,11 @@ class TUIApp:
             if p1 != p2:
                 self._message("passphrases did not match", pair=3)
                 return False
+            from enclave_messenger.core.identity.key_manager import passphrase_problem
+            problem = passphrase_problem(p1)
+            if problem:
+                self._message(problem, pair=3)
+                return False
             app_core.identity.generate_new_identity()
             app_core.identity.save_identity(passphrase=p1)
             passphrase = p1
