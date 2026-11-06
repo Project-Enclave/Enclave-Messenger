@@ -28,13 +28,16 @@ _KEY_WRAP_LIMITS = {"n": (2 ** 14, 2 ** 20), "r": (1, 16), "p": (1, 4)}
 MIN_PASSPHRASE_LEN = 12
 
 
-def passphrase_problem(passphrase: str) -> str | None:
-    """Why a NEW passphrase is not acceptable, or None. Only applied when an
-    identity is created or re-keyed, never to unlocking an existing one."""
-    if len(passphrase or "") < MIN_PASSPHRASE_LEN:
-        return (f"passphrase must be at least {MIN_PASSPHRASE_LEN} characters "
-                "(a few random words works well)")
-    return None
+# Shown when a new passphrase is too short. Kept as a constant (not built from
+# the passphrase) so nothing derived from the secret is ever logged or echoed.
+SHORT_PASSPHRASE_ERROR = (f"passphrase must be at least {MIN_PASSPHRASE_LEN} characters "
+                          "(a few random words works well)")
+
+
+def passphrase_too_short(passphrase: str) -> bool:
+    """True if a NEW passphrase is below the minimum. Only applied when an
+    identity is created, never to unlocking an existing one."""
+    return len(passphrase or "") < MIN_PASSPHRASE_LEN
 
 
 def new_key_wrap_params() -> dict:

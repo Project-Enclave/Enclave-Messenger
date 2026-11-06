@@ -147,6 +147,7 @@ def test_backup_round_trip_and_legacy_backup():
 
 
 def test_short_new_passphrase_refused():
-    assert km.passphrase_problem("short pass") is not None
-    assert km.passphrase_problem("a" * 11) is not None
-    assert km.passphrase_problem("a" * 12) is None
+    assert km.passphrase_too_short("short pass")
+    assert km.passphrase_too_short("a" * 11)
+    assert not km.passphrase_too_short("a" * 12)
+    assert "12" in km.SHORT_PASSPHRASE_ERROR
