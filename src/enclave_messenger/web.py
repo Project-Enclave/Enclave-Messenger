@@ -548,7 +548,7 @@ def identity_generate():
     if p:
         from enclave_messenger.core.identity import key_manager as _km
         if _km.passphrase_too_short(p):
-            return err(_km.SHORT_PASSPHRASE_ERROR, 400)
+            return err(_km.MIN_LENGTH_HINT, 400)
 
     # If node is already unlocked we can derive the passphrase from memory.
     # IdentityManager keeps a reference to the loaded private key; we ask it

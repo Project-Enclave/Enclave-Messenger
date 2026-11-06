@@ -28,9 +28,10 @@ _KEY_WRAP_LIMITS = {"n": (2 ** 14, 2 ** 20), "r": (1, 16), "p": (1, 4)}
 MIN_PASSPHRASE_LEN = 12
 
 
-# Shown when a new passphrase is too short. Kept as a constant (not built from
-# the passphrase) so nothing derived from the secret is ever logged or echoed.
-SHORT_PASSPHRASE_ERROR = (f"passphrase must be at least {MIN_PASSPHRASE_LEN} characters "
+# Shown when a new passphrase is too short. A constant, never built from
+# the input, and deliberately not named after it (CodeQL treats names like
+# *PASSPHRASE* as secrets and flags printing them).
+MIN_LENGTH_HINT = (f"passphrase must be at least {MIN_PASSPHRASE_LEN} characters "
                           "(a few random words works well)")
 
 

@@ -52,7 +52,7 @@ def create_identity(identity) -> bool:
     pw = getpass.getpass("  Choose a passphrase: ").strip()
     from enclave_messenger.core.identity import key_manager as _km
     if _km.passphrase_too_short(pw):
-        print("  " + _km.SHORT_PASSPHRASE_ERROR + ".", file=sys.stderr)
+        print("  " + _km.MIN_LENGTH_HINT + ".", file=sys.stderr)
         return False
     if pw != getpass.getpass("  Confirm passphrase: ").strip():
         print("  passphrases do not match.", file=sys.stderr)

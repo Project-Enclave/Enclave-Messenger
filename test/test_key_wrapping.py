@@ -150,4 +150,4 @@ def test_short_new_passphrase_refused():
     assert km.passphrase_too_short("short pass")
     assert km.passphrase_too_short("a" * 11)
     assert not km.passphrase_too_short("a" * 12)
-    assert "12" in km.SHORT_PASSPHRASE_ERROR
+    assert "12" in km.MIN_LENGTH_HINT
