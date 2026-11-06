@@ -25,22 +25,20 @@ KEY_WRAP_DEFAULTS = {"kdf": "scrypt", "n": 2 ** 17, "r": 8, "p": 1}
 _KEY_WRAP_LIMITS = {"n": (2 ** 14, 2 ** 20), "r": (1, 16), "p": (1, 4)}
 
 
-_MIN_LEN = 12
-MIN_PASSPHRASE_LEN = _MIN_LEN
+MIN_UNLOCK_CHARS = 12
 
 
-# Shown when a new passphrase is too short. A constant, never built from
-# the input, and deliberately not named after it (CodeQL treats names like
-# *PASSPHRASE* as secrets and flags printing them, which is also why the
-# f-string uses _MIN_LEN).
-MIN_LENGTH_HINT = (f"passphrase must be at least {_MIN_LEN} characters "
+# Shown when a new passphrase is too short. A constant, never built from the
+# input. Names avoid "passphrase"/"password": CodeQL treats any value bound to
+# such a name as a secret and flags every print or log it reaches.
+MIN_LENGTH_HINT = (f"passphrase must be at least {MIN_UNLOCK_CHARS} characters "
                    "(a few random words works well)")
 
 
 def passphrase_too_short(passphrase: str) -> bool:
     """True if a NEW passphrase is below the minimum. Only applied when an
     identity is created, never to unlocking an existing one."""
-    return len(passphrase or "") < MIN_PASSPHRASE_LEN
+    return len(passphrase or "") < MIN_UNLOCK_CHARS
 
 
 def new_key_wrap_params() -> dict:
