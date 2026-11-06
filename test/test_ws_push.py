@@ -93,16 +93,24 @@ print(im.get_user_id())
 
             # Deliver an inbound message via the REAL transport endpoint —
             # this is the exact path a real peer's Node.send() posts to.
-            # Sender is a brand-new identity alice has never seen before
-            # (TOFU path — no signature needed, matches _on_inbound's
-            # actual first-contact behavior).
-            bob_id = "b" * 43
+            # Sender is a brand-new identity alice has never seen before.
+            # There is no unsigned first-contact path any more: a user_id is
+            # the sender's Ed25519 public key, so the envelope must be signed
+            # by that key even when alice has nothing on file for it.
+            import base64 as _b64
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            from cryptography.hazmat.primitives import serialization as _ser
+            from enclave_messenger.core.network.router import _signable
+            bob_key = Ed25519PrivateKey.generate()
+            bob_id = _b64.urlsafe_b64encode(bob_key.public_key().public_bytes(
+                _ser.Encoding.Raw, _ser.PublicFormat.Raw)).decode().rstrip("=")
             envelope = {
                 "from": bob_id,
-                "chat_id": bob_id,
+                "chat_id": alice_id,
                 "token": "fake-ciphertext-token-for-push-test",
-                "ts": "2026-08-18T00:00:00+00:00",
+                "ts": "Tue 2026-08-18 5:30 AM IST (UTC+05:30)",
             }
+            envelope["sig"] = _b64.urlsafe_b64encode(bob_key.sign(_signable(envelope))).decode()
             r = requests.post(f"http://127.0.0.1:{TRANSPORT_PORT}/inbound",
                                json=envelope, timeout=3)
             check("inbound envelope accepted by the real transport endpoint",

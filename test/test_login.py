@@ -166,6 +166,24 @@ def main():
         r = lan.post("/api/auth/login", json={"passphrase": PW}, headers=hdr(), environ_base=LAN)
         check("...and it still cannot send a passphrase over the network", r.status_code == 403)
         check("the host computer is not asked for the access code", c.get("/api/health").status_code == 200)
+        r = lan.post("/api/identity/regenerate", json={"passphrase": "attacker pass",
+                     "current_passphrase": PW}, headers=hdr(), environ_base=LAN)
+        check("a LAN session cannot regenerate (overwrite) the identity", r.status_code == 403)
+        r = lan.post("/api/identity/backup", json={}, headers=hdr(), environ_base=LAN)
+        check("a LAN session cannot download the encrypted key backup", r.status_code == 403)
+        local = web.app.test_client()
+        check("this computer signs in for the regenerate checks",
+              local.post("/api/auth/login", json={"passphrase": PW}, headers=hdr()).status_code == 200)
+        old_id = app_core.identity.get_user_id()
+        r = local.post("/api/identity/regenerate", json={"passphrase": "new pass phrase"}, headers=hdr())
+        check("regenerating needs the current passphrase, even on this computer", r.status_code == 403)
+        r = local.post("/api/identity/regenerate", json={"passphrase": ""}, headers=hdr())
+        check("no new passphrase means no regenerate (no getpass() inside the server)", r.status_code == 400)
+        check("...and the identity is untouched", app_core.identity.get_user_id() == old_id)
+        r = local.post("/api/identity/regenerate", json={"passphrase": "new pass phrase",
+                   "current_passphrase": PW}, headers=hdr())
+        check("with the current passphrase, this computer can regenerate",
+              r.status_code == 200 and r.get_json()["node_id"] != old_id)
         web._LAN_MODE = False
 
         print("\n[switching it off]")

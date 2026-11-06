@@ -491,6 +491,11 @@ def identity_share_svg():
 
 @app.route("/api/identity/backup", methods=["POST"])
 def identity_backup():
+    # The backup is the encrypted key files. Handing them to a LAN session
+    # (access code only, no passphrase) would let that device crack them
+    # offline, so backups only go to this computer.
+    if not _is_loopback(request.remote_addr):
+        return err("Identity backups can only be downloaded on the computer that runs Enclave.", 403)
     try:
         return jsonify(app_core.export_identity_backup())
     except RuntimeError as e:
@@ -534,32 +539,34 @@ def identity_update():
 @app.route("/api/identity/generate", methods=["POST"])
 @app.route("/api/identity/regenerate", methods=["POST"])
 def identity_generate():
-    """Regenerate identity keypair.
+    """Create (first run) or regenerate the identity keypair.
 
-    Passphrase resolution order:
-      1. Explicit ``passphrase`` in request body (always accepted).
-      2. Passphrase inferred from the already-unlocked identity in memory
-         (node is running — re-use the session key so callers don't have to
-         supply it again after unlock).
+    Body: ``passphrase`` (new). When an identity already exists, also
+    ``current_passphrase``, and the request must come from loopback.
     """
     first_run = not app_core.identity.has_identity()
     data = request.get_json(force=True) or {}
     p = data.get("passphrase", "")
-
-    # If node is already unlocked we can derive the passphrase from memory.
-    # IdentityManager keeps a reference to the loaded private key; we ask it
-    # to re-encrypt with the same passphrase it last loaded with.
     if not p:
-        if app_core.identity.ed25519_priv is not None:
-            # identity is loaded — re-save under same passphrase by letting
-            # save_identity() use the cached value.
-            try:
-                app_core.identity.generate_new_identity()
-                app_core.identity.save_identity()  # uses cached passphrase
-                return jsonify({"node_id": app_core.identity.get_user_id()})
-            except Exception as e:
-                return err(str(e), 500, exc=e)
         return err("passphrase required", 400)
+
+    # Replacing an existing identity destroys it for good, so it is only
+    # allowed from THIS computer and only with the CURRENT passphrase. A LAN
+    # session (access code only) must never be able to overwrite the keys,
+    # and there is no cached passphrase to fall back on: save_identity(None)
+    # would call getpass() inside the web server after the in-memory keys
+    # had already been swapped.
+    if not first_run:
+        if not _is_loopback(request.remote_addr):
+            return err("Regenerating your identity is only allowed on the computer "
+                       "that runs Enclave.", 403)
+        current = data.get("current_passphrase", "")
+        ip = request.remote_addr or "?"
+        if not _login_attempts_left(ip):
+            return err("too many wrong passphrases, try again in a few minutes", 429)
+        if not current or not app_core.identity.verify_passphrase(current):
+            _LOGIN_FAILS.setdefault(ip, []).append(_now())
+            return err("current passphrase required", 403)
 
     try:
         app_core.identity.generate_new_identity()
