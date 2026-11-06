@@ -769,7 +769,8 @@ def get_share_info() -> dict:
 
 
 # --- identity backup / restore -------------------------------------------
-_BACKUP_VERSION = 1
+_BACKUP_VERSION = 2          # v2 adds "key_wrap" (scrypt params for the PEM password)
+_BACKUP_VERSIONS_READ = (1, 2)
 _PEM_HEADER = "-----BEGIN ENCRYPTED PRIVATE KEY-----"
 
 
@@ -789,12 +790,16 @@ def export_identity_backup() -> dict:
     if os.path.exists(identity.crypto_salt_file):
         with open(identity.crypto_salt_file, "rb") as f:
             salt = f.read()
-    return {
+    out = {
         "enclave_identity_backup": _BACKUP_VERSION,
         "ed25519_pem": ed.decode("ascii"),
         "x25519_pem": x.decode("ascii"),
         "crypto_salt_b64": base64.b64encode(salt).decode("ascii"),
     }
+    params = identity.key_wrap_params()
+    if params is not None:
+        out["key_wrap"] = params
+    return out
 
 
 def restore_identity_backup(bundle: dict, passphrase: str) -> dict:
@@ -810,7 +815,7 @@ def restore_identity_backup(bundle: dict, passphrase: str) -> dict:
 
     if identity.has_identity():
         raise ValueError("this profile already has an identity; refusing to overwrite it")
-    if not isinstance(bundle, dict) or bundle.get("enclave_identity_backup") != _BACKUP_VERSION:
+    if not isinstance(bundle, dict) or bundle.get("enclave_identity_backup") not in _BACKUP_VERSIONS_READ:
         raise ValueError("not an Enclave identity backup")
     if not passphrase:
         raise ValueError("passphrase required")
@@ -829,7 +834,15 @@ def restore_identity_backup(bundle: dict, passphrase: str) -> dict:
     if len(salt) > 64:
         raise ValueError("backup has an invalid salt")
 
-    pw = passphrase.encode("utf-8")
+    from enclave_messenger.core.identity.key_manager import (
+        pem_password, validate_key_wrap_params)
+    params = bundle.get("key_wrap")
+    if params is not None:
+        try:
+            params = validate_key_wrap_params(params)
+        except Exception:
+            raise ValueError("backup has invalid key wrapping parameters")
+    pw = pem_password(passphrase, params)
     try:
         ed = serialization.load_pem_private_key(ed_pem, password=pw)
         x = serialization.load_pem_private_key(x_pem, password=pw)
@@ -845,6 +858,8 @@ def restore_identity_backup(bundle: dict, passphrase: str) -> dict:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
 
+    if params is not None:
+        _write(identity.key_wrap_file, json.dumps(params).encode("utf-8"))
     _write(identity.ed25519_file, ed_pem)
     _write(identity.x25519_file, x_pem)
     if salt:

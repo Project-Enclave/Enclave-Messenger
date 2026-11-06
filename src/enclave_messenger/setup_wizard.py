@@ -50,8 +50,9 @@ def create_identity(identity) -> bool:
     print("  No identity found. Creating one now...")
     print("  There is no password reset: if you forget this passphrase, the identity is gone.")
     pw = getpass.getpass("  Choose a passphrase: ").strip()
-    if not pw:
-        print("  passphrase cannot be empty.", file=sys.stderr)
+    from enclave_messenger.core.identity import key_manager as _km
+    if _km.passphrase_too_short(pw):
+        print("  " + _km.MIN_LENGTH_HINT + ".", file=sys.stderr)
         return False
     if pw != getpass.getpass("  Confirm passphrase: ").strip():
         print("  passphrases do not match.", file=sys.stderr)
