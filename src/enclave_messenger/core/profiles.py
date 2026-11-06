@@ -56,15 +56,22 @@ def _ensure_home():
 
 
 def _resolve_dir(value: str) -> str:
-    """Turn a registry data_dir into an absolute path. Relative values must
-    stay inside the data directory."""
-    if os.path.isabs(value):
-        return value                          # written by an older version
+    """Turn a registry data_dir into an absolute path that is guaranteed to be
+    inside the data directory (or, for registries written by older versions
+    with absolute paths, inside the legacy ~/.enclave-messenger directory).
+    Anything else is refused, so a tampered registry can't point a profile's
+    keys and chats at an arbitrary location."""
     root = os.path.realpath(paths.data_dir())
+    legacy = os.path.realpath(paths.legacy_dir())
+    # os.path.join drops root when value is absolute; realpath resolves ".."
+    # and symlinks before the prefix check (startswith on a normalized path is
+    # also the guard CodeQL recognises).
     full = os.path.realpath(os.path.join(root, value))
-    if os.path.commonpath([root, full]) != root:
-        raise ValueError(f"profile data_dir {value!r} points outside the data directory")
-    return full
+    if full.startswith(root + os.sep):
+        return full
+    if full.startswith(legacy + os.sep):
+        return full
+    raise ValueError(f"profile data_dir {value!r} points outside the data directory")
 
 
 def _public(meta: dict) -> dict:
