@@ -25,7 +25,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from wsgiref.simple_server import make_server, WSGIRequestHandler
-from urllib.request import urlopen, Request, build_opener, HTTPRedirectHandler
+from urllib.request import urlopen, Request, build_opener, HTTPRedirectHandler, ProxyHandler
 from urllib.error import URLError
 from urllib.parse import urlencode
 
@@ -129,7 +129,12 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
-_opener = build_opener(_NoRedirect)
+# build_opener() adds a ProxyHandler that reads HTTP_PROXY / HTTPS_PROXY /
+# ALL_PROXY from the environment. Peer traffic must never be routed through
+# a proxy nobody chose for it: the payload is E2EE, but the proxy would still
+# see who talks to which ip:port, when, and how much. An empty ProxyHandler
+# turns that off. A deliberate, opt-in proxy setting can come later. (#22)
+_opener = build_opener(ProxyHandler({}), _NoRedirect)
 
 
 def _open(req, timeout):
